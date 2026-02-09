@@ -21,7 +21,19 @@ cd backend
 pip install -r requirements.txt
 ```
 
-### 2. Start Docker Services
+### 2. Setup Database & Redis
+
+**Option A: Railway.app (Recommended - No Docker needed)**
+
+See [SETUP_RAILWAY.md](SETUP_RAILWAY.md) for detailed instructions.
+
+Quick steps:
+1. Sign up at https://railway.app/ (free, no credit card)
+2. Create PostgreSQL database → Copy connection URL
+3. Create Redis database → Copy connection URL
+4. Add URLs to your `.env` file
+
+**Option B: Docker (If you have Docker Desktop)**
 
 ```bash
 # From project root
@@ -30,6 +42,11 @@ docker-compose up -d
 # Verify services are running
 docker-compose ps
 ```
+
+**Option C: Local Windows Installation**
+
+- PostgreSQL: https://www.postgresql.org/download/windows/
+- Redis: https://www.memurai.com/ (Redis-compatible for Windows)
 
 ### 3. Configure Environment
 

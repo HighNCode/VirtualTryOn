@@ -59,103 +59,74 @@ Product Page
     ↓
 [Try On Button] ← Injected by widget
     ↓
-┌─────────────────────────────────────────┐
-│  STEP 1: BASIC INFO                     │
-│  • Height input (cm/inches toggle)      │
-│  • Weight input (kg/lbs toggle)         │
-│  • Gender select (M/F/Unisex)           │
-│  • Photo guidelines (expandable)        │
-│  • [Open Camera] [Upload Photo]         │
-└────────────┬────────────────────────────┘
+Widget creates/resumes session
+    ↓
+Backend checks: Has user's measurements within 24h?
+    ↓
+┌──────────────────────────────┬────────────────────────────┐
+│ NEW USER                     │ RETURNING USER (< 24h)     │
+│ (no cached measurements)     │ (has cached measurements)  │
+└──────────────────────────────┴────────────────────────────┘
+             ↓                              ↓
+┌─────────────────────────────┐  ┌─────────────────────────┐
+│  STEP 1: BASIC INFO         │  │  SKIP TO PROCESSING     │
+│  • Height, Weight, Gender   │  │  • Show "Welcome back!" │
+│  • Photo guidelines         │  │  • Use cached data      │
+│  • [Camera] [Upload]        │  │  • Generate for new     │
+└────────────┬────────────────┘  │    product directly     │
+             ↓                    └────────────┬────────────┘
+┌─────────────────────────────┐               ↓
+│  STEP 2: CAMERA/UPLOAD      │  ┌─────────────────────────┐
+│  • Capture front + side     │  │  STEP 5: GENERATING     │
+│  • OR upload both           │  │  • Size recommendation  │
+└────────────┬────────────────┘  │  • Heatmap generation   │
+             ↓                    │  • Try-on generation    │
+     [Validation]                 └────────────┬────────────┘
+     ↓ (if pass)                               ↓
+┌─────────────────────────────┐  ┌─────────────────────────┐
+│  STEP 3: PROCESSING         │  │  STEP 6: RESULTS        │
+│  • Extract measurements     │  │  • Try-on image         │
+└────────────┬────────────────┘  │  • Heatmap              │
+             ↓                    │  • Size selector        │
+┌─────────────────────────────┐  │  • Add to cart          │
+│  STEP 4: MEASUREMENTS       │  └─────────────────────────┘
+│  • Display 15 measurements  │
+│  • Show confidence score    │
+│  • [View Your Fit] →        │
+└────────────┬────────────────┘
              ↓
-┌─────────────────────────────────────────┐
-│  STEP 2A: CAMERA CAPTURE (if selected)  │
-│  • Camera preview with guidelines       │
-│  • Front/Back camera toggle             │
-│  • Capture button → 3 second countdown  │
-│  • Photo preview → [Retake] [Use Photo] │
-│  • Repeat for side pose                 │
-└────────────┬────────────────────────────┘
+┌─────────────────────────────┐
+│  STEP 5: GENERATING         │
+│  • Size recommendation      │
+│  • Heatmap generation       │
+│  • Try-on generation        │
+└────────────┬────────────────┘
              ↓
-┌─────────────────────────────────────────┐
-│  STEP 2B: UPLOAD (if selected)          │
-│  • File picker for front pose           │
-│  • Image preview                        │
-│  • File picker for side pose            │
-│  • Both images preview                  │
-└────────────┬────────────────────────────┘
-             ↓
-     [Image Validation]
-     ↓ (if fail) → Show error, allow retake
-     ↓ (if pass)
-┌─────────────────────────────────────────┐
-│  STEP 3: PROCESSING                     │
-│  • Loading spinner                      │
-│  • Progress bar (0-100%)                │
-│  • Status text: "Analyzing images..."   │
-└────────────┬────────────────────────────┘
-             ↓
-┌─────────────────────────────────────────┐
-│  STEP 4: MEASUREMENTS DISPLAY           │
-│  ┌─────────────┬───────────────────────┐│
-│  │ LEFT        │ RIGHT                 ││
-│  │ • Height    │ What's Next:          ││
-│  │ • Shoulder  │ 1. Review your        ││
-│  │ • Chest ✓   │    measurements       ││
-│  │ • Waist ✓   │ 2. Generate try-on    ││
-│  │ • Hip ✓     │ 3. View results       ││
-│  │ • Inseam    │                       ││
-│  │ • Arm       │ [View Your Fit] →     ││
-│  │ • ...       │                       ││
-│  │             │ Confidence: 87%       ││
-│  └─────────────┴───────────────────────┘│
-│  All measurements read-only             │
-└────────────┬────────────────────────────┘
-             ↓
-     [Click "View Your Fit"]
-             ↓
-┌─────────────────────────────────────────┐
-│  STEP 5: GENERATING RESULTS             │
-│  • Loading spinner                      │
-│  • "Creating your virtual try-on..."    │
-│  • Estimated time: 45 seconds           │
-└────────────┬────────────────────────────┘
-             ↓
-┌─────────────────────────────────────────┐
-│  STEP 6: RESULTS VIEW                   │
-│  ┌──────────────────┬──────────────────┐│
-│  │ TOP LEFT         │ TOP RIGHT        ││
-│  │ Virtual Try-On   │ Style Templates  ││
-│  │ [Generated Img]  │ ┌──┬──┬──┬──┐   ││
-│  │                  │ │🏢│🌆│🌳│💼│   ││
-│  │                  │ └──┴──┴──┴──┘   ││
-│  │                  │ [Try It][Reset]  ││
-│  │                  │                  ││
-│  │                  │ [Share Icons]    ││
-│  │                  │ FB TW IG CP      ││
-│  ├──────────────────┼──────────────────┤│
-│  │ BOTTOM LEFT      │ BOTTOM RIGHT     ││
-│  │ Fit Heatmap      │ Size Selection   ││
-│  │ [Body outline    │ Recommended: M   ││
-│  │  with colored    │ ┌───────────┐   ││
-│  │  regions]        │ │ XS S [M] L│   ││
-│  │                  │ └───────────┘   ││
-│  │ Legend:          │                  ││
-│  │ 🟢 Perfect       │ Product Name     ││
-│  │ 🟡 Loose         │ $49.99           ││
-│  │ 🔴 Tight         │ Size: M          ││
-│  │                  │                  ││
-│  │                  │ [Add to Cart]    ││
-│  └──────────────────┴──────────────────┘│
-└────────────┬────────────────────────────┘
-             ↓
-     [Click "Add to Cart"]
-             ↓
-┌─────────────────────────────────────────┐
-│  SUCCESS MODAL                          │
-│  ✓ Added to Cart!                       │
-│  [View Cart] [Continue Shopping]        │
-└─────────────────────────────────────────┘
+┌─────────────────────────────┐
+│  STEP 6: RESULTS            │
+│  • Try-on image             │
+│  • Heatmap                  │
+│  • Size selector            │
+│  • Add to cart              │
+└─────────────────────────────┘
+```
+
+**Cross-Product Flow (User tries on Product B after Product A):**
+
+```
+User views Product B
+    ↓
+Clicks "Try On" button
+    ↓
+Widget detects user has recent data (< 24h)
+    ↓
+Skip photos & measurements
+    ↓
+Show loading: "Generating try-on for new product..."
+    ↓
+Backend uses cached measurements + Product B images
+    ↓
+Show results directly (try-on + heatmap + size recommendation)
 ```
 
 ---
@@ -1556,22 +1527,79 @@ class VTOApiClient {
     this.baseUrl = config.apiUrl;
     this.storeId = config.storeId;
     this.sessionId = null;
+    this.userIdentifier = this.getUserIdentifier();
+  }
+  
+  getUserIdentifier() {
+    /**
+     * Generate browser fingerprint for user recognition
+     * Uses combination of browser properties
+     */
+    
+    // Check if we have saved identifier in localStorage
+    let identifier = localStorage.getItem('vto_user_id');
+    
+    if (!identifier) {
+      // Generate new identifier from browser fingerprint
+      const components = [
+        navigator.userAgent,
+        navigator.language,
+        screen.width + 'x' + screen.height,
+        new Date().getTimezoneOffset(),
+        navigator.platform
+      ];
+      
+      // Simple hash function
+      identifier = this.simpleHash(components.join('|'));
+      
+      // Save to localStorage
+      localStorage.setItem('vto_user_id', identifier);
+    }
+    
+    return identifier;
+  }
+  
+  simpleHash(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash;
+    }
+    return 'user_' + Math.abs(hash).toString(36);
   }
   
   async createSession(productId) {
+    /**
+     * Create new session or resume existing one
+     * 
+     * Backend will check if user has measurements from last 24h
+     * and return them if available
+     */
     const response = await fetch(`${this.baseUrl}/api/v1/sessions/create`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Store-ID': this.storeId
       },
-      body: JSON.stringify({ product_id: productId })
+      body: JSON.stringify({ 
+        product_id: productId,
+        user_identifier: this.userIdentifier
+      })
     });
     
     const data = await response.json();
     this.sessionId = data.session_id;
     
-    return data;
+    // Return session data which includes existing measurements if available
+    return {
+      sessionId: data.session_id,
+      hasExistingMeasurements: data.has_existing_measurements || false,
+      measurementId: data.measurement_id || null,
+      measurements: data.measurements || null,
+      photosAvailable: data.photos_available || false,
+      cachedUntil: data.cached_until || null
+    };
   }
   
   async validateImage(imageBlob, poseType) {
@@ -1678,6 +1706,177 @@ class VTOApiClient {
 }
 
 export default VTOApiClient;
+```
+
+---
+
+### Session Reuse Implementation
+
+**Main Widget Initialization:**
+
+```javascript
+// widget/src/main.js
+
+class VirtualTryOnWidget {
+  async initialize(productId) {
+    // Create or resume session
+    const sessionData = await this.api.createSession(productId);
+    
+    this.state.setState({
+      sessionId: sessionData.sessionId,
+      productId: productId
+    });
+    
+    // Check if user has existing measurements
+    if (sessionData.hasExistingMeasurements && sessionData.photosAvailable) {
+      // Returning user - skip to results
+      this.handleReturningUser(sessionData);
+    } else {
+      // New user - show full flow
+      this.showBasicInfoScreen();
+    }
+  }
+  
+  async handleReturningUser(sessionData) {
+    /**
+     * User has measurements from last 24 hours
+     * Skip photo capture and go directly to generating try-on
+     */
+    
+    // Show welcome back message
+    showToast(`Welcome back! Using your measurements from earlier.`, {
+      duration: 3000,
+      icon: '👋'
+    });
+    
+    // Store cached measurement data
+    this.state.setState({
+      measurementId: sessionData.measurementId,
+      measurements: sessionData.measurements,
+      fromCache: true
+    });
+    
+    // Show processing screen
+    this.showProcessingScreen({
+      title: 'Generating Your Try-On',
+      message: 'Using your saved measurements for this product...'
+    });
+    
+    // Generate everything for new product
+    try {
+      // 1. Get size recommendation
+      updateProgress(30, 'Finding best size...');
+      const recommendation = await this.api.getSizeRecommendation(
+        sessionData.measurementId,
+        this.state.getState('productId')
+      );
+      
+      // 2. Generate heatmap
+      updateProgress(50, 'Analyzing fit...');
+      const heatmap = await this.api.generateHeatmap(
+        sessionData.measurementId,
+        this.state.getState('productId'),
+        recommendation.recommended_size
+      );
+      
+      // 3. Generate try-on
+      updateProgress(70, 'Creating virtual try-on...');
+      const tryOnResult = await this.api.generateTryOn(
+        sessionData.measurementId,
+        this.state.getState('productId'),
+        recommendation.recommended_size
+      );
+      
+      // Poll for completion
+      const tryOn = await this.pollTryOnCompletion(tryOnResult.try_on_id);
+      
+      updateProgress(100, 'Complete!');
+      
+      // Store results
+      this.state.setState({
+        recommendation: recommendation,
+        heatmap: heatmap,
+        tryOn: tryOn
+      });
+      
+      // Show results screen
+      this.showResultsScreen();
+      
+    } catch (error) {
+      console.error('Error generating try-on:', error);
+      showError(
+        'Failed to generate try-on. Would you like to take new photos?',
+        {
+          allowRetry: true,
+          retryAction: () => {
+            // Clear cached data and start fresh
+            this.state.setState({
+              measurementId: null,
+              measurements: null,
+              fromCache: false
+            });
+            this.showBasicInfoScreen();
+          }
+        }
+      );
+    }
+  }
+  
+  async pollTryOnCompletion(tryOnId) {
+    /**
+     * Poll for try-on generation completion
+     */
+    const maxAttempts = 60; // 2 minutes max
+    const pollInterval = 2000; // 2 seconds
+    
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, pollInterval));
+      
+      const status = await this.api.getTryOnStatus(tryOnId);
+      
+      if (status.status === 'completed') {
+        return status;
+      } else if (status.status === 'failed') {
+        throw new Error(status.error);
+      }
+      
+      // Update progress if available
+      if (status.progress) {
+        updateProgress(70 + (status.progress * 0.3), status.message);
+      }
+    }
+    
+    throw new Error('Try-on generation timed out');
+  }
+}
+```
+
+**User Experience:**
+
+**First Visit (Product A):**
+```
+1. User clicks "Try On"
+2. Enter height, weight, gender
+3. Take/upload photos
+4. View measurements
+5. See try-on results
+```
+
+**Second Visit (Product B, within 24h):**
+```
+1. User clicks "Try On" on Product B
+2. See "Welcome back!" message
+3. Immediately see loading screen
+4. Skip directly to results (5-10 seconds)
+   - No photos needed
+   - No measurement input
+```
+
+**After 24 Hours:**
+```
+1. User clicks "Try On"
+2. Backend: "No recent measurements found"
+3. Start full flow again (like first visit)
 ```
 
 ---

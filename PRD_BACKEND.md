@@ -69,9 +69,61 @@ Deployment:     Railway.app / Docker
           │                  │                  │
           ↓                  ↓                  ↓
     ┌──────────┐      ┌──────────┐      ┌──────────┐
-    │PostgreSQL│      │  Redis   │      │Replicate │
-    │          │      │ (Cache)  │      │   API    │
+    │PostgreSQL│      │  Redis   │      │ Google   │
+    │          │      │ (Cache)  │      │ Gemini   │
+    │ Local:   │      │          │      │   API    │
+    │ Docker   │      │          │      │(nano-    │
+    │ Prod:    │      │          │      │ banana)  │
+    │ Railway  │      │          │      │          │
     └──────────┘      └──────────┘      └──────────┘
+```
+
+### Database Configuration
+
+**Local Development:**
+```bash
+# Use Docker Compose for local PostgreSQL
+docker-compose up -d
+
+# Connection string
+DATABASE_URL=postgresql://dev:dev123@localhost:5432/virtual_tryon_dev
+```
+
+**Production (Railway.app):**
+```bash
+# Railway automatically provisions PostgreSQL
+# Connection string provided by Railway (injected as env var)
+DATABASE_URL=${DATABASE_URL}  # Auto-populated by Railway
+
+# Railway also provides:
+# - Automatic backups
+# - Connection pooling
+# - SSL encryption
+```
+
+**docker-compose.yml for Local:**
+```yaml
+version: '3.8'
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: virtual_tryon_dev
+      POSTGRES_USER: dev
+      POSTGRES_PASSWORD: dev123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+  
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+
+volumes:
+  postgres_data:
 ```
 
 ### Service Architecture
@@ -133,6 +185,446 @@ Headers:
 ---
 
 ### 1. Shopify Integration APIs
+
+#### How Product Data is Fetched from Shopify
+
+**When a store installs the app:**
+
+1. **OAuth completes** → Store data saved with access_token
+2. **Webhook registered** → `products/create`, `products/update`, `products/delete`
+3. **Initial sync triggered** → Fetches all products using Shopify GraphQL API
+4. **Subsequent updates** → Automatic via webhooks
+
+**Shopify GraphQL Product Sync:**
+
+```graphql
+# Query executed by backend to fetch products
+query getProducts($cursor: String) {
+  products(first: 50, after: $cursor) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    edges {
+      node {
+        id
+        title
+        descriptionHtml
+        productType
+        vendor
+        tags
+        
+        # Product images
+        images(first: 5) {
+          edges {
+            node {
+              id
+              src
+              altText
+            }
+          }
+        }
+        
+        # Variants (sizes)
+        variants(first: 100) {
+          edges {
+            node {
+              id
+              title
+              sku
+              price
+              availableForSale
+              selectedOptions {
+                name
+                value
+              }
+            }
+          }
+        }
+        
+        # Metafields (for size charts if merchant added them)
+        metafields(first: 20) {
+          edges {
+            node {
+              namespace
+              key
+              value
+              type
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+**Implementation:**
+
+```python
+# app/services/shopify_service.py
+
+class ShopifyService:
+    def __init__(self, shop_domain: str, access_token: str):
+        self.shop_domain = shop_domain
+        self.access_token = access_token
+        self.api_url = f"https://{shop_domain}/admin/api/2024-01/graphql.json"
+    
+    async def sync_all_products(self, store_id: str):
+        """
+        Fetch all products from Shopify and store in database
+        
+        Called during:
+        1. Initial app installation (OAuth callback)
+        2. Manual sync trigger from merchant dashboard
+        3. Daily cron job (optional)
+        """
+        
+        cursor = None
+        products_synced = 0
+        
+        while True:
+            # Fetch batch of products
+            query = self._build_products_query(cursor)
+            response = await self._graphql_request(query)
+            
+            products = response['data']['products']['edges']
+            page_info = response['data']['products']['pageInfo']
+            
+            # Process each product
+            for product_edge in products:
+                product_node = product_edge['node']
+                
+                # Extract product data
+                product_data = self._extract_product_data(product_node)
+                
+                # Save to database
+                await self._save_product(store_id, product_data)
+                
+                # Extract size chart if available
+                size_chart = self._extract_size_chart(product_node)
+                if size_chart:
+                    await self._save_size_chart(product_data['product_id'], size_chart)
+                
+                products_synced += 1
+            
+            # Check if more pages
+            if not page_info['hasNextPage']:
+                break
+            
+            cursor = page_info['endCursor']
+        
+        return {
+            'products_synced': products_synced,
+            'timestamp': datetime.utcnow()
+        }
+    
+    def _extract_product_data(self, product_node: dict) -> dict:
+        """
+        Transform Shopify product data to our format
+        """
+        return {
+            'shopify_product_id': product_node['id'].split('/')[-1],
+            'title': product_node['title'],
+            'description': product_node['descriptionHtml'],
+            'product_type': product_node['productType'],
+            'vendor': product_node['vendor'],
+            'category': self._categorize_product(product_node),
+            'images': [
+                {
+                    'src': img['node']['src'],
+                    'alt': img['node']['altText']
+                }
+                for img in product_node['images']['edges']
+            ],
+            'variants': [
+                {
+                    'id': var['node']['id'].split('/')[-1],
+                    'title': var['node']['title'],
+                    'sku': var['node']['sku'],
+                    'price': var['node']['price'],
+                    'size': self._extract_size_from_variant(var['node'])
+                }
+                for var in product_node['variants']['edges']
+            ]
+        }
+    
+    def _extract_size_chart(self, product_node: dict) -> dict:
+        """
+        Extract size chart from metafields if merchant configured it
+        
+        Expected metafield format:
+        namespace: "custom"
+        key: "size_chart"
+        value: JSON string with size measurements
+        """
+        metafields = product_node.get('metafields', {}).get('edges', [])
+        
+        for metafield_edge in metafields:
+            metafield = metafield_edge['node']
+            
+            if (metafield['namespace'] == 'custom' and 
+                metafield['key'] == 'size_chart'):
+                
+                try:
+                    size_data = json.loads(metafield['value'])
+                    return self._parse_size_chart(size_data)
+                except:
+                    pass
+        
+        return None
+    
+    def _categorize_product(self, product_node: dict) -> str:
+        """
+        Auto-categorize product based on type and tags
+        
+        Returns: 'tops', 'bottoms', 'dresses', 'outerwear', or 'unknown'
+        """
+        product_type = product_node['productType'].lower()
+        tags = [tag.lower() for tag in product_node.get('tags', [])]
+        title = product_node['title'].lower()
+        
+        # Check product type first
+        if any(keyword in product_type for keyword in ['shirt', 'tee', 't-shirt', 'top', 'blouse']):
+            return 'tops'
+        if any(keyword in product_type for keyword in ['pants', 'jeans', 'trousers', 'shorts']):
+            return 'bottoms'
+        if 'dress' in product_type:
+            return 'dresses'
+        if any(keyword in product_type for keyword in ['jacket', 'coat', 'hoodie', 'sweater']):
+            return 'outerwear'
+        
+        # Check tags
+        if 'tops' in tags or 'shirts' in tags:
+            return 'tops'
+        if 'bottoms' in tags or 'pants' in tags:
+            return 'bottoms'
+        if 'dresses' in tags:
+            return 'dresses'
+        if 'outerwear' in tags or 'jackets' in tags:
+            return 'outerwear'
+        
+        return 'unknown'
+```
+
+**Webhook Handlers for Real-time Sync:**
+
+```python
+# app/api/v1/webhooks.py
+
+@app.post("/api/v1/webhooks/products/create")
+async def handle_product_create(request: Request):
+    """
+    Called by Shopify when merchant creates a new product
+    """
+    # Verify webhook authenticity
+    if not verify_webhook(request):
+        raise HTTPException(401, "Invalid webhook")
+    
+    product_data = await request.json()
+    store = get_store_from_shop_domain(product_data['shop_domain'])
+    
+    # Fetch full product details from Shopify
+    shopify_service = ShopifyService(store.shopify_domain, store.access_token)
+    product = await shopify_service.fetch_product(product_data['id'])
+    
+    # Save to database
+    await save_product(store.store_id, product)
+    
+    return {"status": "success"}
+
+@app.post("/api/v1/webhooks/products/update")
+async def handle_product_update(request: Request):
+    """
+    Called when merchant updates product
+    """
+    # Similar to create, but update existing record
+    pass
+
+@app.post("/api/v1/webhooks/products/delete")
+async def handle_product_delete(request: Request):
+    """
+    Called when merchant deletes product
+    """
+    product_data = await request.json()
+    shopify_product_id = str(product_data['id'])
+    
+    # Delete from database
+    await db.execute(
+        "DELETE FROM products WHERE shopify_product_id = :id",
+        {"id": shopify_product_id}
+    )
+    
+    return {"status": "success"}
+
+@app.post("/api/v1/webhooks/app/uninstalled")
+async def handle_app_uninstall(request: Request):
+    """
+    Called by Shopify when merchant uninstalls the app
+    
+    CRITICAL: Must handle data deletion per Shopify requirements
+    """
+    if not verify_webhook(request):
+        raise HTTPException(401, "Invalid webhook")
+    
+    webhook_data = await request.json()
+    shop_domain = webhook_data['shop_domain']
+    
+    logger.info(f"App uninstalled by: {shop_domain}")
+    
+    # Get store from database
+    store = await db.query(Store).filter_by(shopify_domain=shop_domain).first()
+    
+    if not store:
+        return {"status": "store_not_found"}
+    
+    store_id = store.store_id
+    
+    # Mark store as uninstalled (soft delete)
+    store.installation_status = 'uninstalled'
+    store.uninstalled_at = datetime.utcnow()
+    await db.commit()
+    
+    # Delete script tag from Shopify (if still exists)
+    try:
+        shopify_service = ShopifyService(shop_domain, store.shopify_access_token)
+        await shopify_service.delete_script_tag(store.script_tag_id)
+    except:
+        pass  # Script tag might already be deleted
+    
+    # Schedule data deletion (optional: wait 30 days per GDPR)
+    await schedule_data_deletion(store_id, days=30)
+    
+    # Send notification to admin
+    await send_uninstall_notification(shop_domain, store_id)
+    
+    logger.info(f"Uninstall processed for {shop_domain}")
+    
+    return {"status": "success"}
+
+async def schedule_data_deletion(store_id: str, days: int = 30):
+    """
+    Schedule complete data deletion after grace period
+    
+    Gives merchants time to reinstall if uninstalled by mistake
+    """
+    deletion_date = datetime.utcnow() + timedelta(days=days)
+    
+    # Create deletion task
+    await db.execute(
+        """
+        INSERT INTO data_deletion_queue (store_id, scheduled_for)
+        VALUES (:store_id, :scheduled_for)
+        """,
+        {"store_id": store_id, "scheduled_for": deletion_date}
+    )
+
+async def execute_data_deletion(store_id: str):
+    """
+    Permanently delete all store data
+    
+    Called by background worker after grace period
+    """
+    logger.info(f"Executing data deletion for store: {store_id}")
+    
+    # Delete in correct order (respect foreign keys)
+    tables = [
+        'analytics_events',
+        'size_recommendations',
+        'try_ons',
+        'user_measurements',
+        'sessions',
+        'size_charts',
+        'products',
+        'stores'
+    ]
+    
+    for table in tables:
+        await db.execute(
+            f"DELETE FROM {table} WHERE store_id = :store_id",
+            {"store_id": store_id}
+        )
+    
+    # Clear Redis cache for this store
+    pattern = f"*:store:{store_id}:*"
+    keys = await redis.keys(pattern)
+    if keys:
+        await redis.delete(*keys)
+    
+    logger.info(f"Data deletion completed for store: {store_id}")
+    
+    return {"status": "deleted", "store_id": store_id}
+```
+
+**Uninstall Flow Diagram:**
+
+```
+Merchant clicks "Uninstall" in Shopify
+    ↓
+Shopify sends webhook to /api/v1/webhooks/app/uninstalled
+    ↓
+Backend marks store as "uninstalled"
+    ↓
+Backend deletes script tag from Shopify
+    ↓
+Backend schedules data deletion (30 days grace period)
+    ↓
+[30 days later]
+    ↓
+Background worker executes permanent deletion
+    ↓
+All store data removed from database + Redis
+```
+
+**Merchant Re-installation:**
+
+If merchant reinstalls within 30 days:
+- Cancel scheduled deletion
+- Reactivate store record
+- Reinstall script tag
+- All data preserved
+
+```python
+@app.get("/api/v1/auth/callback")
+async def oauth_callback(code: str, shop: str, hmac: str):
+    """
+    OAuth callback - handles both new installs and re-installs
+    """
+    # ... exchange code for access_token ...
+    
+    # Check if store previously existed
+    existing_store = await db.query(Store).filter_by(
+        shopify_domain=shop
+    ).first()
+    
+    if existing_store and existing_store.installation_status == 'uninstalled':
+        # Re-installation - reactivate account
+        existing_store.installation_status = 'active'
+        existing_store.shopify_access_token = access_token
+        existing_store.reinstalled_at = datetime.utcnow()
+        
+        # Cancel scheduled deletion
+        await db.execute(
+            "DELETE FROM data_deletion_queue WHERE store_id = :store_id",
+            {"store_id": existing_store.store_id}
+        )
+        
+        logger.info(f"Store re-installed: {shop}")
+        
+    else:
+        # New installation
+        existing_store = Store.create(
+            shopify_domain=shop,
+            shopify_access_token=access_token,
+            installation_status='active'
+        )
+    
+    # Continue with normal setup...
+    await install_script_tag(existing_store)
+    await sync_products(existing_store.store_id)
+    
+    return redirect_to_shopify_admin(shop)
+```
 
 #### 1.1 OAuth Initialization
 ```http
@@ -516,18 +1008,28 @@ Response 200 (failed):
    The fit should clearly show size {size} on this person's body proportions."""
    ```
 
-4. **Call Replicate API** (nano-banana)
+4. **Call Google Gemini API** (nano-banana model)
    ```python
-   output = replicate.run(
-       "google/nano-banana",
-       input={
-           "prompt": prompt,
-           "image_input": [front_image, product_image],
-           "resolution": "2K",
-           "aspect_ratio": "3:4",
-           "output_format": "png"
-       }
-   )
+   import google.generativeai as genai
+   
+   # Configure API
+   genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
+   
+   # Upload images to Gemini
+   person_file = genai.upload_file(front_image)
+   product_file = genai.upload_file(product_image)
+   
+   # Generate try-on using nano-banana model
+   model = genai.GenerativeModel('gemini-2.0-flash-exp')
+   
+   response = model.generate_content([
+       prompt,
+       person_file,
+       product_file
+   ])
+   
+   # Extract generated image
+   result_image = response.parts[0].inline_data.data
    ```
 
 5. **Cache result** in Redis (24h TTL)
@@ -546,7 +1048,7 @@ Response 200 (failed):
        measurement_id=measurement_id,
        product_id=product_id,
        size=size,
-       result_url=cdn_url,
+       result_cache_key=f"tryon:{try_on_id}",
        processing_time=38.2
    )
    ```
@@ -555,7 +1057,16 @@ Response 200 (failed):
 
 ### 6. Session Management API
 
-#### 6.1 Create Session
+#### User Recognition & Session Reuse
+
+**Key Feature:** If a user has taken photos within the last 24 hours, they don't need to retake them.
+
+**Implementation Strategy:**
+- Use browser fingerprinting + optional cookie for user identification
+- Store user_identifier in Redis with measurement_id mapping
+- Check if user has recent measurements before asking for photos
+
+#### 6.1 Create or Resume Session
 ```http
 POST /api/v1/sessions/create
 Headers:
@@ -563,15 +1074,180 @@ Headers:
 
 Body:
 {
-  "product_id": "uuid"
+  "product_id": "uuid",
+  "user_identifier": "browser_fingerprint_hash"  // From frontend
 }
 
-Response 200:
+Response 200 (new user):
 {
   "session_id": "uuid",
   "store_id": "uuid",
   "product_id": "uuid",
+  "has_existing_measurements": false,
   "expires_at": "2026-02-07T12:00:00Z"
+}
+
+Response 200 (returning user within 24h):
+{
+  "session_id": "uuid",
+  "store_id": "uuid",
+  "product_id": "uuid",
+  "has_existing_measurements": true,
+  "measurement_id": "existing_uuid",
+  "measurements": {
+    "height": 175.0,
+    "chest": 94.5,
+    // ... all measurements
+  },
+  "photos_available": true,
+  "cached_until": "2026-02-07T12:00:00Z",
+  "expires_at": "2026-02-07T12:00:00Z"
+}
+```
+
+**Backend Logic:**
+
+```python
+# app/api/v1/sessions.py
+
+@app.post("/api/v1/sessions/create")
+async def create_or_resume_session(
+    store_id: str,
+    product_id: str,
+    user_identifier: str
+):
+    """
+    Create new session or resume existing one if user has recent data
+    """
+    
+    # Check if user has measurements from last 24 hours
+    cache_key = f"user:{store_id}:{user_identifier}:measurement"
+    cached_measurement_id = await redis.get(cache_key)
+    
+    if cached_measurement_id:
+        # User has recent measurements
+        measurement = await db.query(UserMeasurement).get(cached_measurement_id)
+        
+        # Check if images still in cache
+        front_img_key = f"img:measurement:{cached_measurement_id}:front"
+        side_img_key = f"img:measurement:{cached_measurement_id}:side"
+        
+        front_exists = await redis.exists(front_img_key)
+        side_exists = await redis.exists(side_img_key)
+        
+        photos_available = front_exists and side_exists
+        
+        # Create new session but link to existing measurements
+        session = Session.create(
+            store_id=store_id,
+            product_id=product_id,
+            measurement_id=cached_measurement_id if photos_available else None
+        )
+        
+        return {
+            "session_id": session.session_id,
+            "store_id": store_id,
+            "product_id": product_id,
+            "has_existing_measurements": True,
+            "measurement_id": cached_measurement_id,
+            "measurements": measurement.measurements,
+            "photos_available": photos_available,
+            "cached_until": get_cache_expiry(cached_measurement_id),
+            "expires_at": session.expires_at
+        }
+    
+    else:
+        # New user or expired cache
+        session = Session.create(
+            store_id=store_id,
+            product_id=product_id
+        )
+        
+        return {
+            "session_id": session.session_id,
+            "store_id": store_id,
+            "product_id": product_id,
+            "has_existing_measurements": False,
+            "expires_at": session.expires_at
+        }
+
+# After successful measurement extraction:
+@app.post("/api/v1/measurements/extract")
+async def extract_measurements(...):
+    # ... existing extraction logic ...
+    
+    # After saving measurements, cache user mapping
+    if user_identifier:
+        cache_key = f"user:{store_id}:{user_identifier}:measurement"
+        await redis.setex(
+            cache_key,
+            86400,  # 24 hours
+            measurement_id
+        )
+        
+        # Also store images with measurement_id as key for easier retrieval
+        await redis.rename(
+            f"img:session:{session_id}:front",
+            f"img:measurement:{measurement_id}:front"
+        )
+        await redis.rename(
+            f"img:session:{session_id}:side",
+            f"img:measurement:{measurement_id}:side"
+        )
+    
+    return response
+```
+
+#### Cross-Product Session Reuse
+
+**Scenario:** User tries on Product A, then navigates to Product B and clicks "Try On"
+
+**Flow:**
+1. Widget creates session for Product B
+2. Backend detects user has recent measurements
+3. Backend returns `has_existing_measurements: true` with data
+4. **Frontend skips** photo capture and measurement screens
+5. **Frontend goes directly** to generating try-on for Product B
+6. Backend uses cached images + new product to generate try-on
+
+**Frontend receives:**
+```json
+{
+  "has_existing_measurements": true,
+  "measurement_id": "abc-123",
+  "measurements": { /* all 15 measurements */ },
+  "photos_available": true
+}
+```
+
+**Frontend behavior:**
+```javascript
+if (sessionData.has_existing_measurements && sessionData.photos_available) {
+  // Skip to generating try-on directly
+  showProcessingScreen();
+  
+  // Generate size recommendation
+  const recommendation = await api.getSizeRecommendation(
+    sessionData.measurement_id,
+    newProductId
+  );
+  
+  // Generate heatmap
+  const heatmap = await api.generateHeatmap(
+    sessionData.measurement_id,
+    newProductId,
+    recommendation.recommended_size
+  );
+  
+  // Generate try-on
+  const tryOn = await api.generateTryOn(
+    sessionData.measurement_id,
+    newProductId,
+    recommendation.recommended_size
+  );
+  
+  // Show results
+  showResultsScreen(tryOn, heatmap, recommendation);
 }
 ```
 
@@ -1115,7 +1791,347 @@ session:{session_id}:metadata       → Session metadata (24h TTL)
 
 ---
 
-## External Integrations
+### 7. Merchant Dashboard API
+
+#### Overview
+Merchant-facing dashboard to show ROI and value metrics. Demonstrates decreased returns, increased conversions, and customer engagement.
+
+**Access:** Embedded in Shopify admin using App Bridge
+
+#### 7.1 Dashboard Overview
+```http
+GET /api/v1/merchant/dashboard
+Headers:
+  X-Store-ID: {store_uuid}
+
+Response 200:
+{
+  "overview": {
+    "total_try_ons": 1247,
+    "unique_users": 892,
+    "total_products": 156,
+    "products_with_try_on": 134
+  },
+  "period_stats": {
+    "period": "last_30_days",
+    "try_ons": 387,
+    "try_ons_growth": "+23%",
+    "add_to_carts": 156,
+    "conversion_rate": 40.3,
+    "conversion_growth": "+12%"
+  },
+  "roi_metrics": {
+    "estimated_returns_prevented": 23,
+    "estimated_savings": 1150.00,  // currency
+    "average_cart_value_with_vto": 89.50,
+    "average_cart_value_without_vto": 67.30,
+    "lift": "+33%"
+  },
+  "top_products": [
+    {
+      "product_id": "uuid",
+      "title": "Classic Denim Jacket",
+      "try_ons": 89,
+      "add_to_carts": 42,
+      "conversion_rate": 47.2
+    },
+    // ... top 5 products
+  ]
+}
+```
+
+**ROI Calculation Logic:**
+
+```python
+class MerchantAnalyticsService:
+    """
+    Calculate merchant-facing analytics and ROI
+    """
+    
+    def calculate_returns_prevented(self, store_id: str, period_days: int = 30):
+        """
+        Estimate returns prevented by virtual try-on
+        
+        Logic:
+        1. Industry average return rate: 30-40% for apparel
+        2. With proper sizing: Estimated 15-20% return rate
+        3. Difference = Returns prevented
+        """
+        
+        # Get orders with VTO in last 30 days
+        vto_orders = db.query("""
+            SELECT COUNT(*) as count, SUM(order_value) as revenue
+            FROM orders
+            WHERE store_id = :store_id
+            AND created_at > NOW() - INTERVAL :days DAY
+            AND order_properties LIKE '%_vto_session%'
+        """, {"store_id": store_id, "days": period_days})
+        
+        # Industry baseline: 35% return rate
+        baseline_return_rate = 0.35
+        
+        # VTO-enabled: Estimated 18% return rate (based on studies)
+        vto_return_rate = 0.18
+        
+        # Calculate prevented returns
+        prevented_rate = baseline_return_rate - vto_return_rate  # 17%
+        estimated_returns_prevented = int(vto_orders.count * prevented_rate)
+        
+        # Calculate savings (assume average return costs $50)
+        avg_return_cost = 50.0
+        estimated_savings = estimated_returns_prevented * avg_return_cost
+        
+        return {
+            "estimated_returns_prevented": estimated_returns_prevented,
+            "estimated_savings": estimated_savings,
+            "methodology": "Industry benchmark vs VTO-enabled orders"
+        }
+    
+    def calculate_conversion_lift(self, store_id: str):
+        """
+        Compare conversion rates: with VTO vs without VTO
+        """
+        
+        # Sessions with VTO that added to cart
+        vto_sessions = db.query("""
+            SELECT 
+                COUNT(DISTINCT s.session_id) as total_sessions,
+                COUNT(DISTINCT CASE WHEN s.added_to_cart THEN s.session_id END) as conversions
+            FROM sessions s
+            WHERE s.store_id = :store_id
+            AND s.measurement_id IS NOT NULL
+        """, {"store_id": store_id})
+        
+        vto_conversion = vto_sessions.conversions / vto_sessions.total_sessions
+        
+        # Overall store conversion rate (from Shopify)
+        overall_conversion = get_store_conversion_rate(store_id)
+        
+        lift_percentage = ((vto_conversion - overall_conversion) / overall_conversion) * 100
+        
+        return {
+            "vto_conversion_rate": vto_conversion * 100,
+            "overall_conversion_rate": overall_conversion * 100,
+            "lift": f"+{lift_percentage:.1f}%"
+        }
+```
+
+#### 7.2 Analytics Breakdown
+```http
+GET /api/v1/merchant/analytics/breakdown
+Headers:
+  X-Store-ID: {store_uuid}
+Query:
+  period: "7d" | "30d" | "90d" | "all"
+  metric: "try_ons" | "conversions" | "engagement"
+
+Response 200:
+{
+  "period": "30d",
+  "metric": "try_ons",
+  "time_series": [
+    {
+      "date": "2026-02-01",
+      "value": 23,
+      "conversions": 12
+    },
+    // ... daily data points
+  ],
+  "breakdown_by_category": {
+    "tops": 156,
+    "bottoms": 89,
+    "dresses": 67,
+    "outerwear": 75
+  },
+  "breakdown_by_size": {
+    "XS": 45,
+    "S": 123,
+    "M": 234,
+    "L": 178,
+    "XL": 67
+  }
+}
+```
+
+#### 7.3 Product Performance
+```http
+GET /api/v1/merchant/analytics/products
+Headers:
+  X-Store-ID: {store_uuid}
+Query:
+  sort_by: "try_ons" | "conversions" | "revenue"
+  limit: 20
+
+Response 200:
+{
+  "products": [
+    {
+      "product_id": "uuid",
+      "title": "Classic Denim Jacket",
+      "image_url": "...",
+      "metrics": {
+        "try_ons": 89,
+        "unique_users": 73,
+        "add_to_carts": 42,
+        "conversion_rate": 47.2,
+        "average_session_time": 124  // seconds
+      },
+      "size_distribution": {
+        "S": 12,
+        "M": 28,
+        "L": 31,
+        "XL": 18
+      },
+      "fit_feedback": {
+        "perfect_fit": 34,
+        "slightly_loose": 8,
+        "slightly_tight": 3
+      }
+    }
+  ],
+  "total_count": 134
+}
+```
+
+#### 7.4 User Engagement
+```http
+GET /api/v1/merchant/analytics/engagement
+Headers:
+  X-Store-ID: {store_uuid}
+
+Response 200:
+{
+  "funnel": {
+    "widget_opened": 1450,
+    "photos_captured": 1120,  // 77% completion
+    "measurements_completed": 1089,  // 97% of photos
+    "try_on_generated": 1034,  // 95% of measurements
+    "size_selected": 892,  // 86% of try-ons
+    "added_to_cart": 387  // 43% of selections
+  },
+  "drop_off_points": [
+    {
+      "step": "photo_capture",
+      "drop_off_rate": 23,
+      "reason": "Camera permission denied or upload failed"
+    },
+    {
+      "step": "try_on_view",
+      "drop_off_rate": 14,
+      "reason": "Did not proceed to add to cart"
+    }
+  ],
+  "average_session_duration": 156,  // seconds
+  "return_user_rate": 18.3  // % of users who tried on multiple products
+}
+```
+
+#### 7.5 Settings
+```http
+GET /api/v1/merchant/settings
+Headers:
+  X-Store-ID: {store_uuid}
+
+Response 200:
+{
+  "store_info": {
+    "store_name": "Fashion Boutique",
+    "shopify_domain": "fashion-boutique.myshopify.com",
+    "installation_date": "2026-01-15T10:30:00Z",
+    "status": "active"
+  },
+  "widget_settings": {
+    "enabled": true,
+    "button_text": "Try Me On",
+    "button_color": "#000000",
+    "placement": "below_add_to_cart"
+  },
+  "products_synced": 156,
+  "last_sync": "2026-02-06T08:00:00Z",
+  "next_sync": "2026-02-07T08:00:00Z"
+}
+
+PUT /api/v1/merchant/settings
+Headers:
+  X-Store-ID: {store_uuid}
+Body:
+{
+  "widget_settings": {
+    "enabled": true,
+    "button_text": "Virtual Try-On",
+    "button_color": "#FF5733"
+  }
+}
+
+Response 200:
+{
+  "status": "updated",
+  "settings": { /* updated settings */ }
+}
+```
+
+#### 7.6 Manual Product Sync
+```http
+POST /api/v1/merchant/products/sync
+Headers:
+  X-Store-ID: {store_uuid}
+
+Response 202:
+{
+  "status": "started",
+  "job_id": "uuid",
+  "estimated_time": 30  // seconds
+}
+
+GET /api/v1/merchant/products/sync/{job_id}
+
+Response 200:
+{
+  "job_id": "uuid",
+  "status": "completed",
+  "products_synced": 156,
+  "products_updated": 23,
+  "products_added": 3,
+  "completed_at": "2026-02-06T12:00:00Z"
+}
+```
+
+---
+
+### 8. Admin Dashboard API (Future - Not Implemented in MVP)
+
+**Provision for Super Admin Dashboard**
+
+Reserved endpoints for platform-level admin:
+
+```http
+# View all stores
+GET /api/v1/admin/stores
+Authorization: Bearer {admin_token}
+
+# Store health metrics
+GET /api/v1/admin/stores/{store_id}/health
+
+# Platform-wide analytics
+GET /api/v1/admin/analytics/platform
+
+# Feature flags
+GET /api/v1/admin/features
+PUT /api/v1/admin/features/{feature_id}
+
+# Model performance monitoring
+GET /api/v1/admin/ml/performance
+```
+
+**Not implemented in MVP but database schema supports:**
+- Admin users table
+- Feature flags table
+- Platform-wide analytics aggregation
+- A/B testing framework
+
+---
+
+### 9. External Integrations
 
 ### 1. Shopify API Integration
 
