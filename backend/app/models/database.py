@@ -128,14 +128,13 @@ class Session(Base, TimestampMixin):
     session_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     store_id = Column(UUID(as_uuid=True), ForeignKey('stores.store_id'), nullable=False)
     product_id = Column(UUID(as_uuid=True), ForeignKey('products.product_id'), nullable=False)
-    measurement_id = Column(UUID(as_uuid=True), ForeignKey('user_measurements.measurement_id'), nullable=True)
+    measurement_id = Column(UUID(as_uuid=True), nullable=True)  # Reference to measurement (no FK constraint to avoid circular dependency)
     user_identifier = Column(String(255), nullable=True)  # Browser fingerprint for returning users
     expires_at = Column(DateTime, default=lambda: datetime.utcnow() + timedelta(hours=24))
 
     # Relationships
     store = relationship("Store", back_populates="sessions")
     product = relationship("Product")
-    measurement = relationship("UserMeasurement", back_populates="sessions")
 
     def __repr__(self):
         return f"<Session {self.session_id}>"
@@ -180,7 +179,7 @@ class UserMeasurement(Base, TimestampMixin):
     confidence_score = Column(Float)
 
     # Relationships
-    sessions = relationship("Session", back_populates="measurement")
+    session = relationship("Session", foreign_keys=[session_id])
     try_ons = relationship("TryOn", back_populates="measurement")
     size_recommendations = relationship("SizeRecommendation", back_populates="measurement")
 
