@@ -1,0 +1,51 @@
+# FastAPI Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+
+# Database
+sqlalchemy==2.0.23
+alembic==1.12.1
+psycopg2-binary==2.9.9
+asyncpg==0.29.0
+
+# Redis
+redis==5.0.1
+hiredis==2.2.3
+
+# Pydantic for validation
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# MediaPipe & OpenCV for measurement extraction
+mediapipe==0.10.8
+opencv-python==4.8.1.78
+opencv-contrib-python==4.8.1.78
+numpy==1.24.3
+pillow==10.1.0
+
+# Google Generative AI (Gemini)
+google-generativeai==0.3.2
+
+# Shopify Integration
+shopify-api==12.3.0
+requests==2.31.0
+
+# Security & Auth
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-dotenv==1.0.0
+
+# Rate Limiting
+slowapi==0.1.9
+
+# Logging
+structlog==23.2.0
+
+# Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+httpx==0.25.2
+
+# Utilities
+python-dateutil==2.8.2
