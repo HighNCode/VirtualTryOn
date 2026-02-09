@@ -21,14 +21,14 @@ pydantic-settings==2.1.0
 mediapipe==0.10.8
 opencv-python==4.8.1.78
 opencv-contrib-python==4.8.1.78
-numpy==1.24.3
+numpy==1.26.4
 pillow==10.1.0
 
 # Google Generative AI (Gemini)
 google-generativeai==0.3.2
 
 # Shopify Integration
-shopify-api==12.3.0
+ShopifyAPI==10.0.0
 requests==2.31.0
 
 # Security & Auth
