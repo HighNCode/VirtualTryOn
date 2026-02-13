@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     MEASUREMENT_TIMEOUT: int = 10  # seconds
     TRYON_TIMEOUT: int = 120  # seconds
 
+    # SMPL Body Measurement Pipeline
+    SMPL_MODEL_DIR: str = "data/body_models"
+    HMR_CHECKPOINT_DIR: str = "data/checkpoints"
+    REGRESSOR_BACKEND: str = "shapy"  # "hmr2" or "shapy"
+
     class Config:
         env_file = ".env"
         case_sensitive = True

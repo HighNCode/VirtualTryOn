@@ -49,3 +49,16 @@ httpx==0.25.2
 
 # Utilities
 python-dateutil==2.8.2
+
+# ---- SMPL Body Measurement Pipeline ----
+# Core ML framework
+torch>=2.0.0
+torchvision>=0.15.0
+
+# SMPL body model (Python implementation)
+smplx>=0.1.28
+plotly==6.5.2
+scipy==1.17.0
+
+# 3D mesh utilities (used by SMPL-Anthropometry)
+trimesh>=3.21.0

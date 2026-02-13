@@ -15,7 +15,7 @@ from app.core.database import check_db_connection
 from app.core.redis import check_redis_connection
 
 # Import API routers
-from app.api.v1 import auth, products, webhooks
+from app.api.v1 import auth, products, webhooks, sessions, measurements
 
 # Configure logging
 logging.basicConfig(
@@ -67,6 +67,8 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(products.router, prefix="/api/v1")
 app.include_router(webhooks.router, prefix="/api/v1")
+app.include_router(sessions.router, prefix="/api/v1")
+app.include_router(measurements.router, prefix="/api/v1")
 
 
 # Root endpoint

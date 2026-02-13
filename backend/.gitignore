@@ -54,3 +54,12 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# SMPL model files (large, licensed — never commit)
+data/body_models/
+*.pkl
+
+# PyTorch model checkpoints
+data/checkpoints/
+*.pt
+*.pth

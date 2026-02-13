@@ -148,9 +148,11 @@ class MeasurementResponse(BaseModel):
     """Measurement extraction response"""
     measurement_id: UUID
     session_id: UUID
-    measurements: Dict[str, float]
+    measurements: Dict[str, Optional[float]]  # Can contain null values
     body_type: str
     confidence_score: float
+    missing_measurements: List[str] = []  # List of measurement names that couldn't be determined
+    missing_reason: Optional[str] = None  # Explanation for missing measurements
     processing_time_ms: int
     cache_expires_at: datetime
 
