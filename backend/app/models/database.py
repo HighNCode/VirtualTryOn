@@ -200,7 +200,6 @@ class TryOn(Base, TimestampMixin):
     try_on_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     measurement_id = Column(UUID(as_uuid=True), ForeignKey('user_measurements.measurement_id'), nullable=True)
     product_id = Column(UUID(as_uuid=True), ForeignKey('products.product_id'), nullable=False)
-    size_name = Column(String(20), nullable=True)
     processing_status = Column(String(20), default='queued')  # 'queued', 'processing', 'completed', 'failed'
     result_cache_key = Column(String(200))  # Redis key for result image
     processing_time_seconds = Column(Float)

@@ -165,7 +165,6 @@ async def generate_tryon(
         try_on_id = uuid.uuid4()
         tryon_record = TryOn(
             try_on_id=try_on_id,
-            measurement_id=None,
             product_id=product.product_id,
             processing_status="queued",
         )
