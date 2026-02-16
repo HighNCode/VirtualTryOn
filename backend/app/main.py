@@ -15,7 +15,7 @@ from app.core.database import check_db_connection
 from app.core.redis import check_redis_connection
 
 # Import API routers
-from app.api.v1 import auth, products, webhooks, sessions, measurements, recommendations
+from app.api.v1 import auth, products, webhooks, sessions, measurements, recommendations, heatmap
 
 # Configure logging
 logging.basicConfig(
@@ -70,6 +70,7 @@ app.include_router(webhooks.router, prefix="/api/v1")
 app.include_router(sessions.router, prefix="/api/v1")
 app.include_router(measurements.router, prefix="/api/v1")
 app.include_router(recommendations.router, prefix="/api/v1")
+app.include_router(heatmap.router, prefix="/api/v1")
 
 
 # Root endpoint

@@ -200,6 +200,36 @@ class SizeRecommendationResponse(BaseModel):
 
 
 # ============================================================================
+# Heatmap Schemas
+# ============================================================================
+
+class HeatmapGenerateRequest(BaseModel):
+    """Heatmap generation request"""
+    measurement_id: UUID
+    product_id: UUID
+    size: str
+
+
+class HeatmapRegion(BaseModel):
+    """Individual body region fit data for heatmap"""
+    fit_status: str
+    color: str
+    score: int
+    polygon_coords: List[List[float]]
+
+
+class HeatmapResponse(BaseModel):
+    """Heatmap generation response"""
+    heatmap_id: UUID
+    size: str
+    overall_fit_score: int
+    regions: Dict[str, HeatmapRegion]
+    svg_overlay: str
+    legend: Dict[str, str]
+    image_dimensions: Optional[List[int]] = None  # [width, height] if overlay mode, null for template
+
+
+# ============================================================================
 # Try-On Schemas
 # ============================================================================
 
