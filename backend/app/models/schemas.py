@@ -235,10 +235,7 @@ class HeatmapResponse(BaseModel):
 
 class TryOnGenerateRequest(BaseModel):
     """Virtual try-on generation request"""
-    measurement_id: UUID
     product_id: UUID
-    size: str
-    style_reference: Optional[str] = None
 
 
 class TryOnStatusResponse(BaseModel):

@@ -9,11 +9,11 @@ import logging
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Depends, Header, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi.responses import Response
 from sqlalchemy.orm import Session as DBSession
 
 from app.core.database import get_db
-from app.models.database import Session, Product, UserMeasurement, TryOn
+from app.models.database import Session, Product, TryOn
 from app.models.schemas import TryOnGenerateRequest, TryOnStatusResponse
 from app.services.cache_service import CacheService
 
@@ -47,7 +47,6 @@ def _run_tryon_generation(
     product_image_url: str,
     product_title: str,
     category: str,
-    db_url: str,
 ):
     """
     Background task: generate the try-on image, cache it, update DB record.
@@ -81,7 +80,6 @@ def _run_tryon_generation(
 
         # Cache result image in Redis
         cache = CacheService()
-        # CacheService methods are async but Redis calls are sync under the hood
         import asyncio
         loop = asyncio.new_event_loop()
         cache_key = loop.run_until_complete(
@@ -122,6 +120,10 @@ async def generate_tryon(
     """
     Start virtual try-on image generation.
 
+    Only needs a product_id — the person's image is taken from the session's
+    cached front photo. No measurements, size, or fit data needed; the model
+    simply fits the product on the person as-is.
+
     Returns 202 immediately. Poll GET /tryon/{try_on_id}/status for result.
 
     Headers:
@@ -129,22 +131,9 @@ async def generate_tryon(
         X-Store-ID: Store UUID
 
     Body:
-        {
-            "measurement_id": "uuid",
-            "product_id": "uuid",
-            "size": "M"
-        }
+        {"product_id": "uuid"}
     """
     try:
-        # Validate measurement
-        measurement = db.query(UserMeasurement).filter_by(
-            measurement_id=str(request.measurement_id)
-        ).first()
-        if not measurement:
-            raise HTTPException(404, "Measurement not found")
-        if str(measurement.session_id) != str(session.session_id):
-            raise HTTPException(403, "Measurement does not belong to this session")
-
         # Validate product
         product = db.query(Product).filter_by(
             product_id=str(request.product_id)
@@ -154,35 +143,30 @@ async def generate_tryon(
         if str(product.store_id) != str(session.store_id):
             raise HTTPException(403, "Product does not belong to this store")
 
-        # Get person's front image from Redis cache
+        # Get person's front image from session cache
         cache = CacheService()
-        person_image = await cache.get_measurement_image(
-            str(measurement.measurement_id), "front"
-        )
-        if not person_image:
-            # Try session-level cache
-            person_image = await cache.get_image(str(session.session_id), "front")
+        person_image = await cache.get_image(str(session.session_id), "front")
 
         if not person_image:
             raise HTTPException(
                 422,
                 "Person's front image not found in cache. "
-                "Please re-upload and extract measurements first.",
+                "Please upload an image first via the measurements endpoint.",
             )
 
         # Get product image URL
         product_images = product.images or []
         if not product_images:
             raise HTTPException(422, "Product has no images")
-        product_image_url = product_images[0].get("src") if isinstance(product_images[0], dict) else product_images[0].src
+        first = product_images[0]
+        product_image_url = first.get("src") if isinstance(first, dict) else first.src
 
-        # Create TryOn DB record
+        # Create TryOn DB record (measurement_id is nullable for this flow)
         try_on_id = uuid.uuid4()
         tryon_record = TryOn(
             try_on_id=try_on_id,
-            measurement_id=measurement.measurement_id,
+            measurement_id=None,
             product_id=product.product_id,
-            size_name=request.size,
             processing_status="queued",
         )
         db.add(tryon_record)
@@ -196,10 +180,9 @@ async def generate_tryon(
             product_image_url=product_image_url,
             product_title=product.title or "garment",
             category=product.category or "tops",
-            db_url=str(db.bind.url) if db.bind else "",
         )
 
-        logger.info(f"Try-on queued: {try_on_id} for product={product.title}, size={request.size}")
+        logger.info(f"Try-on queued: {try_on_id} for product={product.title}")
 
         return {
             "try_on_id": str(try_on_id),
@@ -223,13 +206,11 @@ async def get_tryon_status(
     Poll for try-on generation status.
 
     Returns current status, and result_image_url when completed.
-    The result_image_url is a local endpoint that serves the cached image.
     """
     record = db.query(TryOn).filter_by(try_on_id=try_on_id).first()
     if not record:
         raise HTTPException(404, "Try-on not found")
 
-    # Map processing_status to response fields
     status = record.processing_status
 
     progress = None
@@ -247,7 +228,6 @@ async def get_tryon_status(
         progress = 100
         message = "Try-on image ready"
         result_image_url = f"/api/v1/tryon/{try_on_id}/image"
-        # Cache expires 24h from completion
         if record.completed_at:
             from datetime import timedelta
             cache_expires_at = record.completed_at + timedelta(hours=24)
@@ -285,5 +265,4 @@ async def get_tryon_image(try_on_id: str, db: DBSession = Depends(get_db)):
     if not image_bytes:
         raise HTTPException(410, "Try-on image has expired from cache")
 
-    from fastapi.responses import Response
     return Response(content=image_bytes, media_type="image/png")
