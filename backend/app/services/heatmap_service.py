@@ -45,7 +45,11 @@ MEASUREMENT_TO_REGION = {
     "chest": "chest",
     "waist": "waist",
     "hip": "hips",
-    "inseam": "legs",
+    "neck": "neck",
+    "arm_length": "sleeves",
+    "thigh": "thigh",
+    "calf": "calf",
+    "ankle": "ankle",
 }
 
 # Template polygon coords on a normalized 200x500 canvas
@@ -63,19 +67,41 @@ TEMPLATE_POLYGONS = {
     "hips": [
         [48, 235], [152, 235], [150, 285], [50, 285],
     ],
-    "legs": [
-        [50, 285], [95, 285], [92, 450], [55, 450],
-        [55, 450], [92, 450], [95, 285], [50, 285],  # left leg
-        [105, 285], [150, 285], [145, 450], [108, 450],  # right leg
+    "neck": [
+        [82, 50], [118, 50], [115, 80], [85, 80],
+    ],
+    "sleeves": [
+        # Left arm
+        [160, 90], [175, 95], [170, 220], [155, 215],
+        # Right arm
+        [40, 90], [25, 95], [30, 220], [45, 215],
+    ],
+    "thigh": [
+        # Left thigh
+        [50, 285], [98, 285], [95, 355], [55, 355],
+        # Right thigh
+        [102, 285], [150, 285], [145, 355], [105, 355],
+    ],
+    "calf": [
+        # Left calf
+        [58, 370], [92, 370], [88, 430], [62, 430],
+        # Right calf
+        [108, 370], [142, 370], [138, 430], [112, 430],
+    ],
+    "ankle": [
+        # Left ankle
+        [62, 435], [88, 435], [86, 460], [64, 460],
+        # Right ankle
+        [112, 435], [138, 435], [136, 460], [114, 460],
     ],
 }
 
 # Which regions to show per product category
 CATEGORY_REGIONS = {
-    "tops":      ["shoulders", "chest", "waist"],
-    "bottoms":   ["waist", "hips", "legs"],
-    "dresses":   ["chest", "waist", "hips"],
-    "outerwear": ["shoulders", "chest"],
+    "tops":      ["shoulders", "chest", "waist", "neck", "sleeves"],
+    "bottoms":   ["waist", "hips", "thigh", "calf", "ankle"],
+    "dresses":   ["chest", "waist", "hips", "shoulders"],
+    "outerwear": ["shoulders", "chest", "sleeves"],
     "unknown":   ["chest", "waist", "hips"],
 }
 
@@ -296,23 +322,103 @@ class HeatmapService:
                     pad(r_hip_x, mid_y, -width_pad, 30),
                 ]
 
-            elif region_name == "legs":
+            elif region_name == "neck":
+                # Landmarks: 0=Nose, 11=L_Shoulder, 12=R_Shoulder
+                nose_x, nose_y = lm(0)
+                l_sh_x, l_sh_y = lm(11)
+                r_sh_x, r_sh_y = lm(12)
+                mid_sh_x = (l_sh_x + r_sh_x) / 2
+                mid_sh_y = (l_sh_y + r_sh_y) / 2
+                neck_width = abs(l_sh_x - r_sh_x) * 0.2
+                top_y = nose_y + (mid_sh_y - nose_y) * 0.4
+                bot_y = mid_sh_y - 5
+                return [
+                    [round(mid_sh_x - neck_width, 1), round(top_y, 1)],
+                    [round(mid_sh_x + neck_width, 1), round(top_y, 1)],
+                    [round(mid_sh_x + neck_width * 1.1, 1), round(bot_y, 1)],
+                    [round(mid_sh_x - neck_width * 1.1, 1), round(bot_y, 1)],
+                ]
+
+            elif region_name == "sleeves":
+                # Landmarks: 11/12=Shoulders, 13/14=Elbows, 15/16=Wrists
+                l_sh_x, l_sh_y = lm(11)
+                r_sh_x, r_sh_y = lm(12)
+                l_elb_x, l_elb_y = lm(13)
+                r_elb_x, r_elb_y = lm(14)
+                l_wr_x, l_wr_y = lm(15)
+                r_wr_x, r_wr_y = lm(16)
+                arm_w = abs(l_sh_x - r_sh_x) * 0.08
+                # Left arm + Right arm polygons
+                return [
+                    # Left arm
+                    pad(l_sh_x, l_sh_y, arm_w, 0),
+                    pad(l_sh_x, l_sh_y, -arm_w, 0),
+                    pad(l_wr_x, l_wr_y, -arm_w * 0.7, 0),
+                    pad(l_wr_x, l_wr_y, arm_w * 0.7, 0),
+                    # Right arm
+                    pad(r_sh_x, r_sh_y, -arm_w, 0),
+                    pad(r_sh_x, r_sh_y, arm_w, 0),
+                    pad(r_wr_x, r_wr_y, arm_w * 0.7, 0),
+                    pad(r_wr_x, r_wr_y, -arm_w * 0.7, 0),
+                ]
+
+            elif region_name == "thigh":
+                # Landmarks: 23/24=Hips, 25/26=Knees
                 l_hip_x, l_hip_y = lm(23)
                 r_hip_x, r_hip_y = lm(24)
+                l_knee_x, l_knee_y = lm(25)
+                r_knee_x, r_knee_y = lm(26)
+                mid_x = (l_hip_x + r_hip_x) / 2
+                thigh_w = abs(l_hip_x - r_hip_x) * 0.22
+                return [
+                    # Left thigh
+                    pad(l_hip_x, l_hip_y, thigh_w, 10),
+                    pad(mid_x, l_hip_y, 5, 10),
+                    pad(l_knee_x, l_knee_y, thigh_w * 0.7, -5),
+                    pad(l_knee_x, l_knee_y, -thigh_w * 0.7, -5),
+                    # Right thigh
+                    pad(mid_x, r_hip_y, -5, 10),
+                    pad(r_hip_x, r_hip_y, -thigh_w, 10),
+                    pad(r_knee_x, r_knee_y, -thigh_w * 0.7, -5),
+                    pad(r_knee_x, r_knee_y, thigh_w * 0.7, -5),
+                ]
+
+            elif region_name == "calf":
+                # Landmarks: 25/26=Knees, 27/28=Ankles
+                l_knee_x, l_knee_y = lm(25)
+                r_knee_x, r_knee_y = lm(26)
                 l_ank_x, l_ank_y = lm(27)
                 r_ank_x, r_ank_y = lm(28)
-                mid_x = (l_hip_x + r_hip_x) / 2
-                # Left leg
+                calf_w = abs(l_knee_x - r_knee_x) * 0.18
                 return [
-                    [round(r_hip_x, 1), round(r_hip_y + 10, 1)],
-                    [round(mid_x - 5, 1), round(r_hip_y + 10, 1)],
-                    [round(r_ank_x + 5, 1), round(r_ank_y, 1)],
-                    [round(r_ank_x - 10, 1), round(r_ank_y, 1)],
-                    # gap
-                    [round(mid_x + 5, 1), round(l_hip_y + 10, 1)],
-                    [round(l_hip_x, 1), round(l_hip_y + 10, 1)],
-                    [round(l_ank_x + 10, 1), round(l_ank_y, 1)],
-                    [round(l_ank_x - 5, 1), round(l_ank_y, 1)],
+                    # Left calf
+                    pad(l_knee_x, l_knee_y, calf_w, 5),
+                    pad(l_knee_x, l_knee_y, -calf_w, 5),
+                    pad(l_ank_x, l_ank_y, -calf_w * 0.6, -10),
+                    pad(l_ank_x, l_ank_y, calf_w * 0.6, -10),
+                    # Right calf
+                    pad(r_knee_x, r_knee_y, -calf_w, 5),
+                    pad(r_knee_x, r_knee_y, calf_w, 5),
+                    pad(r_ank_x, r_ank_y, calf_w * 0.6, -10),
+                    pad(r_ank_x, r_ank_y, -calf_w * 0.6, -10),
+                ]
+
+            elif region_name == "ankle":
+                # Landmarks: 27/28=Ankles, 29/30=Heels
+                l_ank_x, l_ank_y = lm(27)
+                r_ank_x, r_ank_y = lm(28)
+                ank_w = abs(l_ank_x - r_ank_x) * 0.12
+                return [
+                    # Left ankle
+                    pad(l_ank_x, l_ank_y, ank_w, -10),
+                    pad(l_ank_x, l_ank_y, -ank_w, -10),
+                    pad(l_ank_x, l_ank_y, -ank_w, 15),
+                    pad(l_ank_x, l_ank_y, ank_w, 15),
+                    # Right ankle
+                    pad(r_ank_x, r_ank_y, -ank_w, -10),
+                    pad(r_ank_x, r_ank_y, ank_w, -10),
+                    pad(r_ank_x, r_ank_y, ank_w, 15),
+                    pad(r_ank_x, r_ank_y, -ank_w, 15),
                 ]
 
         except (IndexError, ValueError) as e:

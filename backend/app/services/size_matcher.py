@@ -12,19 +12,19 @@ logger = logging.getLogger(__name__)
 
 # Which measurements matter for each product category
 CATEGORY_MEASUREMENTS: Dict[str, List[str]] = {
-    "tops":      ["chest", "waist", "shoulder_width"],
-    "bottoms":   ["waist", "hip", "inseam"],
-    "dresses":   ["chest", "waist", "hip"],
-    "outerwear": ["chest", "shoulder_width"],
+    "tops":      ["chest", "waist", "shoulder_width", "neck", "arm_length"],
+    "bottoms":   ["waist", "hip", "thigh", "calf", "ankle"],
+    "dresses":   ["chest", "waist", "hip", "shoulder_width"],
+    "outerwear": ["chest", "shoulder_width", "arm_length"],
     "unknown":   ["chest", "waist", "hip"],
 }
 
 # Importance weights per measurement within each category
 CATEGORY_WEIGHTS: Dict[str, Dict[str, float]] = {
-    "tops":      {"chest": 0.45, "waist": 0.25, "shoulder_width": 0.30},
-    "bottoms":   {"waist": 0.40, "hip": 0.35, "inseam": 0.25},
-    "dresses":   {"chest": 0.30, "waist": 0.35, "hip": 0.35},
-    "outerwear": {"chest": 0.55, "shoulder_width": 0.45},
+    "tops":      {"chest": 0.30, "waist": 0.15, "shoulder_width": 0.25, "neck": 0.15, "arm_length": 0.15},
+    "bottoms":   {"waist": 0.30, "hip": 0.25, "thigh": 0.25, "calf": 0.10, "ankle": 0.10},
+    "dresses":   {"chest": 0.25, "waist": 0.30, "hip": 0.30, "shoulder_width": 0.15},
+    "outerwear": {"chest": 0.40, "shoulder_width": 0.35, "arm_length": 0.25},
     "unknown":   {"chest": 0.40, "waist": 0.30, "hip": 0.30},
 }
 
