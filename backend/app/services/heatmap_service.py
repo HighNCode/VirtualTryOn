@@ -64,10 +64,10 @@ TEMPLATE_POLYGONS = {
         [[45, 120], [155, 120], [150, 185], [50, 185]],
     ],
     "waist": [
-        [[55, 185], [145, 185], [148, 235], [52, 235]],
+        [[55, 190], [145, 190], [148, 230], [52, 230]],
     ],
     "hips": [
-        [[48, 235], [152, 235], [150, 285], [50, 285]],
+        [[48, 232], [152, 232], [150, 290], [50, 290]],
     ],
     "neck": [
         [[82, 50], [118, 50], [115, 80], [85, 80]],
@@ -321,8 +321,8 @@ class HeatmapService:
                 r_hip_x, r_hip_y = lm(24)
                 torso_top = (l_sh_y + r_sh_y) / 2
                 torso_bot = (l_hip_y + r_hip_y) / 2
-                top_y = torso_top + (torso_bot - torso_top) * 0.4
-                bot_y = torso_top + (torso_bot - torso_top) * 0.7
+                top_y = torso_top + (torso_bot - torso_top) * 0.45
+                bot_y = torso_top + (torso_bot - torso_top) * 0.75
                 left_x = l_sh_x * 0.6 + l_hip_x * 0.4
                 right_x = r_sh_x * 0.6 + r_hip_x * 0.4
                 return [[
@@ -338,8 +338,8 @@ class HeatmapService:
                 mid_y = (l_hip_y + r_hip_y) / 2
                 wp = abs(l_hip_x - r_hip_x) * 0.1
                 return [[
-                    pt(r_hip_x - wp, mid_y - 20),
-                    pt(l_hip_x + wp, mid_y - 20),
+                    pt(r_hip_x - wp, mid_y - 45),
+                    pt(l_hip_x + wp, mid_y - 45),
                     pt(l_hip_x + wp, mid_y + 30),
                     pt(r_hip_x - wp, mid_y + 30),
                 ]]
@@ -384,14 +384,14 @@ class HeatmapService:
                 mid_x = (l_hip_x + r_hip_x) / 2
                 tw = abs(l_hip_x - r_hip_x) * 0.22
                 return [
-                    # Left thigh
+                    # Left thigh (person's left = right side of image)
                     [
                         pt(l_hip_x + tw, l_hip_y + 10),
                         pt(mid_x + 5, l_hip_y + 10),
-                        pt(l_knee_x + tw * 0.7, l_knee_y - 5),
                         pt(l_knee_x - tw * 0.7, l_knee_y - 5),
+                        pt(l_knee_x + tw * 0.7, l_knee_y - 5),
                     ],
-                    # Right thigh
+                    # Right thigh (person's right = left side of image)
                     [
                         pt(mid_x - 5, r_hip_y + 10),
                         pt(r_hip_x - tw, r_hip_y + 10),
