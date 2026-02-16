@@ -215,7 +215,7 @@ class HeatmapRegion(BaseModel):
     fit_status: str
     color: str
     score: int
-    polygon_coords: List[List[float]]
+    polygon_coords: List[List[List[float]]]
 
 
 class HeatmapResponse(BaseModel):

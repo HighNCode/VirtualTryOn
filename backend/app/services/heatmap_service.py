@@ -7,6 +7,7 @@ Two modes:
   2. Template mode: predefined polygons on a 200x500 canvas (standalone display)
 """
 
+import math
 import logging
 from typing import Dict, List, Optional, Tuple
 
@@ -53,46 +54,41 @@ MEASUREMENT_TO_REGION = {
 }
 
 # Template polygon coords on a normalized 200x500 canvas
-# Each region is a list of [x, y] points forming a closed polygon
+# Each region is a list of sub-polygons; each sub-polygon is a list of [x, y] points.
+# Multi-part regions (arms, legs) have two sub-polygons (left + right).
 TEMPLATE_POLYGONS = {
     "shoulders": [
-        [40, 80], [160, 80], [155, 120], [45, 120],
+        [[40, 80], [160, 80], [155, 120], [45, 120]],
     ],
     "chest": [
-        [45, 120], [155, 120], [150, 185], [50, 185],
+        [[45, 120], [155, 120], [150, 185], [50, 185]],
     ],
     "waist": [
-        [55, 185], [145, 185], [148, 235], [52, 235],
+        [[55, 185], [145, 185], [148, 235], [52, 235]],
     ],
     "hips": [
-        [48, 235], [152, 235], [150, 285], [50, 285],
+        [[48, 235], [152, 235], [150, 285], [50, 285]],
     ],
     "neck": [
-        [82, 50], [118, 50], [115, 80], [85, 80],
+        [[82, 50], [118, 50], [115, 80], [85, 80]],
     ],
     "sleeves": [
-        # Left arm
-        [160, 90], [175, 95], [170, 220], [155, 215],
-        # Right arm
-        [40, 90], [25, 95], [30, 220], [45, 215],
+        # Left arm (diagonal rectangle going outward-left)
+        [[160, 90], [168, 85], [178, 220], [170, 225]],
+        # Right arm (diagonal rectangle going outward-right)
+        [[40, 90], [32, 85], [22, 220], [30, 225]],
     ],
     "thigh": [
-        # Left thigh
-        [50, 285], [98, 285], [95, 355], [55, 355],
-        # Right thigh
-        [102, 285], [150, 285], [145, 355], [105, 355],
+        [[50, 285], [98, 285], [95, 355], [55, 355]],
+        [[102, 285], [150, 285], [145, 355], [105, 355]],
     ],
     "calf": [
-        # Left calf
-        [58, 370], [92, 370], [88, 430], [62, 430],
-        # Right calf
-        [108, 370], [142, 370], [138, 430], [112, 430],
+        [[58, 370], [92, 370], [88, 430], [62, 430]],
+        [[108, 370], [142, 370], [138, 430], [112, 430]],
     ],
     "ankle": [
-        # Left ankle
-        [62, 435], [88, 435], [86, 460], [64, 460],
-        # Right ankle
-        [112, 435], [138, 435], [136, 460], [114, 460],
+        [[62, 435], [88, 435], [86, 460], [64, 460]],
+        [[112, 435], [138, 435], [136, 460], [114, 460]],
     ],
 }
 
@@ -239,15 +235,45 @@ class HeatmapService:
         standard = get_standard_size_charts(category, gender)
         return standard.get(size_name)
 
+    @staticmethod
+    def _arm_rect(
+        sh_x: float, sh_y: float,
+        wr_x: float, wr_y: float,
+        half_w: float,
+    ) -> List[List[float]]:
+        """
+        Build a rectangle along the arm direction (shoulder→wrist)
+        with width perpendicular to that direction.
+        """
+        dx = wr_x - sh_x
+        dy = wr_y - sh_y
+        length = math.hypot(dx, dy)
+        if length < 1:
+            return []
+        # Unit perpendicular vector
+        px = -dy / length * half_w
+        py = dx / length * half_w
+        # Narrower at wrist end
+        wpx = px * 0.65
+        wpy = py * 0.65
+        return [
+            [round(sh_x + px, 1), round(sh_y + py, 1)],
+            [round(sh_x - px, 1), round(sh_y - py, 1)],
+            [round(wr_x - wpx, 1), round(wr_y - wpy, 1)],
+            [round(wr_x + wpx, 1), round(wr_y + wpy, 1)],
+        ]
+
     def _polygon_from_landmarks(
         self,
         region_name: str,
         landmarks: np.ndarray,
         image_shape: Tuple[int, int],
-    ) -> List[List[float]]:
+    ) -> List[List[List[float]]]:
         """
         Generate polygon coordinates from MediaPipe pose landmarks.
 
+        Returns a list of sub-polygons. Single-part regions have one sub-polygon,
+        paired regions (sleeves, thigh, calf, ankle) have two (left + right).
         Landmarks are normalized (0-1), so we scale by image dimensions.
         """
         H, W = image_shape
@@ -258,167 +284,160 @@ class HeatmapService:
             y = float(landmarks[idx, 1]) * H
             return x, y
 
-        def pad(x, y, dx, dy):
-            """Expand a point outward for visual padding."""
-            return [round(x + dx, 1), round(y + dy, 1)]
+        def pt(x, y):
+            return [round(x, 1), round(y, 1)]
 
         try:
             if region_name == "shoulders":
                 l_sh_x, l_sh_y = lm(11)
                 r_sh_x, r_sh_y = lm(12)
                 mid_y = (l_sh_y + r_sh_y) / 2
-                width_pad = abs(l_sh_x - r_sh_x) * 0.15
-                return [
-                    pad(r_sh_x, mid_y, -width_pad, -15),
-                    pad(l_sh_x, mid_y, width_pad, -15),
-                    pad(l_sh_x, mid_y, width_pad, 25),
-                    pad(r_sh_x, mid_y, -width_pad, 25),
-                ]
+                wp = abs(l_sh_x - r_sh_x) * 0.15
+                return [[
+                    pt(r_sh_x - wp, mid_y - 15),
+                    pt(l_sh_x + wp, mid_y - 15),
+                    pt(l_sh_x + wp, mid_y + 25),
+                    pt(r_sh_x - wp, mid_y + 25),
+                ]]
 
             elif region_name == "chest":
                 l_sh_x, l_sh_y = lm(11)
                 r_sh_x, r_sh_y = lm(12)
                 l_hip_x, l_hip_y = lm(23)
                 r_hip_x, r_hip_y = lm(24)
-                # Chest is upper third of torso
                 top_y = (l_sh_y + r_sh_y) / 2 + 20
                 bot_y = top_y + (((l_hip_y + r_hip_y) / 2) - top_y) * 0.45
-                return [
-                    [round(r_sh_x, 1), round(top_y, 1)],
-                    [round(l_sh_x, 1), round(top_y, 1)],
-                    [round(l_sh_x * 0.97 + l_hip_x * 0.03, 1), round(bot_y, 1)],
-                    [round(r_sh_x * 0.97 + r_hip_x * 0.03, 1), round(bot_y, 1)],
-                ]
+                return [[
+                    pt(r_sh_x, top_y),
+                    pt(l_sh_x, top_y),
+                    pt(l_sh_x * 0.97 + l_hip_x * 0.03, bot_y),
+                    pt(r_sh_x * 0.97 + r_hip_x * 0.03, bot_y),
+                ]]
 
             elif region_name == "waist":
                 l_sh_x, l_sh_y = lm(11)
                 r_sh_x, r_sh_y = lm(12)
                 l_hip_x, l_hip_y = lm(23)
                 r_hip_x, r_hip_y = lm(24)
-                # Waist is middle third of torso
                 torso_top = (l_sh_y + r_sh_y) / 2
                 torso_bot = (l_hip_y + r_hip_y) / 2
                 top_y = torso_top + (torso_bot - torso_top) * 0.4
                 bot_y = torso_top + (torso_bot - torso_top) * 0.7
-                # Interpolate x narrowing
                 left_x = l_sh_x * 0.6 + l_hip_x * 0.4
                 right_x = r_sh_x * 0.6 + r_hip_x * 0.4
-                return [
-                    [round(right_x, 1), round(top_y, 1)],
-                    [round(left_x, 1), round(top_y, 1)],
-                    [round(left_x * 0.95 + l_hip_x * 0.05, 1), round(bot_y, 1)],
-                    [round(right_x * 0.95 + r_hip_x * 0.05, 1), round(bot_y, 1)],
-                ]
+                return [[
+                    pt(right_x, top_y),
+                    pt(left_x, top_y),
+                    pt(left_x * 0.95 + l_hip_x * 0.05, bot_y),
+                    pt(right_x * 0.95 + r_hip_x * 0.05, bot_y),
+                ]]
 
             elif region_name == "hips":
                 l_hip_x, l_hip_y = lm(23)
                 r_hip_x, r_hip_y = lm(24)
                 mid_y = (l_hip_y + r_hip_y) / 2
-                width_pad = abs(l_hip_x - r_hip_x) * 0.1
-                return [
-                    pad(r_hip_x, mid_y, -width_pad, -20),
-                    pad(l_hip_x, mid_y, width_pad, -20),
-                    pad(l_hip_x, mid_y, width_pad, 30),
-                    pad(r_hip_x, mid_y, -width_pad, 30),
-                ]
+                wp = abs(l_hip_x - r_hip_x) * 0.1
+                return [[
+                    pt(r_hip_x - wp, mid_y - 20),
+                    pt(l_hip_x + wp, mid_y - 20),
+                    pt(l_hip_x + wp, mid_y + 30),
+                    pt(r_hip_x - wp, mid_y + 30),
+                ]]
 
             elif region_name == "neck":
-                # Landmarks: 0=Nose, 11=L_Shoulder, 12=R_Shoulder
                 nose_x, nose_y = lm(0)
                 l_sh_x, l_sh_y = lm(11)
                 r_sh_x, r_sh_y = lm(12)
                 mid_sh_x = (l_sh_x + r_sh_x) / 2
                 mid_sh_y = (l_sh_y + r_sh_y) / 2
-                neck_width = abs(l_sh_x - r_sh_x) * 0.2
+                nw = abs(l_sh_x - r_sh_x) * 0.2
                 top_y = nose_y + (mid_sh_y - nose_y) * 0.4
                 bot_y = mid_sh_y - 5
-                return [
-                    [round(mid_sh_x - neck_width, 1), round(top_y, 1)],
-                    [round(mid_sh_x + neck_width, 1), round(top_y, 1)],
-                    [round(mid_sh_x + neck_width * 1.1, 1), round(bot_y, 1)],
-                    [round(mid_sh_x - neck_width * 1.1, 1), round(bot_y, 1)],
-                ]
+                return [[
+                    pt(mid_sh_x - nw, top_y),
+                    pt(mid_sh_x + nw, top_y),
+                    pt(mid_sh_x + nw * 1.1, bot_y),
+                    pt(mid_sh_x - nw * 1.1, bot_y),
+                ]]
 
             elif region_name == "sleeves":
-                # Landmarks: 11/12=Shoulders, 13/14=Elbows, 15/16=Wrists
+                # Perpendicular-to-arm-direction rectangles
                 l_sh_x, l_sh_y = lm(11)
                 r_sh_x, r_sh_y = lm(12)
-                l_elb_x, l_elb_y = lm(13)
-                r_elb_x, r_elb_y = lm(14)
                 l_wr_x, l_wr_y = lm(15)
                 r_wr_x, r_wr_y = lm(16)
-                arm_w = abs(l_sh_x - r_sh_x) * 0.08
-                # Left arm + Right arm polygons
-                return [
-                    # Left arm
-                    pad(l_sh_x, l_sh_y, arm_w, 0),
-                    pad(l_sh_x, l_sh_y, -arm_w, 0),
-                    pad(l_wr_x, l_wr_y, -arm_w * 0.7, 0),
-                    pad(l_wr_x, l_wr_y, arm_w * 0.7, 0),
-                    # Right arm
-                    pad(r_sh_x, r_sh_y, -arm_w, 0),
-                    pad(r_sh_x, r_sh_y, arm_w, 0),
-                    pad(r_wr_x, r_wr_y, arm_w * 0.7, 0),
-                    pad(r_wr_x, r_wr_y, -arm_w * 0.7, 0),
-                ]
+                half_w = abs(l_sh_x - r_sh_x) * 0.08
+                left_arm = self._arm_rect(l_sh_x, l_sh_y, l_wr_x, l_wr_y, half_w)
+                right_arm = self._arm_rect(r_sh_x, r_sh_y, r_wr_x, r_wr_y, half_w)
+                parts = []
+                if left_arm:
+                    parts.append(left_arm)
+                if right_arm:
+                    parts.append(right_arm)
+                return parts if parts else TEMPLATE_POLYGONS.get("sleeves", [])
 
             elif region_name == "thigh":
-                # Landmarks: 23/24=Hips, 25/26=Knees
                 l_hip_x, l_hip_y = lm(23)
                 r_hip_x, r_hip_y = lm(24)
                 l_knee_x, l_knee_y = lm(25)
                 r_knee_x, r_knee_y = lm(26)
                 mid_x = (l_hip_x + r_hip_x) / 2
-                thigh_w = abs(l_hip_x - r_hip_x) * 0.22
+                tw = abs(l_hip_x - r_hip_x) * 0.22
                 return [
                     # Left thigh
-                    pad(l_hip_x, l_hip_y, thigh_w, 10),
-                    pad(mid_x, l_hip_y, 5, 10),
-                    pad(l_knee_x, l_knee_y, thigh_w * 0.7, -5),
-                    pad(l_knee_x, l_knee_y, -thigh_w * 0.7, -5),
+                    [
+                        pt(l_hip_x + tw, l_hip_y + 10),
+                        pt(mid_x + 5, l_hip_y + 10),
+                        pt(l_knee_x + tw * 0.7, l_knee_y - 5),
+                        pt(l_knee_x - tw * 0.7, l_knee_y - 5),
+                    ],
                     # Right thigh
-                    pad(mid_x, r_hip_y, -5, 10),
-                    pad(r_hip_x, r_hip_y, -thigh_w, 10),
-                    pad(r_knee_x, r_knee_y, -thigh_w * 0.7, -5),
-                    pad(r_knee_x, r_knee_y, thigh_w * 0.7, -5),
+                    [
+                        pt(mid_x - 5, r_hip_y + 10),
+                        pt(r_hip_x - tw, r_hip_y + 10),
+                        pt(r_knee_x - tw * 0.7, r_knee_y - 5),
+                        pt(r_knee_x + tw * 0.7, r_knee_y - 5),
+                    ],
                 ]
 
             elif region_name == "calf":
-                # Landmarks: 25/26=Knees, 27/28=Ankles
                 l_knee_x, l_knee_y = lm(25)
                 r_knee_x, r_knee_y = lm(26)
                 l_ank_x, l_ank_y = lm(27)
                 r_ank_x, r_ank_y = lm(28)
-                calf_w = abs(l_knee_x - r_knee_x) * 0.18
+                cw = abs(l_knee_x - r_knee_x) * 0.18
                 return [
-                    # Left calf
-                    pad(l_knee_x, l_knee_y, calf_w, 5),
-                    pad(l_knee_x, l_knee_y, -calf_w, 5),
-                    pad(l_ank_x, l_ank_y, -calf_w * 0.6, -10),
-                    pad(l_ank_x, l_ank_y, calf_w * 0.6, -10),
-                    # Right calf
-                    pad(r_knee_x, r_knee_y, -calf_w, 5),
-                    pad(r_knee_x, r_knee_y, calf_w, 5),
-                    pad(r_ank_x, r_ank_y, calf_w * 0.6, -10),
-                    pad(r_ank_x, r_ank_y, -calf_w * 0.6, -10),
+                    [
+                        pt(l_knee_x + cw, l_knee_y + 5),
+                        pt(l_knee_x - cw, l_knee_y + 5),
+                        pt(l_ank_x - cw * 0.6, l_ank_y - 10),
+                        pt(l_ank_x + cw * 0.6, l_ank_y - 10),
+                    ],
+                    [
+                        pt(r_knee_x - cw, r_knee_y + 5),
+                        pt(r_knee_x + cw, r_knee_y + 5),
+                        pt(r_ank_x + cw * 0.6, r_ank_y - 10),
+                        pt(r_ank_x - cw * 0.6, r_ank_y - 10),
+                    ],
                 ]
 
             elif region_name == "ankle":
-                # Landmarks: 27/28=Ankles, 29/30=Heels
                 l_ank_x, l_ank_y = lm(27)
                 r_ank_x, r_ank_y = lm(28)
-                ank_w = abs(l_ank_x - r_ank_x) * 0.12
+                aw = abs(l_ank_x - r_ank_x) * 0.12
                 return [
-                    # Left ankle
-                    pad(l_ank_x, l_ank_y, ank_w, -10),
-                    pad(l_ank_x, l_ank_y, -ank_w, -10),
-                    pad(l_ank_x, l_ank_y, -ank_w, 15),
-                    pad(l_ank_x, l_ank_y, ank_w, 15),
-                    # Right ankle
-                    pad(r_ank_x, r_ank_y, -ank_w, -10),
-                    pad(r_ank_x, r_ank_y, ank_w, -10),
-                    pad(r_ank_x, r_ank_y, ank_w, 15),
-                    pad(r_ank_x, r_ank_y, -ank_w, 15),
+                    [
+                        pt(l_ank_x + aw, l_ank_y - 10),
+                        pt(l_ank_x - aw, l_ank_y - 10),
+                        pt(l_ank_x - aw, l_ank_y + 15),
+                        pt(l_ank_x + aw, l_ank_y + 15),
+                    ],
+                    [
+                        pt(r_ank_x - aw, r_ank_y - 10),
+                        pt(r_ank_x + aw, r_ank_y - 10),
+                        pt(r_ank_x + aw, r_ank_y + 15),
+                        pt(r_ank_x - aw, r_ank_y + 15),
+                    ],
                 ]
 
         except (IndexError, ValueError) as e:
@@ -433,7 +452,11 @@ class HeatmapService:
         width: int,
         height: int,
     ) -> str:
-        """Build SVG overlay string with colored polygon regions."""
+        """Build SVG overlay string with colored polygon regions.
+
+        polygon_coords is a list of sub-polygons (each is a list of [x,y] points).
+        Each sub-polygon renders as its own <polygon> element.
+        """
         parts = [
             f'<svg viewBox="0 0 {width} {height}" '
             f'xmlns="http://www.w3.org/2000/svg">'
@@ -441,19 +464,22 @@ class HeatmapService:
 
         for region_name, data in regions.items():
             color = data["color"]
-            coords = data["polygon_coords"]
-            if not coords:
+            sub_polys = data["polygon_coords"]
+            if not sub_polys:
                 continue
 
-            points_str = " ".join(f"{p[0]},{p[1]}" for p in coords)
-            parts.append(
-                f'  <polygon points="{points_str}" '
-                f'fill="{color}" opacity="0.4" '
-                f'stroke="{color}" stroke-width="1.5" '
-                f'data-region="{region_name}" '
-                f'data-score="{data["score"]}" '
-                f'data-status="{data["fit_status"]}"/>'
-            )
+            for sub_poly in sub_polys:
+                if not sub_poly:
+                    continue
+                points_str = " ".join(f"{p[0]},{p[1]}" for p in sub_poly)
+                parts.append(
+                    f'  <polygon points="{points_str}" '
+                    f'fill="{color}" opacity="0.4" '
+                    f'stroke="{color}" stroke-width="1.5" '
+                    f'data-region="{region_name}" '
+                    f'data-score="{data["score"]}" '
+                    f'data-status="{data["fit_status"]}"/>'
+                )
 
         parts.append("</svg>")
         return "\n".join(parts)
