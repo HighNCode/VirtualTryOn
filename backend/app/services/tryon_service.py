@@ -102,6 +102,58 @@ class TryOnService:
             f"The result should look like a real photograph, not a collage."
         )
 
+    def generate_studio(
+        self,
+        tryon_image: bytes,
+        studio_image: bytes,
+    ) -> bytes:
+        """
+        Generate a studio-styled try-on image.
+
+        Takes an already-generated try-on image and a studio background,
+        and produces the person in that environment.
+
+        Args:
+            tryon_image: The completed try-on image bytes (person wearing product)
+            studio_image: Studio background image bytes
+
+        Returns:
+            Generated image bytes (PNG)
+        """
+        start = time.time()
+
+        tryon_file = self._upload_bytes(tryon_image, "tryon.png")
+        studio_file = self._upload_bytes(studio_image, "studio.jpg")
+
+        prompt = (
+            "Place the person from the first image into the environment/background "
+            "shown in the second image. Keep the person's appearance, clothing, and "
+            "pose exactly the same. Only change the background and lighting to match "
+            "the environment. The result should look like a natural professional photograph."
+        )
+
+        logger.info(f"Calling Gemini for studio look, model={settings.GEMINI_MODEL}")
+
+        response = self.model.generate_content(
+            [prompt, tryon_file, studio_file],
+            generation_config=genai.GenerationConfig(
+                response_mime_type="image/png",
+            ),
+        )
+
+        result_image = self._extract_image(response)
+
+        elapsed = time.time() - start
+        logger.info(f"Studio generation completed in {elapsed:.1f}s")
+
+        try:
+            genai.delete_file(tryon_file.name)
+            genai.delete_file(studio_file.name)
+        except Exception:
+            pass
+
+        return result_image
+
     def _upload_bytes(self, image_bytes: bytes, display_name: str) -> genai.types.File:
         """Upload image bytes to Gemini file API via a temp file."""
         suffix = ".jpg" if display_name.endswith(".jpg") else ".png"

@@ -255,6 +255,26 @@ class TryOnStatusResponse(BaseModel):
 
 
 # ============================================================================
+# Studio Background Schemas
+# ============================================================================
+
+class StudioBackgroundResponse(BaseModel):
+    """Studio background image for try-on styling"""
+    id: UUID
+    gender: str
+    image_url: str  # Endpoint URL: /api/v1/tryon/studio-backgrounds/{id}/image
+
+    class Config:
+        from_attributes = True
+
+
+class StudioTryOnRequest(BaseModel):
+    """Request to generate a studio-styled try-on"""
+    try_on_id: UUID              # Original try-on (must be "completed")
+    studio_background_id: UUID   # Which background to apply
+
+
+# ============================================================================
 # Webhook Schemas
 # ============================================================================
 

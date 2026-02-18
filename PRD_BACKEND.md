@@ -1,8 +1,8 @@
 # Virtual Try-On Shopify App - Backend PRD
 
-**Version:** 1.0  
-**Last Updated:** 2026-02-06  
-**Tech Stack:** Python FastAPI, PostgreSQL, Redis, MediaPipe, OpenCV  
+**Version:** 1.1
+**Last Updated:** 2026-02-17
+**Tech Stack:** Python FastAPI, PostgreSQL, Redis, MediaPipe, SMPL, Google Gemini
 **Deployment:** Railway.app / AWS  
 
 ---
@@ -41,8 +41,8 @@ Runtime:        Python 3.11+
 Framework:      FastAPI 0.104+
 Database:       PostgreSQL 15
 Cache:          Redis 7
-ML Libraries:   MediaPipe 0.10+, OpenCV 4.8+
-Image AI:       Replicate API (nano-banana)
+ML Libraries:   MediaPipe 0.10+, OpenCV 4.8+, PyTorch, SMPL-X
+Image AI:       Google Gemini API (direct, no Replicate)
 Deployment:     Railway.app / Docker
 ```
 
@@ -146,12 +146,14 @@ backend/
 │   │   └── schemas.py          # Pydantic schemas
 │   ├── services/
 │   │   ├── shopify_service.py  # Shopify API integration
-│   │   ├── measurement_service.py # Body measurement extraction
+│   │   ├── measurement_service.py # SMPL-based body measurement extraction
 │   │   ├── size_matcher.py     # Size recommendation logic
-│   │   ├── heatmap_service.py  # Heatmap generation
-│   │   ├── tryon_service.py    # Virtual try-on orchestration
+│   │   ├── heatmap_service.py  # Heatmap generation (SVG overlays)
+│   │   ├── tryon_service.py    # Virtual try-on via Google Gemini API
 │   │   ├── image_validator.py  # Image quality validation
 │   │   └── cache_service.py    # Redis caching layer
+│   ├── data/
+│   │   └── size_standards.py   # Fallback size charts (men/women)
 │   ├── core/
 │   │   ├── security.py         # Authentication & authorization
 │   │   ├── database.py         # Database connection
@@ -768,13 +770,15 @@ Response 422 (processing failed):
 }
 ```
 
-**Processing Pipeline:**
+**Processing Pipeline (SMPL-Based, 3-Stage):**
 1. Store images in Redis with 24h TTL (keys: `img:session:{uuid}:front`, `img:session:{uuid}:side`)
-2. Run MediaPipe Pose on both images
-3. Calculate pixel-to-cm ratio using provided height
-4. Extract 2D measurements from front image
-5. Extract depth measurements from side image
-6. Calculate 15 body measurements using both images
+2. **Stage 1 - PoseDetector:** Run MediaPipe Pose → extract 33 2D landmarks
+3. **Stage 2 - SMPLShapeFitter:** Optimize SMPL body model betas to fit 2D keypoints (PyTorch Adam optimizer, weak perspective projection)
+4. **Stage 3 - SMPLMeasurer:** Extract 15 measurements from the fitted SMPL mesh
+   - Primary method: SMPL-Anthropometry library (plane-cut cross-sections)
+   - Fallback method: Vertex-based (convex hull / ellipse fitting)
+5. Front image required, side image optional (weighted average 60/40 if both available)
+6. Measurements can be `null` for low-confidence values (`missing_measurements` list returned)
 7. Determine body type (slim/average/athletic/heavy) using BMI + proportions
 8. Calculate confidence score based on landmark detection quality
 9. Store measurements in PostgreSQL
@@ -879,25 +883,22 @@ Response 200:
       "fit_status": "perfect",
       "color": "#4CAF50",
       "score": 95,
-      "polygon_coords": [[x1,y1], [x2,y2], ...]
+      "polygon_coords": [[[x1,y1], [x2,y2], ...]]
     },
     "chest": {
       "fit_status": "perfect",
       "color": "#4CAF50",
       "score": 92,
-      "polygon_coords": [[x1,y1], [x2,y2], ...]
+      "polygon_coords": [[[x1,y1], [x2,y2], ...]]
     },
-    "waist": {
-      "fit_status": "slightly_loose",
-      "color": "#FFC107",
-      "score": 72,
-      "polygon_coords": [[x1,y1], [x2,y2], ...]
-    },
-    "hips": {
+    "sleeves": {
       "fit_status": "good",
       "color": "#8BC34A",
-      "score": 88,
-      "polygon_coords": [[x1,y1], [x2,y2], ...]
+      "score": 85,
+      "polygon_coords": [
+        [[x1,y1], ...],  // left arm rectangle
+        [[x1,y1], ...]   // right arm rectangle
+      ]
     }
   },
   "svg_overlay": "<svg>...</svg>",
@@ -908,21 +909,31 @@ Response 200:
     "slightly_tight": "#FF9800",
     "too_loose": "#F44336",
     "too_tight": "#D32F2F"
-  }
+  },
+  "image_dimensions": {"width": 1024, "height": 1024}
 }
 ```
 
 **Heatmap Generation Logic:**
-1. Retrieve pose landmarks from cached images
+1. Retrieve pose landmarks from cached front image (or use template mode if unavailable)
 2. Get user measurements for body regions
-3. Get garment measurements for specified size
+3. Get garment measurements for specified size (from DB size_charts or fallback `size_standards.py`)
 4. Calculate fit score for each region:
    - Perfect (90-100): Green (#4CAF50)
    - Good (80-89): Light green (#8BC34A)
    - Slightly loose/tight (70-79): Yellow (#FFC107)
    - Too loose/tight (<70): Red/Orange (#F44336/#FF9800)
-5. Generate SVG polygon overlays based on pose landmarks
-6. Return structured heatmap data + SVG
+5. Generate SVG polygon overlays based on pose landmarks (overlay mode) or template coordinates
+6. `polygon_coords` is `List[List[List[float]]]` — list of sub-polygons, each rendered as a separate `<polygon>` SVG element (needed for multi-part regions like sleeves)
+7. Arm rectangles use perpendicular-to-arm-direction vectors for proper diagonal rendering
+
+**Regions by Category:**
+- **tops:** shoulders, chest, waist, neck, sleeves (arm_length)
+- **bottoms:** waist, hips, thigh, calf, ankle
+- **dresses:** shoulders, chest, waist, hips, neck, sleeves (arm_length)
+- **outerwear:** shoulders, chest, waist, sleeves (arm_length)
+
+8. Return structured heatmap data + SVG
 
 ---
 
@@ -933,13 +944,11 @@ Response 200:
 POST /api/v1/tryon/generate
 Headers:
   X-Session-ID: {session_uuid}
+  X-Store-ID: {store_uuid}
 
 Body:
 {
-  "measurement_id": "uuid",
-  "product_id": "uuid",
-  "size": "M",
-  "style_reference": "studio_1" | null
+  "product_id": "uuid"
 }
 
 Response 202 (Accepted):
@@ -948,14 +957,19 @@ Response 202 (Accepted):
   "status": "processing",
   "estimated_time_seconds": 45
 }
+```
 
+**Note:** The try-on request only requires `product_id`. The person's image is taken from the session's cached front photo. No measurements, size, or fit data are needed — the model simply fits the product on the person as-is.
+
+#### 5.2 Poll Try-On Status
+```http
 GET /api/v1/tryon/{try_on_id}/status
 
 Response 200 (processing):
 {
   "try_on_id": "uuid",
   "status": "processing",
-  "progress": 65,
+  "progress": 50,
   "message": "Generating virtual try-on image..."
 }
 
@@ -963,10 +977,9 @@ Response 200 (completed):
 {
   "try_on_id": "uuid",
   "status": "completed",
-  "result_image_url": "https://cdn.example.com/tryon/uuid.png",
-  "size": "M",
+  "result_image_url": "/api/v1/tryon/{try_on_id}/image",
   "processing_time_seconds": 38.2,
-  "cache_expires_at": "2026-02-07T12:00:00Z"
+  "cache_expires_at": "2026-02-18T18:00:00Z"
 }
 
 Response 200 (failed):
@@ -978,80 +991,160 @@ Response 200 (failed):
 }
 ```
 
+#### 5.3 Get Try-On Image
+```http
+GET /api/v1/tryon/{try_on_id}/image
+
+Response 200:
+Content-Type: image/png
+<binary image data>
+
+Response 410:
+"Try-on image has expired from cache"
+```
+
 **Try-On Generation Pipeline:**
 
-1. **Retrieve cached images** from Redis
+1. **Retrieve person image** from session cache in Redis
    ```python
-   front_image = redis.get(f"img:session:{session_id}:front")
+   front_image = cache.get_image(session_id, "front")
    ```
 
-2. **Get product image** from database
+2. **Get product image URL** from database
    ```python
-   product_image = db.query(Product).get(product_id).images[0]
+   product_image_url = product.images[0]["src"]
    ```
 
-3. **Build AI prompt** based on measurements and size
+3. **Build simple prompt** (no measurement/size awareness)
    ```python
-   fit_type = calculate_fit_type(user_measurements, garment_size)
-   
-   if fit_type == "tight":
-       fit_desc = "fitted and snug across the chest and shoulders"
-   elif fit_type == "loose":
-       fit_desc = "loose and relaxed with extra room"
-   else:
-       fit_desc = "well-fitted with natural drape"
-   
-   prompt = f"""A realistic photograph of a person wearing a {product_type}.
-   The garment should appear {fit_desc}.
-   Professional product photography style, good lighting, plain background.
-   Photorealistic, high quality, detailed fabric texture.
-   The fit should clearly show size {size} on this person's body proportions."""
+   prompt = (
+       f"Using the provided person photo and product photo, generate a single "
+       f"photorealistic image of the person wearing the {product_title} ({category}). "
+       f"Keep the person's face, body, pose, and background exactly the same. "
+       f"Keep the product's color, texture, and design exactly the same. "
+       f"Fit the product naturally on the person's body. "
+       f"The result should look like a real photograph, not a collage."
+   )
    ```
 
-4. **Call Google Gemini API** (nano-banana model)
+4. **Call Google Gemini API directly** (not via Replicate)
    ```python
    import google.generativeai as genai
-   
-   # Configure API
-   genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
-   
-   # Upload images to Gemini
-   person_file = genai.upload_file(front_image)
-   product_file = genai.upload_file(product_image)
-   
-   # Generate try-on using nano-banana model
-   model = genai.GenerativeModel('gemini-2.0-flash-exp')
-   
-   response = model.generate_content([
-       prompt,
-       person_file,
-       product_file
-   ])
-   
+
+   genai.configure(api_key=settings.GOOGLE_API_KEY)
+   model = genai.GenerativeModel(settings.GEMINI_MODEL)
+
+   # Upload images to Gemini File API
+   person_file = genai.upload_file(person_image_path)
+   product_file = genai.upload_file(product_image_path)
+
+   # Generate with image output
+   response = model.generate_content(
+       [prompt, person_file, product_file],
+       generation_config=genai.GenerationConfig(
+           response_mime_type="image/png",
+       ),
+   )
+
    # Extract generated image
    result_image = response.parts[0].inline_data.data
    ```
 
 5. **Cache result** in Redis (24h TTL)
    ```python
-   redis.setex(
-       f"tryon:{try_on_id}",
-       86400,  # 24 hours
-       result_image_data
-   )
+   cache.store_tryon_result(try_on_id, result_image)
    ```
 
 6. **Store metadata** in PostgreSQL
    ```python
-   TryOn.create(
+   TryOn(
        try_on_id=uuid,
-       measurement_id=measurement_id,
        product_id=product_id,
-       size=size,
        result_cache_key=f"tryon:{try_on_id}",
-       processing_time=38.2
+       processing_time_seconds=elapsed,
+       processing_status="completed"
    )
    ```
+
+**Background Processing:** The `POST /generate` endpoint returns 202 immediately and runs generation in a `BackgroundTasks` thread. The client polls `GET /status` until completion.
+
+---
+
+### 5.4 Studio Look Feature
+
+Allows users to place their try-on result into different studio/environment backgrounds.
+
+**DB Model:**
+```sql
+CREATE TABLE studio_backgrounds (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    gender VARCHAR(10) NOT NULL,         -- "male", "female", "unisex"
+    image_path VARCHAR(300) NOT NULL,    -- Relative path: "male/studio_1.jpg"
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+**Static images** stored in `backend/static/studio/{gender}/` directory. Frontend randomizes display order.
+
+**TryOn table extensions:**
+```sql
+ALTER TABLE try_ons ADD COLUMN studio_background_id UUID REFERENCES studio_backgrounds(id);
+ALTER TABLE try_ons ADD COLUMN parent_try_on_id UUID REFERENCES try_ons(try_on_id);
+```
+
+#### 5.4.1 List Studio Backgrounds
+```http
+GET /api/v1/tryon/studio-backgrounds?gender=male
+
+Response 200:
+[
+  {
+    "id": "uuid",
+    "gender": "male",
+    "image_url": "/api/v1/tryon/studio-backgrounds/{id}/image"
+  },
+  ...
+]
+```
+
+Returns backgrounds matching the given gender plus all "unisex" backgrounds.
+
+#### 5.4.2 Get Studio Background Image
+```http
+GET /api/v1/tryon/studio-backgrounds/{id}/image
+
+Response 200:
+Content-Type: image/jpeg
+<binary image data>
+```
+
+#### 5.4.3 Generate Studio Try-On
+```http
+POST /api/v1/tryon/studio
+
+Body:
+{
+  "try_on_id": "uuid",              // Original completed try-on
+  "studio_background_id": "uuid"    // Which background to apply
+}
+
+Response 202:
+{
+  "try_on_id": "new-uuid",
+  "status": "processing",
+  "estimated_time_seconds": 45
+}
+```
+
+Uses the same `GET /status` and `GET /image` endpoints for polling and serving.
+
+**Studio Generation Pipeline:**
+1. Retrieve original try-on image from Redis cache
+2. Read studio background from static file
+3. Send both to Gemini with prompt: "Place the person into the environment. Keep appearance, clothing, pose the same. Only change background and lighting."
+4. Cache result, update DB record with `parent_try_on_id` and `studio_background_id`
 
 ---
 
@@ -1374,14 +1467,14 @@ CREATE INDEX idx_measurements_session ON user_measurements(session_id);
 -- Try-Ons
 CREATE TABLE try_ons (
     try_on_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    measurement_id UUID REFERENCES user_measurements(measurement_id),
-    product_id UUID REFERENCES products(product_id),
-    size_name VARCHAR(20),
+    measurement_id UUID REFERENCES user_measurements(measurement_id),  -- nullable, not required
+    product_id UUID REFERENCES products(product_id) NOT NULL,
     processing_status VARCHAR(20), -- 'queued', 'processing', 'completed', 'failed'
     result_cache_key VARCHAR(200), -- Redis key for result image
     processing_time_seconds FLOAT,
     error_message TEXT,
     created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
     completed_at TIMESTAMP
 );
 
@@ -1417,135 +1510,45 @@ CREATE INDEX idx_analytics_store_time ON analytics_events(store_id, created_at);
 
 ## Core Services
 
-### 1. Measurement Service
+### 1. Measurement Service (SMPL-Based)
 
 **File:** `app/services/measurement_service.py`
 
+**Three-stage pipeline:**
+
 ```python
-class MeasurementService:
-    """
-    Extracts body measurements from front and side pose images
-    using MediaPipe and OpenCV
-    """
-    
-    def __init__(self):
-        self.pose_detector = mp.solutions.pose.Pose(
-            static_image_mode=True,
-            model_complexity=2,
-            min_detection_confidence=0.7
-        )
-    
-    async def extract_measurements(
-        self,
-        front_image: bytes,
-        side_image: bytes,
-        height_cm: float,
-        weight_kg: float,
-        gender: str
-    ) -> Dict:
-        """
-        Main extraction method
-        
-        Returns:
-        {
-          "measurements": {...},
-          "body_type": "athletic",
-          "confidence_score": 0.87
-        }
-        """
-        
-        # 1. Detect pose landmarks
-        front_landmarks = self._detect_pose(front_image)
-        side_landmarks = self._detect_pose(side_image)
-        
-        if not front_landmarks or not side_landmarks:
-            raise PoseDetectionError("Could not detect pose in images")
-        
-        # 2. Calculate pixel-to-cm ratio
-        pixel_ratio = self._calculate_pixel_ratio(front_landmarks, height_cm)
-        
-        # 3. Extract measurements
-        measurements = {
-            "height": height_cm,
-            "shoulder_width": self._measure_shoulder_width(front_landmarks, pixel_ratio),
-            "chest": self._measure_chest(front_landmarks, side_landmarks, pixel_ratio, gender),
-            "waist": self._measure_waist(front_landmarks, side_landmarks, pixel_ratio),
-            "hip": self._measure_hip(front_landmarks, side_landmarks, pixel_ratio),
-            "inseam": self._measure_inseam(front_landmarks, pixel_ratio),
-            "arm_length": self._measure_arm_length(front_landmarks, pixel_ratio),
-            "torso_length": self._measure_torso_length(front_landmarks, pixel_ratio),
-            "neck": self._estimate_neck(front_landmarks, pixel_ratio, gender),
-            "thigh": self._estimate_thigh(front_landmarks, side_landmarks, pixel_ratio),
-            "upper_arm": self._estimate_upper_arm(front_landmarks, side_landmarks, pixel_ratio),
-            "wrist": self._estimate_wrist(front_landmarks, pixel_ratio),
-            "calf": self._estimate_calf(front_landmarks, side_landmarks, pixel_ratio),
-            "ankle": self._estimate_ankle(front_landmarks, pixel_ratio),
-            "bicep": self._estimate_bicep(front_landmarks, side_landmarks, pixel_ratio)
-        }
-        
-        # 4. Determine body type
-        body_type = self._classify_body_type(measurements, weight_kg, gender)
-        
-        # 5. Calculate confidence
-        confidence = self._calculate_confidence(front_landmarks, side_landmarks)
-        
-        return {
-            "measurements": measurements,
-            "body_type": body_type,
-            "confidence_score": confidence
-        }
-    
-    def _measure_chest(self, front_landmarks, side_landmarks, pixel_ratio, gender):
-        """
-        Calculate chest circumference using:
-        - Front width from shoulder to shoulder
-        - Side depth from chest to back
-        - Gender-based correction factors
-        """
-        # Get front chest width (pixels)
-        left_shoulder = front_landmarks[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER]
-        right_shoulder = front_landmarks[mp.solutions.pose.PoseLandmark.RIGHT_SHOULDER]
-        front_width_px = abs(right_shoulder.x - left_shoulder.x)
-        front_width_cm = front_width_px * pixel_ratio
-        
-        # Get side depth (pixels)
-        chest_front = side_landmarks[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER]
-        # Estimate back position (not directly visible)
-        side_depth_px = front_width_px * 0.5  # Approximation
-        side_depth_cm = side_depth_px * pixel_ratio
-        
-        # Calculate circumference from ellipse
-        # C ≈ π * sqrt(2 * (a² + b²))
-        # where a = width/2, b = depth/2
-        import math
-        a = front_width_cm / 2
-        b = side_depth_cm / 2
-        circumference = math.pi * math.sqrt(2 * (a**2 + b**2))
-        
-        # Apply gender correction
-        if gender == "male":
-            circumference *= 1.05  # Males typically have more depth
-        elif gender == "female":
-            circumference *= 1.02
-        
-        return round(circumference, 1)
+class PoseDetector:
+    """Stage 1: MediaPipe Pose → 33 2D landmarks"""
+    def detect(self, image_bytes: bytes) -> dict:
+        # Returns {"landmarks": List[33 landmarks], "image_shape": (H, W)}
+
+class SMPLShapeFitter:
+    """Stage 2: Optimize SMPL betas to fit 2D keypoints"""
+    def fit(self, landmarks_2d, image_shape, height_cm, gender) -> dict:
+        # Uses PyTorch Adam optimizer with weak perspective projection
+        # Optimizes 10 SMPL shape parameters (betas) to match 2D keypoints
+        # Returns {"betas": tensor, "vertices": ndarray, "joints_3d": ndarray}
+
+class SMPLMeasurer:
+    """Stage 3: Extract 15 measurements from fitted SMPL mesh"""
+    def measure(self, vertices, joints_3d, gender, height_cm) -> dict:
+        # Primary: SMPL-Anthropometry library (plane-cut cross-sections)
+        # Fallback: Vertex-based (convex hull / ellipse fitting)
+        # Returns {"measurements": dict, "confidence": float, "missing": list}
 ```
 
-**Key Measurement Formulas:**
+**15 Extracted Measurements:**
+height, shoulder_width, arm_length, torso_length, inseam, chest, waist, hip, neck, thigh, upper_arm, wrist, calf, ankle, bicep
 
-**Direct Measurements (from landmarks):**
-- Shoulder width: Distance between shoulder landmarks
-- Height: Already provided by user
-- Inseam: Hip to ankle distance
-- Arm length: Shoulder to wrist distance
-- Torso length: Shoulder to hip distance
+**Key Design Decisions:**
+- Measurements can be `Optional[float]` — returns `null` for low-confidence values
+- `missing_measurements` list + `missing_reason` string in response
+- Front image required, side image optional (weighted average 60/40 if both available)
+- Circumference methods: ellipse fitting (primary), convex hull (fallback)
+- Arm measurements use perpendicular slicing (not horizontal) since T-pose
 
-**Calculated Circumferences:**
-- Chest: Ellipse formula using front width + side depth
-- Waist: Ellipse formula using front width + side depth
-- Hip: Ellipse formula using front width + side depth
-- Upper arm: Cylinder approximation from arm width
-- Thigh: Cylinder approximation from thigh width
+**Dependencies:** `torch`, `smplx`, `mediapipe`, `opencv-python`, `scipy`, `trimesh`
+**Git submodule:** `backend/libs/smpl_anthropometry/` (SMPL-Anthropometry library)
 
 ---
 
@@ -2193,33 +2196,43 @@ query {
 
 ---
 
-### 2. Replicate API (nano-banana)
+### 2. Google Gemini API (Direct)
 
-**Model:** `google/nano-banana`  
-**Cost:** ~$0.02-0.04 per generation  
-**Speed:** 30-60 seconds per image  
+**Model:** `gemini-2.0-flash-exp` (configurable via `GEMINI_MODEL` env var)
+**Library:** `google-generativeai` Python SDK
+**Speed:** 30-60 seconds per image
 
 **Integration:**
 ```python
-import replicate
+import google.generativeai as genai
 
-output = replicate.run(
-    "google/nano-banana",
-    input={
-        "prompt": generated_prompt,
-        "image_input": [front_image, product_image],
-        "resolution": "2K",
-        "aspect_ratio": "3:4",
-        "output_format": "png",
-        "safety_filter_level": "block_only_high"
-    }
+genai.configure(api_key=settings.GOOGLE_API_KEY)
+model = genai.GenerativeModel(settings.GEMINI_MODEL)
+
+# Upload person + product images via File API
+person_file = genai.upload_file(person_image_path)
+product_file = genai.upload_file(product_image_path)
+
+# Generate try-on image directly
+response = model.generate_content(
+    [prompt, person_file, product_file],
+    generation_config=genai.GenerationConfig(
+        response_mime_type="image/png",
+    ),
 )
+
+result_image = response.parts[0].inline_data.data
+
+# Cleanup uploaded files
+genai.delete_file(person_file.name)
+genai.delete_file(product_file.name)
 ```
 
 **Error Handling:**
 - Retry failed generations up to 2 times
-- Timeout after 120 seconds
+- Timeout after 120 seconds (`TRYON_TIMEOUT` config)
 - Cache successful results to avoid regeneration
+- Cleanup uploaded files after generation
 
 ---
 
@@ -2342,7 +2355,7 @@ async def extract_measurements(...):
 | `product_not_found` | 404 | Product doesn't exist | No |
 | `session_expired` | 410 | Session expired (>24h) | No |
 | `rate_limit_exceeded` | 429 | Too many requests | Yes (after delay) |
-| `external_api_error` | 502 | Replicate API failed | Yes |
+| `external_api_error` | 502 | Google Gemini API failed | Yes |
 | `internal_error` | 500 | Unexpected error | Yes |
 
 ### Logging
@@ -2402,8 +2415,10 @@ SHOPIFY_API_KEY=<from-partner-dashboard>
 SHOPIFY_API_SECRET=<from-partner-dashboard>
 SHOPIFY_SCOPES=read_products,write_script_tags
 
-# Replicate
-REPLICATE_API_TOKEN=<from-replicate-account>
+# Google Gemini (Virtual Try-On)
+GOOGLE_API_KEY=<from-google-ai-studio>
+GEMINI_MODEL=gemini-2.0-flash-exp
+TRYON_TIMEOUT=120
 
 # Security
 CORS_ORIGINS=https://yourdomain.com,https://*.myshopify.com
@@ -2482,7 +2497,7 @@ async def health_check():
 - Redis hit rate
 - Measurement extraction success rate
 - Try-on generation success rate
-- API costs (Replicate usage)
+- API costs (Google Gemini usage)
 
 **Recommended Tools:**
 - **APM:** New Relic / DataDog

@@ -187,6 +187,22 @@ class UserMeasurement(Base, TimestampMixin):
         return f"<UserMeasurement {self.measurement_id}>"
 
 
+class StudioBackground(Base, TimestampMixin):
+    """
+    Pre-defined studio/environment background images for try-on styling.
+    Actual image files stored in backend/static/studio/{gender}/.
+    """
+    __tablename__ = "studio_backgrounds"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    gender = Column(String(10), nullable=False)        # "male", "female", "unisex"
+    image_path = Column(String(300), nullable=False)   # Relative path: "male/studio_1.jpg"
+    is_active = Column(Boolean, default=True)
+
+    def __repr__(self):
+        return f"<StudioBackground {self.id} - {self.gender}>"
+
+
 class TryOn(Base, TimestampMixin):
     """
     Virtual try-on generation results
@@ -206,9 +222,15 @@ class TryOn(Base, TimestampMixin):
     error_message = Column(Text)
     completed_at = Column(DateTime)
 
+    # Studio look fields
+    studio_background_id = Column(UUID(as_uuid=True), ForeignKey('studio_backgrounds.id'), nullable=True)
+    parent_try_on_id = Column(UUID(as_uuid=True), ForeignKey('try_ons.try_on_id'), nullable=True)
+
     # Relationships
     measurement = relationship("UserMeasurement", back_populates="try_ons")
     product = relationship("Product", back_populates="try_ons")
+    studio_background = relationship("StudioBackground")
+    parent_try_on = relationship("TryOn", remote_side="TryOn.try_on_id")
 
     def __repr__(self):
         return f"<TryOn {self.try_on_id} - {self.processing_status}>"

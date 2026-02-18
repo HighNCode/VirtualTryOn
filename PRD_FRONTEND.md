@@ -1,8 +1,8 @@
 # Virtual Try-On Shopify App - Frontend PRD (Storefront Widget)
 
-**Version:** 1.0  
-**Last Updated:** 2026-02-06  
-**Tech Stack:** Vanilla JavaScript (ES6+), HTML5, CSS3  
+**Version:** 1.1
+**Last Updated:** 2026-02-17
+**Tech Stack:** Vanilla JavaScript (ES6+), HTML5, CSS3
 **Target:** Shopify storefront customer-facing widget  
 
 ---
@@ -1018,29 +1018,28 @@ function showAllMeasurements() {
 
 **Generation Flow:**
 ```javascript
-async function generateTryOn(measurementId, productId, size) {
+async function generateTryOn(productId) {
   try {
-    // 1. Initiate generation
+    // 1. Initiate generation (only product_id needed — person image comes from session cache)
     updateStatus('Starting generation...', 10);
-    
+
     const response = await fetch(`${API_URL}/api/v1/tryon/generate`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Session-ID': sessionId
+        'X-Session-ID': sessionId,
+        'X-Store-ID': storeId
       },
       body: JSON.stringify({
-        measurement_id: measurementId,
-        product_id: productId,
-        size: size
+        product_id: productId
       })
     });
-    
+
     const { try_on_id, estimated_time_seconds } = await response.json();
-    
+
     // 2. Poll for completion
     return await pollForCompletion(try_on_id, estimated_time_seconds);
-    
+
   } catch (error) {
     showGenerationError(error);
     throw error;
@@ -1069,6 +1068,7 @@ async function pollForCompletion(tryOnId, estimatedTime) {
     
     if (data.status === 'completed') {
       updateStatus('Complete!', 100);
+      // result_image_url is a local endpoint: /api/v1/tryon/{id}/image
       return data;
     } else if (data.status === 'failed') {
       throw new Error(data.error);
@@ -1107,55 +1107,34 @@ This is the most complex screen with 4 quadrants.
         </div>
       </div>
       
-      <!-- TOP RIGHT: Style Templates -->
-      <div class="vto-results-quad vto-quad--styles">
-        <h3>Try Different Styles</h3>
-        
-        <div class="vto-style-templates">
-          <button class="vto-style-template" data-style="studio_1">
-            <img src="studio-1-thumb.jpg" alt="Studio 1">
-            <span class="vto-style-name">Studio</span>
+      <!-- TOP RIGHT: Studio Look Backgrounds -->
+      <div class="vto-results-quad vto-quad--studio">
+        <h3>Studio Look</h3>
+        <p class="vto-help-text">Select a background to see yourself in different environments</p>
+
+        <!-- Backgrounds loaded from GET /api/v1/tryon/studio-backgrounds?gender={gender} -->
+        <!-- Frontend randomizes display order on each render -->
+        <div class="vto-studio-grid" id="vto-studio-grid">
+          <!-- "Original" button — always first -->
+          <button class="vto-studio-option vto-studio-option--active" data-studio-id="none">
+            <div class="vto-studio-thumb vto-studio-thumb--original">
+              <span>Original</span>
+            </div>
           </button>
-          <button class="vto-style-template" data-style="outdoor_1">
-            <img src="outdoor-1-thumb.jpg" alt="Outdoor">
-            <span class="vto-style-name">Outdoor</span>
+
+          <!-- Studio backgrounds loaded dynamically -->
+          <!-- Each one rendered as: -->
+          <!--
+          <button class="vto-studio-option" data-studio-id="{uuid}">
+            <img src="/api/v1/tryon/studio-backgrounds/{id}/image" alt="Studio" class="vto-studio-thumb">
           </button>
-          <button class="vto-style-template" data-style="urban_1">
-            <img src="urban-1-thumb.jpg" alt="Urban">
-            <span class="vto-style-name">Urban</span>
-          </button>
-          <button class="vto-style-template" data-style="elegant_1">
-            <img src="elegant-1-thumb.jpg" alt="Elegant">
-            <span class="vto-style-name">Elegant</span>
-          </button>
+          -->
         </div>
-        
-        <div class="vto-style-actions">
-          <button 
-            class="vto-button vto-button--small vto-button--secondary" 
-            id="vto-reset-style"
-            disabled
-          >
-            Reset
-          </button>
-        </div>
-        
-        <hr class="vto-divider">
-        
-        <h4>Share Your Look</h4>
-        <div class="vto-share-buttons">
-          <button class="vto-share-btn vto-share-fb" title="Share on Facebook">
-            <svg class="vto-icon"><!-- Facebook icon --></svg>
-          </button>
-          <button class="vto-share-btn vto-share-tw" title="Share on Twitter">
-            <svg class="vto-icon"><!-- Twitter icon --></svg>
-          </button>
-          <button class="vto-share-btn vto-share-ig" title="Share on Instagram">
-            <svg class="vto-icon"><!-- Instagram icon --></svg>
-          </button>
-          <button class="vto-share-btn vto-share-copy" title="Copy link">
-            <svg class="vto-icon"><!-- Link icon --></svg>
-          </button>
+
+        <!-- Loading indicator shown when generating studio look -->
+        <div class="vto-studio-loading" id="vto-studio-loading" style="display:none;">
+          <div class="vto-spinner"></div>
+          <span>Generating studio look...</span>
         </div>
       </div>
     </div>
@@ -1400,35 +1379,81 @@ document.querySelectorAll('.vto-size-btn').forEach(btn => {
   });
 });
 
-// Style template selection
-document.querySelectorAll('.vto-style-template').forEach(btn => {
-  btn.addEventListener('click', async () => {
-    const style = btn.dataset.style;
-    
-    showLoadingOverlay('Applying style...');
-    
-    try {
-      const styledImage = await generateStyledTryOn(tryOnId, style);
-      updateTryOnImage(styledImage.result_image_url);
-      
-      document.getElementById('vto-reset-style').disabled = false;
-    } catch (error) {
-      showError('Failed to apply style');
-    } finally {
-      hideLoadingOverlay();
-    }
-  });
-});
+// Studio look background selection
+async function loadStudioBackgrounds(gender) {
+  const response = await fetch(
+    `${API_URL}/api/v1/tryon/studio-backgrounds?gender=${gender}`
+  );
+  const backgrounds = await response.json();
 
-// Social sharing
-document.querySelector('.vto-share-copy').addEventListener('click', async () => {
-  const shareUrl = await generateShareableLink(tryOnId);
-  
+  // Randomize order
+  backgrounds.sort(() => Math.random() - 0.5);
+
+  const grid = document.getElementById('vto-studio-grid');
+  backgrounds.forEach(bg => {
+    const btn = document.createElement('button');
+    btn.className = 'vto-studio-option';
+    btn.dataset.studioId = bg.id;
+    btn.innerHTML = `<img src="${API_URL}${bg.image_url}" alt="Studio" class="vto-studio-thumb">`;
+    grid.appendChild(btn);
+  });
+}
+
+// Cache: map studio_background_id → generated try_on_id (avoid re-generating)
+const studioCache = {};
+
+document.getElementById('vto-studio-grid').addEventListener('click', async (e) => {
+  const btn = e.target.closest('.vto-studio-option');
+  if (!btn) return;
+
+  const studioId = btn.dataset.studioId;
+
+  // Update active state
+  document.querySelectorAll('.vto-studio-option').forEach(b =>
+    b.classList.remove('vto-studio-option--active')
+  );
+  btn.classList.add('vto-studio-option--active');
+
+  // "Original" — instantly show the original try-on image
+  if (studioId === 'none') {
+    document.getElementById('vto-tryon-result').src =
+      `${API_URL}/api/v1/tryon/${originalTryOnId}/image`;
+    return;
+  }
+
+  // Check if we already generated this studio look
+  if (studioCache[studioId]) {
+    document.getElementById('vto-tryon-result').src =
+      `${API_URL}/api/v1/tryon/${studioCache[studioId]}/image`;
+    return;
+  }
+
+  // Generate new studio look
+  document.getElementById('vto-studio-loading').style.display = 'flex';
+
   try {
-    await navigator.clipboard.writeText(shareUrl);
-    showToast('Link copied to clipboard!');
-  } catch {
-    prompt('Copy this link:', shareUrl);
+    const response = await fetch(`${API_URL}/api/v1/tryon/studio`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        try_on_id: originalTryOnId,
+        studio_background_id: studioId
+      })
+    });
+
+    const { try_on_id } = await response.json();
+
+    // Poll for completion
+    const result = await pollForCompletion(try_on_id, 45);
+
+    // Cache the result and display
+    studioCache[studioId] = try_on_id;
+    document.getElementById('vto-tryon-result').src =
+      `${API_URL}${result.result_image_url}`;
+  } catch (error) {
+    showError('Failed to generate studio look');
+  } finally {
+    document.getElementById('vto-studio-loading').style.display = 'none';
   }
 });
 ```
@@ -1664,7 +1689,8 @@ class VTOApiClient {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Session-ID': this.sessionId
+        'X-Session-ID': this.sessionId,
+        'X-Store-ID': this.storeId
       },
       body: JSON.stringify({
         measurement_id: measurementId,
@@ -1672,28 +1698,46 @@ class VTOApiClient {
         size: size
       })
     });
-    
+
     return await response.json();
   }
   
-  async generateTryOn(measurementId, productId, size, styleReference = null) {
+  async generateTryOn(productId) {
+    // Only product_id is needed — person image comes from session's cached front photo
     const response = await fetch(`${this.baseUrl}/api/v1/tryon/generate`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Session-ID': this.sessionId
+        'X-Session-ID': this.sessionId,
+        'X-Store-ID': this.storeId
       },
       body: JSON.stringify({
-        measurement_id: measurementId,
-        product_id: productId,
-        size: size,
-        style_reference: styleReference
+        product_id: productId
       })
     });
-    
+
     return await response.json();
   }
   
+  async getStudioBackgrounds(gender) {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/tryon/studio-backgrounds?gender=${gender}`
+    );
+    return await response.json();
+  }
+
+  async generateStudioTryOn(tryOnId, studioBackgroundId) {
+    const response = await fetch(`${this.baseUrl}/api/v1/tryon/studio`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        try_on_id: tryOnId,
+        studio_background_id: studioBackgroundId
+      })
+    });
+    return await response.json();
+  }
+
   async getTryOnStatus(tryOnId) {
     const response = await fetch(`${this.baseUrl}/api/v1/tryon/${tryOnId}/status`, {
       headers: {
@@ -1779,12 +1823,10 @@ class VirtualTryOnWidget {
         recommendation.recommended_size
       );
       
-      // 3. Generate try-on
+      // 3. Generate try-on (only needs product_id)
       updateProgress(70, 'Creating virtual try-on...');
       const tryOnResult = await this.api.generateTryOn(
-        sessionData.measurementId,
-        this.state.getState('productId'),
-        recommendation.recommended_size
+        this.state.getState('productId')
       );
       
       // Poll for completion

@@ -10,7 +10,7 @@ from uuid import UUID
 sys.path.insert(0, '.')
 
 from app.core.database import SessionLocal
-from app.models.database import Store, Product
+from app.models.database import Store, Product, StudioBackground
 
 # Test UUIDs (fixed for easy reference)
 TEST_STORE_ID = "123e4567-e89b-12d3-a456-426614174000"
@@ -164,6 +164,27 @@ def create_test_data():
                 has_size_chart=False,
             ))
             print("✓ Test product (outerwear) created")
+
+        # --- Studio Backgrounds ---
+        existing_bgs = db.query(StudioBackground).count()
+        if existing_bgs > 0:
+            print(f"✓ Studio backgrounds already exist ({existing_bgs} found)")
+        else:
+            studio_backgrounds = [
+                # Male
+                StudioBackground(gender="male", image_path="male/studio_1.jpg"),
+                StudioBackground(gender="male", image_path="male/outdoor_1.jpg"),
+                StudioBackground(gender="male", image_path="male/urban_1.jpg"),
+                # Female
+                StudioBackground(gender="female", image_path="female/studio_1.jpg"),
+                StudioBackground(gender="female", image_path="female/outdoor_1.jpg"),
+                StudioBackground(gender="female", image_path="female/urban_1.jpg"),
+                # Unisex
+                StudioBackground(gender="unisex", image_path="unisex/studio_1.jpg"),
+                StudioBackground(gender="unisex", image_path="unisex/elegant_1.jpg"),
+            ]
+            db.add_all(studio_backgrounds)
+            print(f"✓ {len(studio_backgrounds)} studio backgrounds created")
 
         db.commit()
 

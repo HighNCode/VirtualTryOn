@@ -13,8 +13,11 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session as DBSession
 
 from app.core.database import get_db
-from app.models.database import Session, Product, TryOn
-from app.models.schemas import TryOnGenerateRequest, TryOnStatusResponse
+from app.models.database import Session, Product, TryOn, StudioBackground
+from app.models.schemas import (
+    TryOnGenerateRequest, TryOnStatusResponse,
+    StudioBackgroundResponse, StudioTryOnRequest,
+)
 from app.services.cache_service import CacheService
 
 router = APIRouter(prefix="/tryon", tags=["Virtual Try-On"])
@@ -109,6 +112,204 @@ def _run_tryon_generation(
     finally:
         db.close()
 
+
+def _run_studio_generation(
+    try_on_id: str,
+    tryon_image: bytes,
+    studio_image: bytes,
+):
+    """Background task: generate studio-styled try-on image."""
+    from app.core.database import SessionLocal
+    from app.services.tryon_service import TryOnService
+
+    db = SessionLocal()
+    try:
+        record = db.query(TryOn).filter_by(try_on_id=try_on_id).first()
+        if not record:
+            return
+        record.processing_status = "processing"
+        db.commit()
+
+        start = time.time()
+
+        service = TryOnService()
+        result_bytes = service.generate_studio(
+            tryon_image=tryon_image,
+            studio_image=studio_image,
+        )
+
+        elapsed = time.time() - start
+
+        cache = CacheService()
+        import asyncio
+        loop = asyncio.new_event_loop()
+        cache_key = loop.run_until_complete(
+            cache.store_tryon_result(str(try_on_id), result_bytes)
+        )
+        loop.close()
+
+        record.processing_status = "completed"
+        record.result_cache_key = cache_key
+        record.processing_time_seconds = round(elapsed, 2)
+        record.completed_at = datetime.utcnow()
+        db.commit()
+
+        logger.info(f"Studio try-on {try_on_id} completed in {elapsed:.1f}s")
+
+    except Exception as e:
+        logger.error(f"Studio try-on {try_on_id} failed: {e}", exc_info=True)
+        try:
+            record = db.query(TryOn).filter_by(try_on_id=try_on_id).first()
+            if record:
+                record.processing_status = "failed"
+                record.error_message = str(e)[:500]
+                db.commit()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+# ============================================================================
+# Studio Background Endpoints (must be before /{try_on_id} routes)
+# ============================================================================
+
+@router.get("/studio-backgrounds", response_model=list[StudioBackgroundResponse])
+async def list_studio_backgrounds(
+    gender: str = "unisex",
+    db: DBSession = Depends(get_db),
+):
+    """
+    List available studio background images, filtered by gender.
+
+    Returns active backgrounds for the given gender plus all "unisex" backgrounds.
+    Frontend should randomize display order client-side.
+    """
+    backgrounds = db.query(StudioBackground).filter(
+        StudioBackground.is_active == True,
+        StudioBackground.gender.in_([gender, "unisex"]),
+    ).all()
+
+    return [
+        StudioBackgroundResponse(
+            id=bg.id,
+            gender=bg.gender,
+            image_url=f"/api/v1/tryon/studio-backgrounds/{bg.id}/image",
+        )
+        for bg in backgrounds
+    ]
+
+
+@router.get("/studio-backgrounds/{bg_id}/image")
+async def get_studio_background_image(
+    bg_id: str,
+    db: DBSession = Depends(get_db),
+):
+    """Serve a studio background image from static files."""
+    import os
+
+    bg = db.query(StudioBackground).filter_by(id=bg_id, is_active=True).first()
+    if not bg:
+        raise HTTPException(404, "Studio background not found")
+
+    static_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "static", "studio")
+    file_path = os.path.join(static_dir, bg.image_path)
+
+    if not os.path.exists(file_path):
+        raise HTTPException(404, "Studio background image file not found")
+
+    with open(file_path, "rb") as f:
+        image_bytes = f.read()
+
+    media_type = "image/jpeg" if file_path.endswith(".jpg") else "image/png"
+    return Response(content=image_bytes, media_type=media_type)
+
+
+@router.post("/studio", status_code=202)
+async def generate_studio_tryon(
+    request: StudioTryOnRequest,
+    background_tasks: BackgroundTasks,
+    db: DBSession = Depends(get_db),
+):
+    """
+    Generate a studio-styled try-on image.
+
+    Takes an existing completed try-on and a studio background, and generates
+    the person in that environment. Returns 202; poll GET /status for result.
+
+    Body:
+        {"try_on_id": "uuid", "studio_background_id": "uuid"}
+    """
+    import os
+
+    try:
+        # Validate original try-on exists and is completed
+        original = db.query(TryOn).filter_by(try_on_id=str(request.try_on_id)).first()
+        if not original:
+            raise HTTPException(404, "Original try-on not found")
+        if original.processing_status != "completed":
+            raise HTTPException(409, "Original try-on is not completed yet")
+
+        # Validate studio background
+        bg = db.query(StudioBackground).filter_by(
+            id=str(request.studio_background_id), is_active=True
+        ).first()
+        if not bg:
+            raise HTTPException(404, "Studio background not found")
+
+        # Get original try-on image from Redis
+        cache = CacheService()
+        tryon_image = await cache.get_tryon_result(str(request.try_on_id))
+        if not tryon_image:
+            raise HTTPException(410, "Original try-on image has expired from cache")
+
+        # Read studio background from static file
+        static_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "static", "studio")
+        file_path = os.path.join(static_dir, bg.image_path)
+        if not os.path.exists(file_path):
+            raise HTTPException(500, "Studio background image file missing")
+
+        with open(file_path, "rb") as f:
+            studio_image = f.read()
+
+        # Create new TryOn record linked to parent
+        new_try_on_id = uuid.uuid4()
+        tryon_record = TryOn(
+            try_on_id=new_try_on_id,
+            product_id=original.product_id,
+            studio_background_id=bg.id,
+            parent_try_on_id=original.try_on_id,
+            processing_status="queued",
+        )
+        db.add(tryon_record)
+        db.commit()
+
+        # Launch background generation
+        background_tasks.add_task(
+            _run_studio_generation,
+            try_on_id=str(new_try_on_id),
+            tryon_image=tryon_image,
+            studio_image=studio_image,
+        )
+
+        logger.info(f"Studio try-on queued: {new_try_on_id} (parent={request.try_on_id}, bg={bg.image_path})")
+
+        return {
+            "try_on_id": str(new_try_on_id),
+            "status": "processing",
+            "estimated_time_seconds": 45,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Studio try-on error: {e}", exc_info=True)
+        raise HTTPException(500, f"Studio try-on generation failed: {str(e)}")
+
+
+# ============================================================================
+# Core Try-On Endpoints
+# ============================================================================
 
 @router.post("/generate", status_code=202)
 async def generate_tryon(
