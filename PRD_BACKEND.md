@@ -1130,21 +1130,35 @@ Body:
   "studio_background_id": "uuid"    // Which background to apply
 }
 
-Response 202:
+Response 202 (new generation):
 {
   "try_on_id": "new-uuid",
   "status": "processing",
   "estimated_time_seconds": 45
 }
+
+Response 200 (cached — same parent+background generated within 1 hour):
+{
+  "try_on_id": "existing-uuid",
+  "status": "completed",
+  "result_image_url": "/api/v1/tryon/{try_on_id}/image"
+}
 ```
 
 Uses the same `GET /status` and `GET /image` endpoints for polling and serving.
 
+**Studio Caching (1-hour TTL):**
+- Results are cached in Redis keyed by `studio:{parent_try_on_id}:{studio_background_id}`
+- When the same parent+background combo is requested again within 1 hour, the endpoint returns `status: "completed"` with `result_image_url` immediately (no re-generation)
+- Configurable via `STUDIO_CACHE_TTL` env var (default: 3600 seconds)
+
 **Studio Generation Pipeline:**
-1. Retrieve original try-on image from Redis cache
-2. Read studio background from static file
-3. Send both to Gemini with prompt: "Place the person into the environment. Keep appearance, clothing, pose the same. Only change background and lighting."
-4. Cache result, update DB record with `parent_try_on_id` and `studio_background_id`
+1. Check Redis for cached studio result (parent+background combo)
+2. If cached: return existing try-on ID and image URL immediately
+3. If not cached: retrieve original try-on image from Redis cache
+4. Read studio background from static file
+5. Send both to Gemini with prompt: "Place the person into the environment. Keep appearance, clothing, pose the same. Only change background and lighting."
+6. Cache result in both `tryon:{id}` (24h) and `studio:{parent}:{bg}` (1h) keys, update DB record
 
 ---
 

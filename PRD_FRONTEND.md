@@ -1402,9 +1402,17 @@ async function loadStudioBackgrounds(gender) {
 // Cache: map studio_background_id → generated try_on_id (avoid re-generating)
 const studioCache = {};
 
+// Helper: disable/enable all studio option buttons
+function setStudioOptionsDisabled(disabled) {
+  document.querySelectorAll('.vto-studio-option').forEach(btn => {
+    btn.disabled = disabled;
+    btn.classList.toggle('vto-studio-option--disabled', disabled);
+  });
+}
+
 document.getElementById('vto-studio-grid').addEventListener('click', async (e) => {
   const btn = e.target.closest('.vto-studio-option');
-  if (!btn) return;
+  if (!btn || btn.disabled) return;
 
   const studioId = btn.dataset.studioId;
 
@@ -1421,14 +1429,15 @@ document.getElementById('vto-studio-grid').addEventListener('click', async (e) =
     return;
   }
 
-  // Check if we already generated this studio look
+  // Check local (in-memory) cache first
   if (studioCache[studioId]) {
     document.getElementById('vto-tryon-result').src =
       `${API_URL}/api/v1/tryon/${studioCache[studioId]}/image`;
     return;
   }
 
-  // Generate new studio look
+  // Disable all studio options while generating
+  setStudioOptionsDisabled(true);
   document.getElementById('vto-studio-loading').style.display = 'flex';
 
   try {
@@ -1441,18 +1450,28 @@ document.getElementById('vto-studio-grid').addEventListener('click', async (e) =
       })
     });
 
-    const { try_on_id } = await response.json();
+    const data = await response.json();
 
-    // Poll for completion
-    const result = await pollForCompletion(try_on_id, 45);
+    // Backend returns status:"completed" with result_image_url if cached (1-hour TTL)
+    if (data.status === 'completed' && data.result_image_url) {
+      studioCache[studioId] = data.try_on_id;
+      document.getElementById('vto-tryon-result').src =
+        `${API_URL}${data.result_image_url}`;
+      return;
+    }
+
+    // Otherwise poll for completion (new generation)
+    const result = await pollForCompletion(data.try_on_id, 45);
 
     // Cache the result and display
-    studioCache[studioId] = try_on_id;
+    studioCache[studioId] = data.try_on_id;
     document.getElementById('vto-tryon-result').src =
       `${API_URL}${result.result_image_url}`;
   } catch (error) {
     showError('Failed to generate studio look');
   } finally {
+    // Re-enable all studio options
+    setStudioOptionsDisabled(false);
     document.getElementById('vto-studio-loading').style.display = 'none';
   }
 });

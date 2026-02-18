@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
     REDIS_MAX_CONNECTIONS: int = 50
     IMAGE_CACHE_TTL: int = 86400  # 24 hours
+    STUDIO_CACHE_TTL: int = 3600  # 1 hour for studio look results
     SESSION_TTL: int = 86400  # 24 hours
 
     # Shopify

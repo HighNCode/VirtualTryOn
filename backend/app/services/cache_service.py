@@ -121,6 +121,42 @@ class CacheService:
 
         return self._decompress_image(compressed)
 
+    async def store_studio_result(
+        self,
+        parent_try_on_id: str,
+        studio_background_id: str,
+        result_image: bytes,
+    ) -> str:
+        """
+        Store studio try-on result with 1-hour TTL keyed by parent+background combo.
+
+        Returns:
+            Cache key
+        """
+        cache_key = f"studio:{parent_try_on_id}:{studio_background_id}"
+
+        compressed = self._compress_image(result_image)
+        success = self.redis.set(cache_key, compressed, settings.STUDIO_CACHE_TTL)
+
+        if success:
+            logger.info(f"Studio result cached: {cache_key} (TTL={settings.STUDIO_CACHE_TTL}s)")
+
+        return cache_key
+
+    async def get_studio_result(
+        self,
+        parent_try_on_id: str,
+        studio_background_id: str,
+    ) -> Optional[bytes]:
+        """Retrieve cached studio result for a parent+background combo."""
+        cache_key = f"studio:{parent_try_on_id}:{studio_background_id}"
+        compressed = self.redis.get(cache_key)
+
+        if not compressed:
+            return None
+
+        return self._decompress_image(compressed)
+
     async def store_tryon_result(
         self,
         try_on_id: str,

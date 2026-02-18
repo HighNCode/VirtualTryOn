@@ -117,6 +117,8 @@ def _run_studio_generation(
     try_on_id: str,
     tryon_image: bytes,
     studio_image: bytes,
+    parent_try_on_id: str,
+    studio_background_id: str,
 ):
     """Background task: generate studio-styled try-on image."""
     from app.core.database import SessionLocal
@@ -145,6 +147,10 @@ def _run_studio_generation(
         loop = asyncio.new_event_loop()
         cache_key = loop.run_until_complete(
             cache.store_tryon_result(str(try_on_id), result_bytes)
+        )
+        # Also cache by parent+background combo (1-hour TTL) for instant re-use
+        loop.run_until_complete(
+            cache.store_studio_result(parent_try_on_id, studio_background_id, result_bytes)
         )
         loop.close()
 
@@ -257,8 +263,28 @@ async def generate_studio_tryon(
         if not bg:
             raise HTTPException(404, "Studio background not found")
 
-        # Get original try-on image from Redis
+        # Check if this parent+background combo is already cached (1-hour TTL)
         cache = CacheService()
+        cached_studio = await cache.get_studio_result(
+            str(request.try_on_id), str(request.studio_background_id)
+        )
+        if cached_studio:
+            # Find the existing completed TryOn record for this combo
+            existing = db.query(TryOn).filter_by(
+                parent_try_on_id=str(request.try_on_id),
+                studio_background_id=str(request.studio_background_id),
+                processing_status="completed",
+            ).first()
+
+            if existing:
+                logger.info(f"Studio cache hit: parent={request.try_on_id}, bg={request.studio_background_id}")
+                return {
+                    "try_on_id": str(existing.try_on_id),
+                    "status": "completed",
+                    "result_image_url": f"/api/v1/tryon/{existing.try_on_id}/image",
+                }
+
+        # Get original try-on image from Redis
         tryon_image = await cache.get_tryon_result(str(request.try_on_id))
         if not tryon_image:
             raise HTTPException(410, "Original try-on image has expired from cache")
@@ -290,6 +316,8 @@ async def generate_studio_tryon(
             try_on_id=str(new_try_on_id),
             tryon_image=tryon_image,
             studio_image=studio_image,
+            parent_try_on_id=str(request.try_on_id),
+            studio_background_id=str(request.studio_background_id),
         )
 
         logger.info(f"Studio try-on queued: {new_try_on_id} (parent={request.try_on_id}, bg={bg.image_path})")
