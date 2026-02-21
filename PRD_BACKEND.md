@@ -2759,4 +2759,372 @@ python update_product_images.py
 
 ---
 
+---
+
+## Merchant Onboarding & Billing — Backend Requirements
+
+### Overview
+
+When a merchant installs the app, they are taken through a 6-step onboarding wizard embedded in Shopify Admin. The FastAPI backend stores all onboarding responses, widget configuration, and billing state. The Remix merchant admin frontend calls these endpoints during onboarding.
+
+---
+
+### New Database Tables
+
+#### `stores` — Additional Columns Required
+
+```sql
+ALTER TABLE stores ADD COLUMN onboarding_step VARCHAR(50) DEFAULT 'welcome';
+-- Values: 'welcome', 'goals', 'referral', 'widget_scope', 'theme_setup', 'plan', 'complete'
+
+ALTER TABLE stores ADD COLUMN onboarding_completed_at TIMESTAMP;
+ALTER TABLE stores ADD COLUMN plan_name VARCHAR(50) DEFAULT 'free';
+-- Values: 'free', 'starter'
+
+ALTER TABLE stores ADD COLUMN plan_shopify_subscription_id VARCHAR(255);
+-- Shopify GID of active AppSubscription (null for free plan)
+
+ALTER TABLE stores ADD COLUMN plan_activated_at TIMESTAMP;
+ALTER TABLE stores ADD COLUMN monthly_tryon_limit INTEGER DEFAULT 10;
+-- Free: 10, Starter: 100
+```
+
+#### `merchant_onboarding` — New Table
+
+Stores the merchant's answers from steps 2 and 3.
+
+```sql
+CREATE TABLE merchant_onboarding (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    store_id UUID REFERENCES stores(store_id) ON DELETE CASCADE UNIQUE,
+
+    -- Step 2: Goals (checkboxes, multiple allowed)
+    goals TEXT[],
+    -- Example values: 'improve_conversion', 'reduce_returns',
+    -- 'collect_emails', 'create_marketing_content', 'improve_ux'
+
+    -- Step 3: Referral source (radio, single)
+    referral_source VARCHAR(100),
+    -- Example values: 'shopify_app_store', 'google', 'social_media',
+    -- 'friend_colleague', 'influencer', 'other'
+    referral_detail VARCHAR(255),  -- free text if 'other'
+
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+#### `widget_configs` — New Table
+
+Stores the merchant's widget placement and scope configuration from step 4.
+
+```sql
+CREATE TABLE widget_configs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    store_id UUID REFERENCES stores(store_id) ON DELETE CASCADE UNIQUE,
+
+    -- Placement scope: what determines which products show the widget
+    scope_type VARCHAR(20) DEFAULT 'all',
+    -- Values: 'all', 'selected_collections', 'selected_products', 'mixed'
+
+    -- Selected Shopify GID strings (e.g. "gid://shopify/Collection/123456")
+    enabled_collection_ids TEXT[] DEFAULT '{}',
+    enabled_product_ids    TEXT[] DEFAULT '{}',
+
+    -- Theme extension status (updated in step 5)
+    theme_extension_detected BOOLEAN DEFAULT FALSE,
+    theme_id_checked VARCHAR(255),
+    -- The Shopify theme GID where detection was last checked
+
+    -- Button customization (future — not in onboarding yet)
+    button_text VARCHAR(100) DEFAULT 'Try it on',
+
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+---
+
+### New API Endpoints — Onboarding
+
+All onboarding endpoints require the merchant's `store_id`. Authentication uses the same `X-Store-ID` header as other endpoints. In production with Remix, the store is identified via Shopify session token.
+
+#### Get Onboarding State
+```http
+GET /api/v1/merchant/onboarding/status
+Headers:
+  X-Store-ID: {store_uuid}
+
+Response 200:
+{
+  "store_id": "uuid",
+  "onboarding_step": "goals",       // Current step merchant is on
+  "onboarding_completed": false,
+  "plan_name": "free",
+  "goals": null,                     // null if not yet completed
+  "referral_source": null,
+  "widget_scope": null,
+  "theme_extension_detected": false
+}
+```
+
+#### Step 2: Save Goals
+```http
+POST /api/v1/merchant/onboarding/goals
+Headers:
+  X-Store-ID: {store_uuid}
+
+Body:
+{
+  "goals": ["improve_conversion", "reduce_returns", "create_marketing_content"]
+  // At least 1 required. Accepted values:
+  // improve_conversion | reduce_returns | collect_emails |
+  // create_marketing_content | improve_ux
+}
+
+Response 200:
+{
+  "saved": true,
+  "next_step": "referral"
+}
+```
+
+#### Step 3: Save Referral Source
+```http
+POST /api/v1/merchant/onboarding/referral
+Headers:
+  X-Store-ID: {store_uuid}
+
+Body:
+{
+  "referral_source": "google",      // Required
+  "referral_detail": null           // Required only if referral_source == "other"
+  // Accepted values: shopify_app_store | google | social_media |
+  // friend_colleague | influencer | other
+}
+
+Response 200:
+{
+  "saved": true,
+  "next_step": "widget_scope"
+}
+```
+
+#### Step 4: Save Widget Scope (Collections & Products)
+```http
+GET /api/v1/merchant/onboarding/widget-scope
+Headers:
+  X-Store-ID: {store_uuid}
+
+Response 200:
+{
+  "scope_type": "all",
+  "enabled_collection_ids": [],
+  "enabled_product_ids": []
+}
+
+POST /api/v1/merchant/onboarding/widget-scope
+Headers:
+  X-Store-ID: {store_uuid}
+
+Body:
+{
+  "scope_type": "mixed",  // "all" | "selected_collections" | "selected_products" | "mixed"
+  "enabled_collection_ids": [
+    "gid://shopify/Collection/123456",
+    "gid://shopify/Collection/789012"
+  ],
+  "enabled_product_ids": [
+    "gid://shopify/Product/555555"
+  ]
+}
+// If scope_type == "all", both arrays should be empty.
+// "mixed" allows a combination of collections AND individual products.
+
+Response 200:
+{
+  "saved": true,
+  "scope_type": "mixed",
+  "enabled_collection_ids": ["gid://shopify/Collection/123456", ...],
+  "enabled_product_ids": ["gid://shopify/Product/555555"],
+  "next_step": "theme_setup"
+}
+```
+
+#### Step 5: Check / Update Theme Extension Status
+```http
+GET /api/v1/merchant/onboarding/theme-status
+Headers:
+  X-Store-ID: {store_uuid}
+
+Response 200:
+{
+  "theme_extension_detected": false,
+  "theme_editor_url": "https://merchant.myshopify.com/admin/themes/123/editor?context=apps&template=product&activateAppId=..."
+  // Deep link that opens Theme Editor with our widget block pre-selected
+}
+
+POST /api/v1/merchant/onboarding/theme-status
+Headers:
+  X-Store-ID: {store_uuid}
+
+Body:
+{
+  "detected": true   // Merchant confirms they've added the block
+}
+
+Response 200:
+{
+  "saved": true,
+  "theme_extension_detected": true,
+  "next_step": "plan"
+}
+```
+
+Note: The Remix frontend layer is also responsible for calling the Shopify Themes API to auto-detect if the block has been added to the published theme. The FastAPI endpoint stores the outcome.
+
+#### Step 6: Complete Onboarding (Free Plan)
+```http
+POST /api/v1/merchant/onboarding/complete
+Headers:
+  X-Store-ID: {store_uuid}
+
+Body:
+{
+  "plan": "free"
+}
+
+Response 200:
+{
+  "completed": true,
+  "plan_name": "free",
+  "monthly_tryon_limit": 10,
+  "dashboard_url": "/app/dashboard"
+}
+```
+
+---
+
+### New API Endpoints — Billing
+
+The Shopify Billing API is called from the **Remix server layer** (not directly from FastAPI), because it requires the Shopify Admin GraphQL client authenticated via session token. FastAPI receives the outcome after the Shopify billing flow completes.
+
+#### Record Billing Activation (Called After Shopify Billing Callback)
+```http
+POST /api/v1/merchant/billing/activate
+Headers:
+  X-Store-ID: {store_uuid}
+
+Body:
+{
+  "plan_name": "starter",
+  "shopify_subscription_id": "gid://shopify/AppSubscription/12345",
+  "status": "active"
+}
+
+Response 200:
+{
+  "activated": true,
+  "plan_name": "starter",
+  "monthly_tryon_limit": 100
+}
+```
+
+#### Get Current Plan
+```http
+GET /api/v1/merchant/billing/plan
+Headers:
+  X-Store-ID: {store_uuid}
+
+Response 200:
+{
+  "plan_name": "starter",
+  "monthly_tryon_limit": 100,
+  "tryon_count_this_month": 23,
+  "plan_activated_at": "2026-02-21T10:00:00Z",
+  "shopify_subscription_id": "gid://shopify/AppSubscription/12345"
+}
+```
+
+---
+
+### Plan Definitions
+
+```python
+PLANS = {
+    "free": {
+        "display_name": "Free",
+        "price_usd": 0,
+        "monthly_tryon_limit": 10,
+        "features": [
+            "10 monthly try-ons",
+            "Virtual try-on widget",
+            "Basic size recommendations",
+            "Community support"
+        ],
+    },
+    "starter": {
+        "display_name": "Starter",
+        "price_usd": 10.00,
+        "monthly_tryon_limit": 100,
+        "shopify_billing_name": "Virtual Try-On Starter",
+        "features": [
+            "100 monthly try-ons",
+            "AI Studio Look backgrounds",
+            "Fit heatmap visualization",
+            "Analytics dashboard",
+            "Email support"
+        ],
+    },
+}
+```
+
+---
+
+### Widget Scope — How It Affects the Storefront Widget
+
+When the customer-facing widget loads on a product page, it must check if the widget is enabled for that product. The backend endpoint `POST /api/v1/sessions/create` (or a new lightweight check endpoint) should verify:
+
+1. Look up `widget_configs` for the store
+2. If `scope_type == "all"`: widget is enabled for all products → proceed normally
+3. If `scope_type == "selected_collections"`: check if the product belongs to any enabled collection
+4. If `scope_type == "selected_products"`: check if the product ID is in `enabled_product_ids`
+5. If `scope_type == "mixed"`: check both collections and products
+
+**New endpoint for this check:**
+
+```http
+GET /api/v1/widget/check-enabled?product_id={shopify_product_gid}
+Headers:
+  X-Store-ID: {store_uuid}
+
+Response 200:
+{
+  "enabled": true
+}
+
+Response 200 (disabled for this product):
+{
+  "enabled": false
+}
+```
+
+The storefront widget JS calls this on initialization. If `enabled: false`, the widget button is not injected.
+
+---
+
+### Onboarding State Machine
+
+```
+install → 'welcome' → 'goals' → 'referral' → 'widget_scope' → 'theme_setup' → 'plan' → 'complete'
+```
+
+- Each `POST /onboarding/{step}` advances `stores.onboarding_step` to the next value
+- `GET /onboarding/status` always returns the current step so the Remix app can resume from where the merchant left off if they close the browser mid-onboarding
+- Steps 4 and 5 have a "Skip for now" option — skipping still advances the step but leaves config at defaults (`scope_type: "all"`, `theme_extension_detected: false`)
+- If the merchant reinstalls the app, `onboarding_step` is reset to `'welcome'`
+
+---
+
 **End of Backend PRD**

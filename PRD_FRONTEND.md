@@ -2382,4 +2382,453 @@ trackEvent('add_to_cart', { size: 'M', product_id: productId });
 
 ---
 
+---
+
+---
+
+# Part 2: Merchant Admin App
+
+**Version:** 1.0
+**Last Updated:** 2026-02-21
+**Tech Stack:** Remix (Node.js), Polaris, App Bridge, `@shopify/shopify-app-remix`
+**Target:** Merchants — embedded inside Shopify Admin
+
+---
+
+## Overview
+
+### What It Is
+
+A second frontend application (separate from the storefront widget) that lives inside the Shopify Admin as an embedded app. When a merchant installs our app from the Shopify App Store, they are taken through this onboarding wizard. After onboarding, the same app serves as the merchant dashboard.
+
+### How It Embeds in Shopify
+
+- The app runs as a **Remix (Node.js)** server that serves a React frontend
+- Shopify loads this frontend inside an `<iframe>` within `admin.shopify.com`
+- The merchant sees it in the left sidebar under Apps → Virtual Try-On
+- **App Bridge** (from `@shopify/app-bridge-react`) handles communication with the Shopify admin host — navigation, toasts, modal dialogs, session tokens
+- **Polaris** (`@shopify/polaris`) provides React components that look native to Shopify Admin
+
+### Technology Stack
+
+```
+Framework:      Remix (Node.js)
+UI Library:     Polaris (@shopify/polaris)
+App Bridge:     @shopify/app-bridge-react
+Shopify Remix:  @shopify/shopify-app-remix (handles OAuth, session tokens)
+Language:       TypeScript
+Shopify APIs:   Admin GraphQL API (for collections/products/themes)
+Billing:        Shopify Billing API (appSubscriptionCreate)
+Backend:        Calls our FastAPI backend to save onboarding state
+```
+
+### App Structure
+
+```
+merchant-admin/
+├── app/
+│   ├── shopify.server.ts        # Shopify app config (OAuth, session storage)
+│   ├── root.tsx                 # Root layout with AppProvider + Polaris
+│   ├── routes/
+│   │   ├── auth.$.tsx           # Shopify OAuth route (auto-handled by library)
+│   │   ├── app._index.tsx       # Redirects to onboarding or dashboard
+│   │   ├── app.onboarding.tsx   # Layout: progress bar + step container
+│   │   ├── app.onboarding.step-1.tsx   # Welcome screen
+│   │   ├── app.onboarding.step-2.tsx   # Goals
+│   │   ├── app.onboarding.step-3.tsx   # Referral source
+│   │   ├── app.onboarding.step-4.tsx   # Widget scope (collections/products)
+│   │   ├── app.onboarding.step-5.tsx   # Theme setup
+│   │   ├── app.onboarding.step-6.tsx   # Plan selection
+│   │   └── app.dashboard.tsx    # Post-onboarding dashboard (simple for now)
+│   └── utils/
+│       └── api.ts               # Calls to FastAPI backend
+├── shopify.app.toml             # Shopify CLI app config
+└── extensions/
+    └── virtual-tryon-widget/    # Theme App Extension
+        ├── blocks/
+        │   └── try-on-button.liquid
+        ├── assets/
+        │   └── tryon-widget.js  # (symlink/copy of storefront widget bundle)
+        └── shopify.extension.toml
+```
+
+---
+
+## OAuth Installation Flow
+
+When a merchant clicks **Install** from the Shopify App Store:
+
+```
+1. Shopify redirects to: GET /auth?shop=merchant.myshopify.com
+2. Remix app (via @shopify/shopify-app-remix) validates shop param
+3. Redirects merchant to Shopify OAuth consent screen
+4. Merchant approves permissions
+5. Shopify redirects to: GET /auth/callback?code=...&shop=...&hmac=...
+6. Remix exchanges code for access_token, saves to session storage
+7. FastAPI backend called: creates Store record in PostgreSQL
+8. Merchant redirected into embedded app: app/_index.tsx
+9. Backend checks: is onboarding complete?
+   → No: redirect to /app/onboarding/step-1
+   → Yes: redirect to /app/dashboard
+```
+
+**Required OAuth Scopes:**
+
+```
+read_products          - List merchant's products for step 4 ResourcePicker
+read_collections       - List merchant's collections for step 4
+read_themes            - Check if theme extension block is installed (step 5)
+read_script_tags       - Legacy (may be removed)
+```
+
+---
+
+## Navigation Structure
+
+After onboarding, the sidebar navigation (configured in Shopify Partner Dashboard + rendered via App Bridge `NavMenu`):
+
+```
+Virtual Try-On
+├── Dashboard          /app/dashboard
+├── Products           /app/products       (future)
+├── Analytics          /app/analytics      (future — uses existing merchant API)
+├── Widget Settings    /app/settings       (future)
+└── Billing / Plan     /app/billing        (future)
+```
+
+During onboarding, only the onboarding routes are accessible. The sidebar nav is hidden or shows just the app name.
+
+---
+
+## Onboarding Wizard — Shared Layout
+
+**File:** `app/routes/app.onboarding.tsx`
+
+The onboarding layout wraps all 6 steps. It provides:
+- A **ProgressBar** at the top showing current step out of 6
+- Back / Continue / Skip navigation buttons
+- Step title
+
+**Progress bar:** Uses Polaris `ProgressBar` component. Step percentages: 0%, 20%, 40%, 60%, 80%, 100%.
+
+**On each page load**, the Remix loader calls `GET /api/v1/merchant/onboarding/status` to check which step the merchant is currently on. If they land on a step they already completed, they are redirected to their current step (prevents skipping ahead or going back to re-enter data).
+
+**"Need help? Contact our support team"** link shown at the bottom of steps 4 and 5 (no screen to build yet — just an `mailto:` or Intercom link).
+
+---
+
+## Step 1 — Welcome Screen
+
+**Route:** `/app/onboarding/step-1`
+**Polaris components:** `Page`, `Card`, `Layout`, `Text`, `Button`, `List`
+**Backend call:** None (display only)
+
+**Content:**
+- App logo / hero graphic
+- Headline: "Welcome to Virtual Try-On"
+- Sub-headline: "Let's get your store set up in just a few minutes"
+- Feature highlights (use Polaris `List` with icons or a custom grid):
+  - Virtual Try-On — let customers see how clothes look on them
+  - AI Studio Look — professional background photo generator
+  - Fit Heatmap — visual size guidance for your customers
+  - Dashboard & Analytics — track conversions and returns
+  - Marketing Content — generate try-on images for ads and social
+- Single CTA button: **Get Started →** → navigates to step 2
+
+**No Back button on step 1.**
+
+---
+
+## Step 2 — Goals
+
+**Route:** `/app/onboarding/step-2`
+**Polaris components:** `Page`, `Card`, `ChoiceList` (multi-select), `Button`, `InlineStack`
+**Backend call:** `POST /api/v1/merchant/onboarding/goals`
+
+**Content:**
+- Headline: "What do you want to achieve?"
+- Sub-text: "Select all that apply. This helps us tailor your experience."
+- **Checkbox list** (multi-select, at least 1 required):
+  - Improve conversion rates
+  - Reduce return rates
+  - Collect customer emails
+  - Create marketing content (ads, social media)
+  - Improve customer experience & confidence
+- Navigation: **← Back** (goes to step 1) | **Continue →** (validates at least 1 checked, saves, goes to step 3)
+
+**Validation:** At least one option must be selected before Continue is enabled.
+
+**Polaris implementation:**
+```tsx
+<ChoiceList
+  title="What do you want to achieve?"
+  allowMultiple
+  choices={[
+    { label: "Improve conversion rates", value: "improve_conversion" },
+    { label: "Reduce return rates", value: "reduce_returns" },
+    { label: "Collect customer emails", value: "collect_emails" },
+    { label: "Create marketing content", value: "create_marketing_content" },
+    { label: "Improve customer experience & confidence", value: "improve_ux" },
+  ]}
+  selected={selectedGoals}
+  onChange={setSelectedGoals}
+/>
+```
+
+---
+
+## Step 3 — Referral Source
+
+**Route:** `/app/onboarding/step-3`
+**Polaris components:** `Page`, `Card`, `ChoiceList` (single-select), `TextField` (conditional), `Button`, `InlineStack`
+**Backend call:** `POST /api/v1/merchant/onboarding/referral`
+
+**Content:**
+- Headline: "How did you hear about us?"
+- Sub-text: "This helps us improve our marketing."
+- **Radio button list** (single-select, one required):
+  - Shopify App Store search
+  - Google / web search
+  - Social media (Instagram, TikTok, etc.)
+  - Friend or colleague recommendation
+  - Influencer or blog recommendation
+  - Other (reveals a free-text field below)
+- If "Other" selected: a `TextField` appears with placeholder "Please tell us more (optional)"
+- Navigation: **← Back** | **Continue →** (validates one option selected)
+
+---
+
+## Step 4 — Widget Scope (Where to Show the Widget)
+
+**Route:** `/app/onboarding/step-4`
+**Polaris components:** `Page`, `Card`, `Layout`, `Button`, `InlineStack`, `Banner`, `Toast`
+**App Bridge:** `ResourcePicker` (built-in Shopify component — no custom UI needed)
+**Backend call:** `POST /api/v1/merchant/onboarding/widget-scope`
+
+**Content:**
+- Headline: "Where should the try-on widget appear?"
+- Sub-text: "The widget button appears on product pages. Choose which products to enable it on."
+- Two action buttons side by side:
+  - **Select Collections** → opens App Bridge `ResourcePicker` (type: Collection, multi-select)
+  - **Select Products** → opens App Bridge `ResourcePicker` (type: Product, multi-select)
+- Merchants can click both buttons to mix collections and individual products
+- After closing the ResourcePicker with selections, a success toast appears: "X collections added" / "X products added"
+- Selected items shown as Polaris `Tag` chips below each button (with × to remove)
+- "Selected scope" summary: e.g. "Widget enabled on: 2 collections, 3 individual products"
+
+**ResourcePicker usage:**
+```tsx
+import { ResourcePicker } from "@shopify/app-bridge-react";
+
+// Opens Shopify's native collection picker
+<ResourcePicker
+  resourceType="Collection"
+  open={pickerOpen}
+  allowMultiple={true}
+  onSelection={(resources) => {
+    const ids = resources.selection.map(r => r.id);
+    // Add to selectedCollectionIds state
+  }}
+  onCancel={() => setPickerOpen(false)}
+/>
+```
+
+**Navigation:**
+- **← Back** | **Skip for now** (saves `scope_type: "all"`, goes to step 5) | **Continue →** (saves selection, goes to step 5)
+- If no selections were made, Continue behaves the same as "Skip for now" (`scope_type: "all"`)
+
+**Note on "Skip for now":** Widget is enabled for ALL products by default. Merchant can update scope later from Widget Settings page.
+
+**Help link:** "Need help? Contact our support team" shown at bottom (mailto link).
+
+---
+
+## Step 5 — Theme Setup
+
+**Route:** `/app/onboarding/step-5`
+**Polaris components:** `Page`, `Card`, `Layout`, `Banner`, `Button`, `List`, `InlineStack`, `Badge`
+**App Bridge:** External redirect to Theme Editor (using `redirect` from App Bridge or standard URL)
+**Backend call:** `POST /api/v1/merchant/onboarding/theme-status`
+
+**Content — Two Sections:**
+
+**Section 1: Widget Block Detection**
+- If `theme_extension_detected == false`:
+  - Banner (warning): "Widget block not detected in your theme"
+  - Text: "You need to add the Virtual Try-On button to your product page template."
+  - Button: **Open Theme Editor** (opens the Shopify Theme Editor with our app extension pre-selected via deep link — opens in same tab using App Bridge redirect)
+  - After merchant adds the block and returns, a **"Check Again"** button re-polls the Themes API
+- If `theme_extension_detected == true`:
+  - Banner (success): "Widget block detected in your theme"
+  - Green checkmark badge next to section title
+
+**Section 2: Instructions & Guidance**
+- Polaris `List` with numbered steps:
+  1. Click "Open Theme Editor" above
+  2. In the Theme Editor, click "Add block" in the Product page template
+  3. Find "Virtual Try-On" under "Apps" in the block list
+  4. Click to add it — it appears near the Add to Cart button
+  5. Save your theme
+  6. Come back here and click "Check Again"
+- A note: "Video walkthrough coming soon" (placeholder for now — no video needed yet)
+
+**Navigation:**
+- **← Back** | **Skip for now** (saves `detected: false`, goes to step 6) | **Continue →** (requires detection or merchant confirmation)
+
+**"Continue" behavior:** Either `theme_extension_detected: true` (auto-detected) OR the merchant can click Continue without detection (same effect as Skip for now — they can set it up later).
+
+**Help link:** "Need help? Contact our support team" shown at bottom.
+
+---
+
+## Step 6 — Plan Selection
+
+**Route:** `/app/onboarding/step-6`
+**Polaris components:** `Page`, `Layout`, `Card`, `List`, `Button`, `Badge`, `Text`, `InlineStack`
+**Billing:** Shopify Billing API via `admin.graphql()` in Remix loader/action
+**Backend call:** `POST /api/v1/merchant/billing/activate` (after billing confirmation)
+
+**Content:**
+- Headline: "Choose your plan"
+- Sub-text: "You can upgrade or downgrade anytime."
+- Two plan cards side by side:
+
+**Free Plan Card:**
+- Badge: "Current Plan" (if already on free)
+- Title: "Free"
+- Price: "$0 / month"
+- Sub-text: "Start with our free plan and upgrade anytime"
+- Feature list:
+  - 10 monthly try-ons included
+  - Virtual try-on widget
+  - Basic size recommendations
+  - Community support
+- CTA Button: **Continue with Free Plan** (primary)
+  - Action: calls `POST /api/v1/merchant/onboarding/complete` with `plan: "free"`, redirects to `/app/dashboard`
+
+**Starter Plan Card:**
+- Badge: "Most Popular"
+- Title: "Starter"
+- Price: "$10 / month"
+- Sub-text: "Everything you need to grow with virtual try-on"
+- Feature list:
+  - 100 monthly try-ons
+  - AI Studio Look backgrounds
+  - Fit heatmap visualization
+  - Analytics dashboard
+  - Email support
+- CTA Button: **Select Starter Plan** (secondary/highlighted)
+  - Action: calls Shopify Billing API (`appSubscriptionCreate`), redirects merchant to Shopify's billing confirmation URL
+  - After merchant approves billing on Shopify: Shopify redirects back to `/app/billing/callback`
+  - Billing callback: calls `POST /api/v1/merchant/billing/activate`, then redirects to `/app/dashboard`
+
+**Navigation:** **← Back** only (no Skip — merchant must choose a plan to complete onboarding).
+
+---
+
+## Dashboard (Post-Onboarding)
+
+**Route:** `/app/dashboard`
+**Polaris components:** `Page`, `Card`, `Banner`, `Layout`, `Text`
+
+For now, this is a simple placeholder screen:
+
+**Content:**
+- If arriving from completed onboarding: success `Banner` (dismissable):
+  - "Your store is set up! The virtual try-on widget is now active on your selected products."
+- Headline: "Dashboard"
+- Two placeholder cards:
+  - "Try-Ons This Month: — (coming soon)"
+  - "Conversion Rate: — (coming soon)"
+- Note: Full analytics dashboard content comes from the existing `/api/v1/merchant/dashboard` API endpoint — to be wired up in a later segment
+
+---
+
+## Shopify App Bridge & Session Tokens
+
+In the Remix app, every route that needs to call the FastAPI backend or Shopify Admin API must go through the Remix server loader (not directly from the client). The loader calls `authenticate.admin(request)` to get a session with `shop` and `accessToken`, then makes the FastAPI call with `X-Store-ID`.
+
+```typescript
+// Example loader pattern
+export async function loader({ request }: LoaderFunctionArgs) {
+  const { session } = await authenticate.admin(request);
+  // session.shop = "merchant.myshopify.com"
+  // session.accessToken = "shpat_..."
+
+  // Look up our internal store_id from shop domain
+  const store = await getStoreByDomain(session.shop);
+
+  // Call FastAPI backend
+  const status = await fetch(`${BACKEND_URL}/api/v1/merchant/onboarding/status`, {
+    headers: { "X-Store-ID": store.store_id }
+  }).then(r => r.json());
+
+  return json({ status, step: status.onboarding_step });
+}
+```
+
+---
+
+## Theme App Extension
+
+**Directory:** `merchant-admin/extensions/virtual-tryon-widget/`
+
+The extension is a Liquid block that merchants add to their product page template via the Theme Editor. This is the recommended modern approach — it replaces the old ScriptTag method.
+
+**Key file: `blocks/try-on-button.liquid`**
+
+```liquid
+{% if product %}
+  <div
+    id="virtual-tryon-widget"
+    data-product-id="{{ product.id }}"
+    data-shop="{{ shop.permanent_domain }}"
+    {{ block.shopify_attributes }}
+  >
+    <!-- Widget button injected by tryon-widget.js -->
+  </div>
+{% endif %}
+
+{% schema %}
+{
+  "name": "Virtual Try-On Button",
+  "target": "section",
+  "javascript": "tryon-widget.js",
+  "settings": [
+    {
+      "type": "text",
+      "id": "button_text",
+      "label": "Button Text",
+      "default": "Try it on"
+    }
+  ]
+}
+{% endschema %}
+```
+
+**`shopify.extension.toml`:**
+```toml
+name = "Virtual Try-On Widget"
+handle = "virtual-tryon-widget"
+type = "theme"
+```
+
+The extension is deployed via `shopify app deploy` as part of the app deployment pipeline. It does not need to be redeployed separately.
+
+---
+
+## Polaris UX Guidelines for Merchant Admin
+
+- Use **Polaris Page** as the top-level wrapper with a `title` on each screen
+- Use **Polaris Card** to group related content sections
+- Use **Polaris Button** for all actions — `variant="primary"` for the main CTA, `variant="plain"` for secondary actions
+- Use **Polaris Banner** for status messages (success/warning/info)
+- Use **Polaris Toast** for transient confirmations (e.g. "Collection saved")
+- Progress bar should use Polaris `ProgressBar` component with `size="small"`
+- All forms should use Polaris `FormLayout` for consistent spacing
+- Use Polaris `InlineStack` or `BlockStack` for button groups (Back / Skip / Continue)
+- Stick to Polaris color tokens — do not use custom colors that conflict with the Shopify admin theme
+
+---
+
 **End of Frontend PRD**
