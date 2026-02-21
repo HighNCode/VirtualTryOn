@@ -39,9 +39,11 @@ class Settings(BaseSettings):
     SHOPIFY_SCOPES: str = "read_products,write_script_tags"
     SHOPIFY_API_VERSION: str = "2024-01"
 
-    # Google Gemini
-    GOOGLE_API_KEY: Optional[str] = None
-    GEMINI_MODEL: str = "gemini-2.0-flash-exp"
+    # Google Vertex AI (Gemini image generation)
+    GOOGLE_CLOUD_PROJECT: Optional[str] = None
+    GOOGLE_CLOUD_LOCATION: str = "us-central1"
+    GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None   # Path to service account JSON
+    TRYON_MODEL: str = "gemini-2.5-flash"                  # Switchable via env var
 
     # Security
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:8000"

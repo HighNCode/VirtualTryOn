@@ -2,7 +2,7 @@
 
 **Version:** 1.1
 **Last Updated:** 2026-02-17
-**Tech Stack:** Python FastAPI, PostgreSQL, Redis, MediaPipe, SMPL, Google Gemini
+**Tech Stack:** Python FastAPI, PostgreSQL, Redis, MediaPipe, SMPL, Google Vertex AI (Gemini)
 **Deployment:** Railway.app / AWS  
 
 ---
@@ -42,7 +42,7 @@ Framework:      FastAPI 0.104+
 Database:       PostgreSQL 15
 Cache:          Redis 7
 ML Libraries:   MediaPipe 0.10+, OpenCV 4.8+, PyTorch, SMPL-X
-Image AI:       Google Gemini API (direct, no Replicate)
+Image AI:       Google Vertex AI — Gemini 2.5 Flash (image generation)
 Deployment:     Railway.app / Docker
 ```
 
@@ -70,7 +70,7 @@ Deployment:     Railway.app / Docker
           ↓                  ↓                  ↓
     ┌──────────┐      ┌──────────┐      ┌──────────┐
     │PostgreSQL│      │  Redis   │      │ Google   │
-    │          │      │ (Cache)  │      │ Gemini   │
+    │          │      │ (Cache)  │      │Vertex AI │
     │ Local:   │      │          │      │   API    │
     │ Docker   │      │          │      │(nano-    │
     │ Prod:    │      │          │      │ banana)  │
@@ -149,7 +149,7 @@ backend/
 │   │   ├── measurement_service.py # SMPL-based body measurement extraction
 │   │   ├── size_matcher.py     # Size recommendation logic
 │   │   ├── heatmap_service.py  # Heatmap generation (SVG overlays)
-│   │   ├── tryon_service.py    # Virtual try-on via Google Gemini API
+│   │   ├── tryon_service.py    # Virtual try-on via Google Vertex AI (Gemini)
 │   │   ├── image_validator.py  # Image quality validation
 │   │   └── cache_service.py    # Redis caching layer
 │   ├── data/
@@ -1027,27 +1027,29 @@ Response 410:
    )
    ```
 
-4. **Call Google Gemini API directly** (not via Replicate)
+4. **Call Google Vertex AI (Gemini 2.5 Flash)**
    ```python
-   import google.generativeai as genai
+   import vertexai
+   from vertexai.generative_models import GenerativeModel, GenerationConfig, Part
 
-   genai.configure(api_key=settings.GOOGLE_API_KEY)
-   model = genai.GenerativeModel(settings.GEMINI_MODEL)
+   vertexai.init(project=settings.GOOGLE_CLOUD_PROJECT,
+                 location=settings.GOOGLE_CLOUD_LOCATION)
+   model = GenerativeModel(settings.TRYON_MODEL)
 
-   # Upload images to Gemini File API
-   person_file = genai.upload_file(person_image_path)
-   product_file = genai.upload_file(product_image_path)
-
-   # Generate with image output
+   # Pass images directly as Parts (no file upload API needed)
    response = model.generate_content(
-       [prompt, person_file, product_file],
-       generation_config=genai.GenerationConfig(
-           response_mime_type="image/png",
+       [
+           Part.from_data(data=person_image, mime_type="image/jpeg"),
+           Part.from_data(data=product_bytes, mime_type="image/jpeg"),
+           prompt,
+       ],
+       generation_config=GenerationConfig(
+           response_modalities=["IMAGE"],
        ),
    )
 
    # Extract generated image
-   result_image = response.parts[0].inline_data.data
+   result_image = response.candidates[0].content.parts[0].inline_data.data
    ```
 
 5. **Cache result** in Redis (24h TTL)
@@ -1157,7 +1159,7 @@ Uses the same `GET /status` and `GET /image` endpoints for polling and serving.
 2. If cached: return existing try-on ID and image URL immediately
 3. If not cached: retrieve original try-on image from Redis cache
 4. Read studio background from static file
-5. Send both to Gemini with prompt: "Place the person into the environment. Keep appearance, clothing, pose the same. Only change background and lighting."
+5. Send both to Vertex AI (Gemini) with prompt: "Place the person into the environment. Keep appearance, clothing, pose the same. Only change background and lighting."
 6. Cache result in both `tryon:{id}` (24h) and `studio:{parent}:{bg}` (1h) keys, update DB record
 
 ---
@@ -2210,43 +2212,48 @@ query {
 
 ---
 
-### 2. Google Gemini API (Direct)
+### 2. Google Vertex AI — Gemini 2.5 Flash
 
-**Model:** `gemini-2.0-flash-exp` (configurable via `GEMINI_MODEL` env var)
-**Library:** `google-generativeai` Python SDK
+**Model:** `gemini-2.5-flash` (configurable via `TRYON_MODEL` env var — swap to any Vertex AI model without code changes)
+**Library:** `google-cloud-aiplatform` Python SDK (`vertexai` namespace)
 **Speed:** 30-60 seconds per image
+**Auth:** Google Application Default Credentials (service account JSON key)
 
 **Integration:**
 ```python
-import google.generativeai as genai
+import vertexai
+from vertexai.generative_models import GenerativeModel, GenerationConfig, Part
 
-genai.configure(api_key=settings.GOOGLE_API_KEY)
-model = genai.GenerativeModel(settings.GEMINI_MODEL)
+vertexai.init(project=settings.GOOGLE_CLOUD_PROJECT,
+              location=settings.GOOGLE_CLOUD_LOCATION)
+model = GenerativeModel(settings.TRYON_MODEL)
 
-# Upload person + product images via File API
-person_file = genai.upload_file(person_image_path)
-product_file = genai.upload_file(product_image_path)
-
-# Generate try-on image directly
+# Pass images directly as Parts — no file upload API required
 response = model.generate_content(
-    [prompt, person_file, product_file],
-    generation_config=genai.GenerationConfig(
-        response_mime_type="image/png",
+    [
+        Part.from_data(data=person_image_bytes, mime_type="image/jpeg"),
+        Part.from_data(data=product_image_bytes, mime_type="image/jpeg"),
+        prompt,
+    ],
+    generation_config=GenerationConfig(
+        response_modalities=["IMAGE"],
     ),
 )
 
-result_image = response.parts[0].inline_data.data
-
-# Cleanup uploaded files
-genai.delete_file(person_file.name)
-genai.delete_file(product_file.name)
+# Extract generated image
+result_image = response.candidates[0].content.parts[0].inline_data.data
 ```
 
 **Error Handling:**
 - Retry failed generations up to 2 times
 - Timeout after 120 seconds (`TRYON_TIMEOUT` config)
 - Cache successful results to avoid regeneration
-- Cleanup uploaded files after generation
+
+**GCP Setup Required:**
+1. Enable Vertex AI API in GCP console
+2. Create service account with `Vertex AI User` role
+3. Download JSON key → save as `backend/gcp-service-account.json`
+4. Set `GOOGLE_APPLICATION_CREDENTIALS=gcp-service-account.json` in `.env`
 
 ---
 
@@ -2369,7 +2376,7 @@ async def extract_measurements(...):
 | `product_not_found` | 404 | Product doesn't exist | No |
 | `session_expired` | 410 | Session expired (>24h) | No |
 | `rate_limit_exceeded` | 429 | Too many requests | Yes (after delay) |
-| `external_api_error` | 502 | Google Gemini API failed | Yes |
+| `external_api_error` | 502 | Google Vertex AI API failed | Yes |
 | `internal_error` | 500 | Unexpected error | Yes |
 
 ### Logging
@@ -2429,9 +2436,11 @@ SHOPIFY_API_KEY=<from-partner-dashboard>
 SHOPIFY_API_SECRET=<from-partner-dashboard>
 SHOPIFY_SCOPES=read_products,write_script_tags
 
-# Google Gemini (Virtual Try-On)
-GOOGLE_API_KEY=<from-google-ai-studio>
-GEMINI_MODEL=gemini-2.0-flash-exp
+# Google Vertex AI (Virtual Try-On)
+GOOGLE_CLOUD_PROJECT=your-gcp-project-id
+GOOGLE_CLOUD_LOCATION=us-central1
+GOOGLE_APPLICATION_CREDENTIALS=gcp-service-account.json
+TRYON_MODEL=gemini-2.5-flash
 TRYON_TIMEOUT=120
 
 # Security
@@ -2511,7 +2520,7 @@ async def health_check():
 - Redis hit rate
 - Measurement extraction success rate
 - Try-on generation success rate
-- API costs (Google Gemini usage)
+- API costs (Google Vertex AI usage — Gemini 2.5 Flash pricing)
 
 **Recommended Tools:**
 - **APM:** New Relic / DataDog

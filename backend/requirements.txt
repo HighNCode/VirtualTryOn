@@ -1,7 +1,7 @@
 # FastAPI Framework
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-python-multipart==0.0.6
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+python-multipart==0.0.9
 
 # Database
 sqlalchemy==2.0.23
@@ -24,8 +24,8 @@ opencv-contrib-python==4.8.1.78
 numpy==1.26.4
 pillow==10.1.0
 
-# Google Generative AI (Gemini)
-google-generativeai==0.3.2
+# Google Vertex AI (Gemini 2.5 Flash image generation)
+google-cloud-aiplatform>=1.45.0
 
 # Shopify Integration
 ShopifyAPI==10.0.0

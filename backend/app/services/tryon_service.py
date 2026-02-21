@@ -1,32 +1,51 @@
 """
 Virtual Try-On Service
-Generates try-on images using Google Gemini (nano-banana) API directly
+Generates try-on images using Google Vertex AI (Gemini 2.5 Flash)
 """
 
-import io
 import logging
-import time
-import tempfile
 import os
+import time
 from typing import Optional
 
-import google.generativeai as genai
-from PIL import Image
+import vertexai
+from vertexai.generative_models import GenerativeModel, GenerationConfig, Part
 
 from app.config import get_settings
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
+# Initialise Vertex AI once at module load
+def _init_vertex():
+    if not settings.GOOGLE_CLOUD_PROJECT:
+        raise ValueError("GOOGLE_CLOUD_PROJECT is not configured")
+
+    # If a service account JSON path is set, point the env var so ADC picks it up
+    if settings.GOOGLE_APPLICATION_CREDENTIALS:
+        os.environ.setdefault(
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            settings.GOOGLE_APPLICATION_CREDENTIALS,
+        )
+
+    vertexai.init(
+        project=settings.GOOGLE_CLOUD_PROJECT,
+        location=settings.GOOGLE_CLOUD_LOCATION,
+    )
+
+
+_init_vertex()
+
 
 class TryOnService:
-    """Service for generating virtual try-on images via Google Gemini API"""
+    """Service for generating virtual try-on images via Vertex AI (Gemini)"""
 
     def __init__(self):
-        if not settings.GOOGLE_API_KEY:
-            raise ValueError("GOOGLE_API_KEY is not configured")
-        genai.configure(api_key=settings.GOOGLE_API_KEY)
-        self.model = genai.GenerativeModel(settings.GEMINI_MODEL)
+        self.model = GenerativeModel(settings.TRYON_MODEL)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def generate(
         self,
@@ -49,58 +68,31 @@ class TryOnService:
         """
         start = time.time()
 
-        # Upload person image to Gemini
-        person_file = self._upload_bytes(person_image, "person.jpg")
-
-        # Download and upload product image
         product_bytes = self._download_image(product_image_url)
-        product_file = self._upload_bytes(product_bytes, "product.jpg")
-
-        # Build prompt
         prompt = self._build_prompt(product_title, category)
 
-        logger.info(f"Calling Gemini model={settings.GEMINI_MODEL}, prompt_len={len(prompt)}")
+        logger.info(
+            f"Calling Vertex AI model={settings.TRYON_MODEL}, "
+            f"prompt_len={len(prompt)}"
+        )
 
-        # Generate
         response = self.model.generate_content(
-            [prompt, person_file, product_file],
-            generation_config=genai.GenerationConfig(
-                response_mime_type="image/png",
+            [
+                Part.from_data(data=person_image, mime_type="image/jpeg"),
+                Part.from_data(data=product_bytes, mime_type="image/jpeg"),
+                prompt,
+            ],
+            generation_config=GenerationConfig(
+                response_modalities=["IMAGE"],
             ),
         )
 
-        # Extract image from response
         result_image = self._extract_image(response)
 
         elapsed = time.time() - start
         logger.info(f"Try-on generation completed in {elapsed:.1f}s")
 
-        # Clean up uploaded files
-        try:
-            genai.delete_file(person_file.name)
-            genai.delete_file(product_file.name)
-        except Exception:
-            pass  # non-critical cleanup
-
         return result_image
-
-    def _build_prompt(self, product_title: str, category: str) -> str:
-        """Build the generation prompt."""
-        category_hint = {
-            "tops": "upper body garment",
-            "bottoms": "lower body garment (pants/jeans)",
-            "dresses": "full-body dress",
-            "outerwear": "outer layer jacket/coat",
-        }.get(category, "garment")
-
-        return (
-            f"Using the provided person photo and product photo, generate a single "
-            f"photorealistic image of the person wearing the {product_title} ({category_hint}). "
-            f"Keep the person's face, body, pose, and background exactly the same. "
-            f"Keep the product's color, texture, and design exactly the same. "
-            f"Fit the product naturally on the person's body. "
-            f"The result should look like a real photograph, not a collage."
-        )
 
     def generate_studio(
         self,
@@ -122,9 +114,6 @@ class TryOnService:
         """
         start = time.time()
 
-        tryon_file = self._upload_bytes(tryon_image, "tryon.png")
-        studio_file = self._upload_bytes(studio_image, "studio.jpg")
-
         prompt = (
             "Place the person from the first image into the environment/background "
             "shown in the second image. Keep the person's appearance, clothing, and "
@@ -132,12 +121,16 @@ class TryOnService:
             "the environment. The result should look like a natural professional photograph."
         )
 
-        logger.info(f"Calling Gemini for studio look, model={settings.GEMINI_MODEL}")
+        logger.info(f"Calling Vertex AI for studio look, model={settings.TRYON_MODEL}")
 
         response = self.model.generate_content(
-            [prompt, tryon_file, studio_file],
-            generation_config=genai.GenerationConfig(
-                response_mime_type="image/png",
+            [
+                Part.from_data(data=tryon_image, mime_type="image/png"),
+                Part.from_data(data=studio_image, mime_type="image/jpeg"),
+                prompt,
+            ],
+            generation_config=GenerationConfig(
+                response_modalities=["IMAGE"],
             ),
         )
 
@@ -146,26 +139,29 @@ class TryOnService:
         elapsed = time.time() - start
         logger.info(f"Studio generation completed in {elapsed:.1f}s")
 
-        try:
-            genai.delete_file(tryon_file.name)
-            genai.delete_file(studio_file.name)
-        except Exception:
-            pass
-
         return result_image
 
-    def _upload_bytes(self, image_bytes: bytes, display_name: str) -> genai.types.File:
-        """Upload image bytes to Gemini file API via a temp file."""
-        suffix = ".jpg" if display_name.endswith(".jpg") else ".png"
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            tmp.write(image_bytes)
-            tmp_path = tmp.name
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
-        try:
-            uploaded = genai.upload_file(tmp_path, display_name=display_name)
-            return uploaded
-        finally:
-            os.unlink(tmp_path)
+    def _build_prompt(self, product_title: str, category: str) -> str:
+        """Build the generation prompt."""
+        category_hint = {
+            "tops": "upper body garment",
+            "bottoms": "lower body garment (pants/jeans)",
+            "dresses": "full-body dress",
+            "outerwear": "outer layer jacket/coat",
+        }.get(category, "garment")
+
+        return (
+            f"Using the provided person photo and product photo, generate a single "
+            f"photorealistic image of the person wearing the {product_title} ({category_hint}). "
+            f"Keep the person's face, body, pose, and background exactly the same. "
+            f"Keep the product's color, texture, and design exactly the same. "
+            f"Fit the product naturally on the person's body. "
+            f"The result should look like a real photograph, not a collage."
+        )
 
     def _download_image(self, url: str) -> bytes:
         """Download product image from URL."""
@@ -176,11 +172,13 @@ class TryOnService:
         return resp.content
 
     def _extract_image(self, response) -> bytes:
-        """Extract image bytes from Gemini response."""
-        # Gemini returns image in parts[0].inline_data when response_mime_type is image/*
-        for part in response.parts:
-            if hasattr(part, "inline_data") and part.inline_data.data:
-                return part.inline_data.data
+        """Extract image bytes from Vertex AI Gemini response."""
+        for candidate in response.candidates:
+            for part in candidate.content.parts:
+                if part.inline_data is not None and part.inline_data.data:
+                    return part.inline_data.data
 
-        # Fallback: check if text response contains base64
-        raise ValueError("Gemini response did not contain a generated image")
+        raise ValueError(
+            "Vertex AI response did not contain a generated image. "
+            "Check that the model supports image output and the prompt is valid."
+        )

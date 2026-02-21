@@ -55,6 +55,10 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# Google Cloud service account key (never commit credentials)
+gcp-service-account.json
+*.json.key
+
 # SMPL model files (large, licensed — never commit)
 data/body_models/
 *.pkl
