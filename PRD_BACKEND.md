@@ -2117,36 +2117,123 @@ Response 200:
 
 ---
 
-### 8. Admin Dashboard API (Future - Not Implemented in MVP)
+### 8. Admin API
 
-**Provision for Super Admin Dashboard**
+Internal endpoints for platform management. All routes require the `X-Admin-Key` header matching `ADMIN_API_KEY` in `.env`.
 
-Reserved endpoints for platform-level admin:
+#### 8.1 Studio Background Management
 
+**Authentication:**
 ```http
-# View all stores
-GET /api/v1/admin/stores
-Authorization: Bearer {admin_token}
-
-# Store health metrics
-GET /api/v1/admin/stores/{store_id}/health
-
-# Platform-wide analytics
-GET /api/v1/admin/analytics/platform
-
-# Feature flags
-GET /api/v1/admin/features
-PUT /api/v1/admin/features/{feature_id}
-
-# Model performance monitoring
-GET /api/v1/admin/ml/performance
+X-Admin-Key: <ADMIN_API_KEY>
 ```
 
-**Not implemented in MVP but database schema supports:**
-- Admin users table
-- Feature flags table
-- Platform-wide analytics aggregation
-- A/B testing framework
+##### Upload Studio Backgrounds (Bulk)
+```http
+POST /api/v1/admin/studio-backgrounds/upload
+Content-Type: multipart/form-data
+X-Admin-Key: <key>
+
+Form fields:
+  gender  string  "male" | "female" | "unisex"
+  images  file[]  One or more image files (jpg/jpeg/png/webp)
+
+Response 200:
+{
+  "uploaded": 3,
+  "failed": 0,
+  "backgrounds": [
+    {
+      "id": "uuid",
+      "gender": "male",
+      "image_path": "male/studio_1.jpg",
+      "image_url": "/api/v1/tryon/studio-backgrounds/{id}/image",
+      "file_size_kb": 142.3
+    }
+  ],
+  "errors": []
+}
+```
+
+**Behaviour:** Each image is written to `backend/static/studio/{gender}/` and a `StudioBackground` DB row is created atomically — disk and DB are always in sync.
+
+**Filename conflict:** If a file with the same name already exists, a short UUID suffix is appended automatically.
+
+##### List All Studio Backgrounds (Admin)
+```http
+GET /api/v1/admin/studio-backgrounds
+X-Admin-Key: <key>
+
+Response 200:
+{
+  "total": 8,
+  "backgrounds": [
+    {
+      "id": "uuid",
+      "gender": "male",
+      "image_path": "male/studio_1.jpg",
+      "is_active": true,
+      "image_url": "/api/v1/tryon/studio-backgrounds/{id}/image",
+      "file_exists": true,
+      "created_at": "2026-02-21T10:00:00"
+    }
+  ]
+}
+```
+
+Includes `file_exists` flag to surface any disk/DB mismatches.
+
+##### Toggle Active State
+```http
+PATCH /api/v1/admin/studio-backgrounds/{id}/toggle
+X-Admin-Key: <key>
+
+Response 200:
+{ "id": "uuid", "is_active": false }
+```
+
+##### Delete Background
+```http
+DELETE /api/v1/admin/studio-backgrounds/{id}?delete_file=true
+X-Admin-Key: <key>
+
+Response 200:
+{
+  "deleted": true,
+  "id": "uuid",
+  "image_path": "male/studio_1.jpg",
+  "file_deleted": true
+}
+```
+
+`delete_file=true` (default) removes the file from disk as well as the DB row.
+
+#### 8.2 Workflow: Adding New Studio Backgrounds
+
+```
+1. Upload images locally (server running at localhost:8000):
+   POST /api/v1/admin/studio-backgrounds/upload
+   → files saved to backend/static/studio/{gender}/
+   → DB rows created
+
+2. Commit and push:
+   git add backend/static/studio/
+   git commit -m "feat: Add studio backgrounds"
+   git push
+
+3. Railway auto-redeploys → images live in production
+```
+
+> ⚠️ **Important:** Railway uses ephemeral containers. Images uploaded via the API on Railway (not locally) are lost on redeploy since they are not in the git repo. Always upload locally and commit.
+
+#### 8.3 Future Admin Endpoints (Reserved, Not Yet Implemented)
+
+```http
+GET  /api/v1/admin/stores                    # All stores
+GET  /api/v1/admin/stores/{id}/health        # Store health metrics
+GET  /api/v1/admin/analytics/platform        # Platform-wide analytics
+GET  /api/v1/admin/ml/performance            # Model performance monitoring
+```
 
 ---
 
@@ -2439,9 +2526,12 @@ SHOPIFY_SCOPES=read_products,write_script_tags
 # Google Vertex AI (Virtual Try-On)
 GOOGLE_CLOUD_PROJECT=your-gcp-project-id
 GOOGLE_CLOUD_LOCATION=us-central1
-GOOGLE_APPLICATION_CREDENTIALS=gcp-service-account.json
-TRYON_MODEL=gemini-2.5-flash
+GOOGLE_APPLICATION_CREDENTIALS=gcp-service-account.json  # path to service account JSON key
+TRYON_MODEL=gemini-2.5-flash-image         # must be a model that supports image output (response_modalities=IMAGE)
 TRYON_TIMEOUT=120
+
+# Admin API
+ADMIN_API_KEY=<strong-random-secret>       # used for X-Admin-Key header on /api/v1/admin/* routes
 
 # Security
 CORS_ORIGINS=https://yourdomain.com,https://*.myshopify.com
@@ -2449,8 +2539,9 @@ ALLOWED_UPLOAD_EXTENSIONS=jpg,jpeg,png,webp
 
 # Performance
 MAX_UPLOAD_SIZE=10485760  # 10MB in bytes
-IMAGE_CACHE_TTL=86400  # 24 hours
-SESSION_TTL=86400  # 24 hours
+IMAGE_CACHE_TTL=86400     # 24 hours (try-on results)
+STUDIO_CACHE_TTL=3600     # 1 hour (studio look results, keyed by parent+background)
+SESSION_TTL=86400          # 24 hours
 ```
 
 ### Docker Configuration
@@ -2634,6 +2725,36 @@ STANDARD_SIZES = {
     },
     # ... more categories
 }
+```
+
+---
+
+## Development Helper Scripts
+
+One-off scripts in `backend/` for local setup and data maintenance. Never needed in production.
+
+### `create_test_data.py`
+Seeds the Railway DB with a test store and 4 test products (tops/bottoms/dresses/outerwear) with real garment image URLs. Also seeds placeholder studio backgrounds if the table is empty.
+
+```bash
+cd backend
+python create_test_data.py
+```
+
+### `seed_studio_backgrounds.py`
+Clears and re-seeds the `studio_backgrounds` table from the hardcoded list matching the files in `backend/static/studio/`. Use this if the DB and static folder get out of sync.
+
+```bash
+cd backend
+python seed_studio_backgrounds.py
+```
+
+### `update_product_images.py`
+Updates the `images` column on the 4 test products to use real Unsplash garment photo URLs (replacing the old `via.placeholder.com` placeholder). Run once if the test products were seeded before this fix.
+
+```bash
+cd backend
+python update_product_images.py
 ```
 
 ---
