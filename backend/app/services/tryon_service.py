@@ -116,9 +116,9 @@ class TryOnService:
 
         prompt = (
             "Place the person from the first image into the environment/background "
-            "shown in the second image. Keep the person's appearance, clothing, and "
-            "pose exactly the same. Only change the background and lighting to match "
-            "the environment. The result should look like a natural professional photograph."
+            "shown in the second image. Keep the person's appearance and clothing exactly the same from the first image. "
+            "Change the background, lighting, objects and pose of the person to match "
+            "the environment in the second image. The result should look like a natural professional photograph."
         )
 
         logger.info(f"Calling Vertex AI for studio look, model={settings.TRYON_MODEL}")

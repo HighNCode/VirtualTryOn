@@ -218,7 +218,7 @@ async def get_studio_background_image(
     if not bg:
         raise HTTPException(404, "Studio background not found")
 
-    static_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "static", "studio")
+    static_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "static", "studio")
     file_path = os.path.join(static_dir, bg.image_path)
 
     if not os.path.exists(file_path):
@@ -290,7 +290,7 @@ async def generate_studio_tryon(
             raise HTTPException(410, "Original try-on image has expired from cache")
 
         # Read studio background from static file
-        static_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "static", "studio")
+        static_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "static", "studio")
         file_path = os.path.join(static_dir, bg.image_path)
         if not os.path.exists(file_path):
             raise HTTPException(500, "Studio background image file missing")

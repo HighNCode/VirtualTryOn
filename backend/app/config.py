@@ -43,7 +43,10 @@ class Settings(BaseSettings):
     GOOGLE_CLOUD_PROJECT: Optional[str] = None
     GOOGLE_CLOUD_LOCATION: str = "us-central1"
     GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None   # Path to service account JSON
-    TRYON_MODEL: str = "gemini-2.5-flash"                  # Switchable via env var
+    TRYON_MODEL: str = "gemini-2.5-flash-image"               # Switchable via env var; must support image output
+
+    # Admin
+    ADMIN_API_KEY: str = "change-this-admin-key-in-production"
 
     # Security
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:8000"
