@@ -61,7 +61,7 @@ def create_test_data():
                 vendor="Test Vendor",
                 images=[
                     {
-                        "src": "https://via.placeholder.com/400",
+                        "src": "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=800&q=80",
                         "alt": "Test T-Shirt Front"
                     }
                 ],
@@ -107,7 +107,7 @@ def create_test_data():
                 product_type="Jeans",
                 category="bottoms",
                 vendor="Test Vendor",
-                images=[{"src": "https://via.placeholder.com/400", "alt": "Test Jeans"}],
+                images=[{"src": "https://images.unsplash.com/photo-1542272604-787c3835535d?w=800&q=80", "alt": "Test Jeans"}],
                 variants=[
                     {"id": "10", "title": "Small", "size": "S", "sku": "JEANS-S", "price": "49.99"},
                     {"id": "11", "title": "Medium", "size": "M", "sku": "JEANS-M", "price": "49.99"},
@@ -131,7 +131,7 @@ def create_test_data():
                 product_type="Dress",
                 category="dresses",
                 vendor="Test Vendor",
-                images=[{"src": "https://via.placeholder.com/400", "alt": "Test Dress"}],
+                images=[{"src": "https://images.unsplash.com/photo-1595777457583-95e059d581b8?w=800&q=80", "alt": "Test Dress"}],
                 variants=[
                     {"id": "20", "title": "Small", "size": "S", "sku": "DRESS-S", "price": "59.99"},
                     {"id": "21", "title": "Medium", "size": "M", "sku": "DRESS-M", "price": "59.99"},
@@ -155,7 +155,7 @@ def create_test_data():
                 product_type="Jacket",
                 category="outerwear",
                 vendor="Test Vendor",
-                images=[{"src": "https://via.placeholder.com/400", "alt": "Test Jacket"}],
+                images=[{"src": "https://images.unsplash.com/photo-1551028719-00167b16eac5?w=800&q=80", "alt": "Test Jacket"}],
                 variants=[
                     {"id": "30", "title": "Small", "size": "S", "sku": "JACKET-S", "price": "89.99"},
                     {"id": "31", "title": "Medium", "size": "M", "sku": "JACKET-M", "price": "89.99"},
