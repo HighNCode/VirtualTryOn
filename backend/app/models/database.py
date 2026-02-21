@@ -37,10 +37,22 @@ class Store(Base, TimestampMixin):
     uninstalled_at = Column(DateTime, nullable=True)
     reinstalled_at = Column(DateTime, nullable=True)
 
+    # Onboarding & plan columns
+    onboarding_step = Column(String(50), default='welcome', nullable=False)
+    # values: 'welcome' | 'goals' | 'referral' | 'widget_scope' | 'theme_setup' | 'plan' | 'complete'
+    onboarding_completed_at = Column(DateTime, nullable=True)
+    plan_name = Column(String(50), default='free', nullable=False)
+    # values: 'free' | 'starter'
+    plan_shopify_subscription_id = Column(String(255), nullable=True)
+    plan_activated_at = Column(DateTime, nullable=True)
+    monthly_tryon_limit = Column(Integer, default=10, nullable=False)
+
     # Relationships
     products = relationship("Product", back_populates="store", cascade="all, delete-orphan")
     sessions = relationship("Session", back_populates="store", cascade="all, delete-orphan")
     analytics_events = relationship("AnalyticsEvent", back_populates="store", cascade="all, delete-orphan")
+    onboarding = relationship("MerchantOnboarding", back_populates="store", uselist=False, cascade="all, delete-orphan")
+    widget_config = relationship("WidgetConfig", back_populates="store", uselist=False, cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Store {self.shopify_domain}>"
@@ -320,3 +332,55 @@ class DataDeletionQueue(Base, TimestampMixin):
 
     def __repr__(self):
         return f"<DataDeletionQueue {self.store_id} - {self.status}>"
+
+
+class MerchantOnboarding(Base, TimestampMixin):
+    """
+    Stores answers from the merchant onboarding wizard (steps 2-3).
+    One record per store (unique FK).
+    """
+    __tablename__ = "merchant_onboarding"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    store_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey('stores.store_id', ondelete='CASCADE'),
+        unique=True,
+        nullable=False,
+    )
+    goals = Column(JSONB, default=list)          # List[str] e.g. ["improve_conversion", "reduce_returns"]
+    referral_source = Column(String(100), nullable=True)
+    referral_detail = Column(String(255), nullable=True)
+
+    store = relationship("Store", back_populates="onboarding")
+
+    def __repr__(self):
+        return f"<MerchantOnboarding store={self.store_id}>"
+
+
+class WidgetConfig(Base, TimestampMixin):
+    """
+    Widget display configuration set during onboarding step 4.
+    One record per store (unique FK).
+    """
+    __tablename__ = "widget_configs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    store_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey('stores.store_id', ondelete='CASCADE'),
+        unique=True,
+        nullable=False,
+    )
+    scope_type = Column(String(20), default='all', nullable=False)
+    # values: 'all' | 'selected_collections' | 'selected_products' | 'mixed'
+    enabled_collection_ids = Column(JSONB, default=list)   # List[str] — Shopify GIDs
+    enabled_product_ids = Column(JSONB, default=list)      # List[str] — Shopify GIDs
+    theme_extension_detected = Column(Boolean, default=False, nullable=False)
+    theme_id_checked = Column(String(255), nullable=True)
+    button_text = Column(String(100), default='Try it on', nullable=False)
+
+    store = relationship("Store", back_populates="widget_config")
+
+    def __repr__(self):
+        return f"<WidgetConfig store={self.store_id} scope={self.scope_type}>"

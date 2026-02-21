@@ -301,6 +301,98 @@ class AnalyticsEventCreate(BaseModel):
 
 
 # ============================================================================
+# Merchant Onboarding Schemas
+# ============================================================================
+
+class OnboardingStatusResponse(BaseModel):
+    """Full onboarding status — returned by GET /merchant/onboarding/status"""
+    store_id: UUID
+    onboarding_step: str
+    onboarding_completed: bool
+    plan_name: str
+    goals: Optional[List[str]] = None
+    referral_source: Optional[str] = None
+    scope_type: Optional[str] = None
+    enabled_collection_ids: Optional[List[str]] = None
+    enabled_product_ids: Optional[List[str]] = None
+    theme_extension_detected: bool = False
+
+
+class GoalsRequest(BaseModel):
+    """Step 2: merchant selects their goals"""
+    goals: List[str]
+
+
+class OnboardingStepResponse(BaseModel):
+    """Generic response for any step that advances the wizard"""
+    saved: bool
+    next_step: str
+
+
+class ReferralRequest(BaseModel):
+    """Step 3: how the merchant heard about the app"""
+    referral_source: str
+    referral_detail: Optional[str] = None
+
+
+class WidgetScopeRequest(BaseModel):
+    """Step 4: which products the widget should appear on"""
+    scope_type: str   # 'all' | 'selected_collections' | 'selected_products' | 'mixed'
+    enabled_collection_ids: List[str] = []
+    enabled_product_ids: List[str] = []
+
+
+class WidgetScopeResponse(BaseModel):
+    """Current widget scope configuration"""
+    scope_type: str
+    enabled_collection_ids: List[str]
+    enabled_product_ids: List[str]
+
+
+class ThemeStatusResponse(BaseModel):
+    """Step 5: whether the theme extension block has been detected"""
+    theme_extension_detected: bool
+    themes_url: str
+
+
+class ThemeStatusUpdateRequest(BaseModel):
+    """Step 5: Remix reports detection result to the backend"""
+    detected: bool
+
+
+class OnboardingCompleteRequest(BaseModel):
+    """Step 6: merchant completes onboarding (free plan path)"""
+    plan: str   # "free"
+
+
+class OnboardingCompleteResponse(BaseModel):
+    """Onboarding completion confirmation"""
+    completed: bool
+    plan_name: str
+    monthly_tryon_limit: int
+
+
+class BillingActivateRequest(BaseModel):
+    """Called by Remix after Shopify billing callback confirms a paid subscription"""
+    plan_name: str
+    shopify_subscription_id: str
+    status: str   # "active"
+
+
+class PlanResponse(BaseModel):
+    """Current plan information"""
+    plan_name: str
+    monthly_tryon_limit: int
+    plan_activated_at: Optional[datetime] = None
+    shopify_subscription_id: Optional[str] = None
+
+
+class WidgetCheckResponse(BaseModel):
+    """Whether the widget should be shown for a given product"""
+    enabled: bool
+
+
+# ============================================================================
 # Error Schemas
 # ============================================================================
 
