@@ -407,12 +407,22 @@ class DashboardOverviewResponse(BaseModel):
     enabled_products_count: int
 
 
+class WidgetConfigResponse(BaseModel):
+    """Full widget config state — returned by GET and PATCH /merchant/widget-config"""
+    scope_type: str
+    enabled_collection_ids: List[str]
+    enabled_product_ids: List[str]
+    theme_extension_detected: bool
+    widget_color: str  # Hex e.g. '#FF0000'; default applied in API layer when DB value is null
+
+
 class WidgetConfigUpdateRequest(BaseModel):
     """Partial update of WidgetConfig from the dashboard (does not touch onboarding_step)"""
     scope_type: Optional[str] = None
     enabled_collection_ids: Optional[List[str]] = None
     enabled_product_ids: Optional[List[str]] = None
     theme_extension_detected: Optional[bool] = None
+    widget_color: Optional[str] = None  # Hex color e.g. '#FF0000'
 
 
 # ============================================================================

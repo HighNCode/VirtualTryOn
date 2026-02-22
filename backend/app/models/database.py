@@ -378,7 +378,7 @@ class WidgetConfig(Base, TimestampMixin):
     enabled_product_ids = Column(JSONB, default=list)      # List[str] — Shopify GIDs
     theme_extension_detected = Column(Boolean, default=False, nullable=False)
     theme_id_checked = Column(String(255), nullable=True)
-    button_text = Column(String(100), default='Try it on', nullable=False)
+    widget_color = Column(String(7), nullable=True)  # Hex color e.g. '#FF0000'; default '#FF0000' applied in API layer
 
     store = relationship("Store", back_populates="widget_config")
 

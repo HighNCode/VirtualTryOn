@@ -32,6 +32,7 @@ from app.models.schemas import (
     WidgetCheckResponse,
     DashboardOverviewResponse,
     WidgetConfigUpdateRequest,
+    WidgetConfigResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -375,10 +376,41 @@ def get_dashboard_overview(
 
 
 # ─────────────────────────────────────────────────────────────
-# Dashboard — Widget Config (post-onboarding update)
+# Dashboard — Widget Config (GET + PATCH, post-onboarding)
 # ─────────────────────────────────────────────────────────────
 
-@merchant_router.patch("/widget-config", response_model=WidgetScopeResponse)
+_DEFAULT_WIDGET_COLOR = "#FF0000"
+
+
+def _widget_config_response(wc: Optional[WidgetConfig]) -> WidgetConfigResponse:
+    """Build WidgetConfigResponse, applying code-level defaults for null DB values."""
+    if wc is None:
+        return WidgetConfigResponse(
+            scope_type="all",
+            enabled_collection_ids=[],
+            enabled_product_ids=[],
+            theme_extension_detected=False,
+            widget_color=_DEFAULT_WIDGET_COLOR,
+        )
+    return WidgetConfigResponse(
+        scope_type=wc.scope_type,
+        enabled_collection_ids=wc.enabled_collection_ids or [],
+        enabled_product_ids=wc.enabled_product_ids or [],
+        theme_extension_detected=wc.theme_extension_detected,
+        widget_color=wc.widget_color or _DEFAULT_WIDGET_COLOR,
+    )
+
+
+@merchant_router.get("/widget-config", response_model=WidgetConfigResponse)
+def get_widget_config(store: Store = Depends(get_store)):
+    """
+    Return the full widget configuration for the Settings → Custom screen.
+    If no config has been saved yet, returns defaults (scope_type='all', widget_color='#FF0000').
+    """
+    return _widget_config_response(store.widget_config)
+
+
+@merchant_router.patch("/widget-config", response_model=WidgetConfigResponse)
 def update_widget_config(
     body: WidgetConfigUpdateRequest,
     store: Store = Depends(get_store),
@@ -390,6 +422,7 @@ def update_widget_config(
     safe to call for merchants who have already completed onboarding.
 
     Used by:
+    - Settings → Custom screen Save action (widget_color)
     - "Manage Products and Collections" save action (scope_type + ID lists)
     - "Mark as added" theme detection button (theme_extension_detected)
     """
@@ -409,16 +442,14 @@ def update_widget_config(
         wc.enabled_product_ids = body.enabled_product_ids
     if body.theme_extension_detected is not None:
         wc.theme_extension_detected = body.theme_extension_detected
+    if body.widget_color is not None:
+        wc.widget_color = body.widget_color
 
     db.commit()
     db.refresh(wc)
 
     logger.info(f"Widget config updated for store {store.store_id}: {body.model_dump(exclude_none=True)}")
-    return WidgetScopeResponse(
-        scope_type=wc.scope_type,
-        enabled_collection_ids=wc.enabled_collection_ids or [],
-        enabled_product_ids=wc.enabled_product_ids or [],
-    )
+    return _widget_config_response(wc)
 
 
 # ─────────────────────────────────────────────────────────────

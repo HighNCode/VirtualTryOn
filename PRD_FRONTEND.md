@@ -2831,4 +2831,226 @@ The extension is deployed via `shopify app deploy` as part of the app deployment
 
 ---
 
+## Merchant Settings Screens
+
+**Added:** 2026-02-22
+
+### Overview
+
+Settings is a top-level sidebar navigation item. Clicking it opens a tabbed page with four sub-sections:
+
+| Tab | Route | Status |
+|-----|-------|--------|
+| Custom | `/app/settings/custom` | Planned (backend done) |
+| Billing | `/app/settings/billing` | Planned |
+| Privacy | `/app/settings/privacy` | Planned |
+| Support | `/app/settings/support` | Planned |
+
+### Sidebar Navigation Update
+
+The NavMenu in `app/routes/app.tsx` must be updated to add a Settings link:
+
+```tsx
+// app/routes/app.tsx
+import { NavMenu } from "@shopify/app-bridge-react";
+import { Link, Outlet } from "@remix-run/react";
+
+export default function AppLayout() {
+  return (
+    <>
+      <NavMenu>
+        <Link to="/app" rel="home">Overview</Link>
+        <Link to="/app/analytics">Analytics</Link>
+        <Link to="/app/settings/custom">Settings</Link>
+      </NavMenu>
+      <Outlet />
+    </>
+  );
+}
+```
+
+**Note:** Shopify's NavMenu does not support nested/collapsible navigation. The Settings link points to the first sub-screen (`/custom`). Sub-screen switching uses **Polaris `Tabs`** inside the settings page layout, not sidebar items.
+
+### Settings Layout Route (`app/routes/app.settings.tsx`)
+
+Shared layout wrapping all settings sub-screens. Renders Polaris `Tabs` and an `<Outlet />`:
+
+```tsx
+// app/routes/app.settings.tsx
+import { Tabs, Page } from "@shopify/polaris";
+import { Outlet, useNavigate, useMatches } from "@remix-run/react";
+
+const TABS = [
+  { id: "custom",  content: "Custom",  url: "/app/settings/custom"  },
+  { id: "billing", content: "Billing", url: "/app/settings/billing" },
+  { id: "privacy", content: "Privacy", url: "/app/settings/privacy" },
+  { id: "support", content: "Support", url: "/app/settings/support" },
+];
+
+export default function SettingsLayout() {
+  const navigate = useNavigate();
+  const matches = useMatches();
+  const activeTab = TABS.findIndex(t => matches.some(m => m.pathname.includes(t.id)));
+
+  return (
+    <Page title="Settings">
+      <Tabs
+        tabs={TABS}
+        selected={activeTab >= 0 ? activeTab : 0}
+        onSelect={(index) => navigate(TABS[index].url)}
+      />
+      <Outlet />
+    </Page>
+  );
+}
+```
+
+---
+
+### Settings — Custom Screen (`app/routes/app.settings.custom.tsx`)
+
+**Purpose:** Brand customisation for the storefront widget (colour only for now).
+
+**API calls:**
+- `GET /api/v1/merchant/widget-config` on load → initial state
+- `PATCH /api/v1/merchant/widget-config` on Save → `{ "widget_color": "#RRGGBB" }`
+
+**Layout (two vertical sections inside a Card):**
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Brand Customisation                                │
+│ ─────────────────────────────────────────────────── │
+│  Widget Color                                       │
+│  [ Color swatch ] [ #FF0000  hex input ]            │
+│                                                     │
+│  [ Full color palette (color picker) ]              │
+│                                                     │
+│  ─────────────────────────────────────────────────  │
+│                                                     │
+│  Preview                                            │
+│  ┌──────────────────────────────────────────────┐  │
+│  │  [ Try it on ]   ← widget button in chosen  │  │
+│  │                    color, real styling        │  │
+│  └──────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────┘
+                            [ Cancel ]  [ Save ]
+```
+
+**Component spec:**
+
+```tsx
+// app/routes/app.settings.custom.tsx
+import { useState } from "react";
+import { useLoaderData, useFetcher } from "@remix-run/react";
+import { Card, BlockStack, Text, InlineStack, Button, TextField, Banner } from "@shopify/polaris";
+
+// Loader: fetch current config from backend
+export async function loader({ request }) {
+  const { session } = await authenticate.admin(request);
+  const res = await fetch(`${BACKEND_URL}/api/v1/merchant/widget-config`, {
+    headers: { "X-Store-ID": session.shop },
+  });
+  return await res.json();
+}
+
+// Action: save updated color
+export async function action({ request }) {
+  const { session } = await authenticate.admin(request);
+  const formData = await request.formData();
+  const widget_color = formData.get("widget_color");
+  const res = await fetch(`${BACKEND_URL}/api/v1/merchant/widget-config`, {
+    method: "PATCH",
+    headers: { "X-Store-ID": session.shop, "Content-Type": "application/json" },
+    body: JSON.stringify({ widget_color }),
+  });
+  return await res.json();
+}
+
+export default function CustomSettings() {
+  const saved = useLoaderData();
+  const fetcher = useFetcher();
+
+  const [color, setColor] = useState(saved.widget_color);
+  const isDirty = color !== saved.widget_color;
+
+  const handleSave = () => {
+    fetcher.submit({ widget_color: color }, { method: "PATCH" });
+  };
+  const handleCancel = () => setColor(saved.widget_color);
+
+  return (
+    <BlockStack gap="400">
+      {fetcher.data && <Banner tone="success">Saved successfully</Banner>}
+      <Card>
+        <BlockStack gap="400">
+          {/* Section 1: Color picker */}
+          <Text variant="headingMd">Brand Customisation</Text>
+          <BlockStack gap="300">
+            <Text>Widget Color</Text>
+            <InlineStack gap="300" align="start">
+              {/* Native color picker — provides full palette */}
+              <input
+                type="color"
+                value={color}
+                onChange={(e) => setColor(e.target.value)}
+                style={{ width: 40, height: 40, border: "none", cursor: "pointer" }}
+              />
+              {/* Hex text input for precise entry */}
+              <TextField
+                label=""
+                labelHidden
+                value={color}
+                onChange={(v) => { if (/^#[0-9A-Fa-f]{0,6}$/.test(v)) setColor(v); }}
+                maxLength={7}
+                monospaced
+                autoComplete="off"
+              />
+            </InlineStack>
+          </BlockStack>
+
+          {/* Section 2: Widget preview */}
+          <BlockStack gap="200">
+            <Text variant="headingMd">Preview</Text>
+            <div style={{ padding: "16px", background: "#f4f6f8", borderRadius: "8px" }}>
+              <button
+                style={{
+                  background: color,
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  fontSize: "14px",
+                  cursor: "default",
+                }}
+              >
+                Try it on
+              </button>
+            </div>
+          </BlockStack>
+        </BlockStack>
+      </Card>
+
+      {/* Action bar */}
+      <InlineStack gap="300" align="end">
+        <Button onClick={handleCancel} disabled={!isDirty}>Cancel</Button>
+        <Button variant="primary" onClick={handleSave} disabled={!isDirty}
+          loading={fetcher.state !== "idle"}>
+          Save
+        </Button>
+      </InlineStack>
+    </BlockStack>
+  );
+}
+```
+
+**Behaviour rules:**
+- Cancel reverts `color` state to `saved.widget_color` — no API call
+- Save is only enabled when `color !== saved.widget_color` (dirty check)
+- After a successful PATCH, `fetcher.data` triggers a success Banner; the `saved` value is updated on next loader call
+- The hex `TextField` validates that input matches `#[0-9A-Fa-f]{0,6}` to prevent storing invalid values
+- The native `<input type="color">` provides the full colour palette including custom hex entry
+
+---
+
 **End of Frontend PRD**

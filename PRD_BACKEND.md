@@ -3127,4 +3127,85 @@ install → 'welcome' → 'goals' → 'referral' → 'widget_scope' → 'theme_s
 
 ---
 
+## Merchant Settings — Custom Screen
+
+**Added:** 2026-02-22
+
+### Purpose
+Merchant dashboard **Settings → Custom** sub-screen. Allows brand colour customisation for the storefront widget. The colour is stored per-store; the storefront widget reads it at runtime.
+
+### Database Changes (migration `d4e5f6g7h8i9`)
+
+| Change | Table | Column |
+|--------|-------|--------|
+| Drop | `widget_configs` | `button_text` — removed; button text is hardcoded on the widget |
+| Add | `widget_configs` | `widget_color VARCHAR(7) NULL` — hex colour e.g. `#FF0000` |
+
+**Default colour rule:** `widget_color` is `NULL` in the DB for new stores. The API layer returns `#FF0000` whenever the DB value is `NULL`. This keeps the default logic in code, not in the DB schema.
+
+### Endpoints
+
+#### `GET /api/v1/merchant/widget-config`
+Returns the full widget configuration including colour. Used by the Custom screen on load.
+
+```http
+GET /api/v1/merchant/widget-config
+Headers:
+  X-Store-ID: {store_uuid}
+
+Response 200:
+{
+  "scope_type": "all",
+  "enabled_collection_ids": [],
+  "enabled_product_ids": [],
+  "theme_extension_detected": false,
+  "widget_color": "#FF0000"
+}
+```
+
+- If no `WidgetConfig` row exists for the store yet, defaults are returned (`scope_type: "all"`, `widget_color: "#FF0000"`).
+
+#### `PATCH /api/v1/merchant/widget-config` (updated)
+Partial update — accepts any subset of fields. Does **not** touch `onboarding_step`.
+
+```http
+PATCH /api/v1/merchant/widget-config
+Headers:
+  X-Store-ID: {store_uuid}
+Content-Type: application/json
+
+Body (all fields optional):
+{
+  "widget_color": "#3B82F6"
+}
+
+Response 200:
+{
+  "scope_type": "all",
+  "enabled_collection_ids": [],
+  "enabled_product_ids": [],
+  "theme_extension_detected": false,
+  "widget_color": "#3B82F6"
+}
+```
+
+- `widget_color` must be a 7-character hex string including `#` (e.g. `"#FF0000"`). Validation is done on the frontend; the backend stores whatever string is sent.
+- Response always includes `widget_color`; if the DB value is still `NULL` after a partial update that didn't include `widget_color`, the API returns `"#FF0000"`.
+
+### Updated `WidgetConfigResponse` Schema
+
+```python
+class WidgetConfigResponse(BaseModel):
+    scope_type: str
+    enabled_collection_ids: List[str]
+    enabled_product_ids: List[str]
+    theme_extension_detected: bool
+    widget_color: str   # '#FF0000' default applied in API layer
+```
+
+### Cancel / Revert Behaviour
+The frontend holds the last-saved state from the GET response. On Cancel, it resets local state to that snapshot — no API call required.
+
+---
+
 **End of Backend PRD**
