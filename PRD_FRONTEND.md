@@ -3053,4 +3053,269 @@ export default function CustomSettings() {
 
 ---
 
+## Settings → Billing Screen
+
+**Added:** 2026-02-22
+
+### Route
+`app/routes/app.settings.billing.tsx` — child of the Settings layout (`app/routes/app.settings.tsx`).
+
+### Billing Callback Route
+`app/routes/app.billing.callback.tsx` — receives `charge_id` from Shopify after merchant approves, calls FastAPI, redirects.
+
+---
+
+### Data Loading (Loader)
+
+```ts
+export async function loader({ request }) {
+  const { session } = await authenticate.admin(request);
+  const [plansRes, statusRes] = await Promise.all([
+    fetch(`${BACKEND_URL}/api/v1/merchant/billing/plans`, { headers: { "X-Store-ID": session.shop } }),
+    fetch(`${BACKEND_URL}/api/v1/merchant/billing/status`, { headers: { "X-Store-ID": session.shop } }),
+  ]);
+  return { plans: await plansRes.json(), status: await statusRes.json() };
+}
+```
+
+---
+
+### UI Layout
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│  Billing                                                       │
+│ ─────────────────────────────────────────────────────────────  │
+│                                                               │
+│  Subscription Plan                                            │
+│  ┌─────────────────────────┐  ┌────────────────────────────┐  │
+│  │  Free Plan              │  │  Starter Plan              │  │
+│  │  $0 / month             │  │  $9.99 / month             │  │
+│  │                         │  │                            │  │
+│  │  ✓ 10 try-ons/month     │  │  ✓ 100 try-ons/month       │  │
+│  │  ✓ Basic widget         │  │  ✓ AI Studio Look          │  │
+│  │  ✓ Email support        │  │  ✓ Fit heatmap             │  │
+│  │                         │  │  ✓ Analytics               │  │
+│  │  [ Current Plan ]badge  │  │  ✓ Priority support        │  │
+│  │                         │  │                            │  │
+│  │                         │  │  [ Upgrade to Starter ]    │  │
+│  └─────────────────────────┘  └────────────────────────────┘  │
+│                                                               │
+│  Subscription Details  (shown only if plan_name != 'free')   │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │  Status: Active                                         │  │
+│  │  Next billing date: March 22, 2026                      │  │
+│  │                                                         │  │
+│  │  [ Update payment method ]    [ View invoices ]         │  │
+│  │  (links to Shopify admin)     (links to Shopify admin)  │  │
+│  │                                                         │  │
+│  │  [ Downgrade to Free ]  (plain/destructive button)      │  │
+│  └─────────────────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Component spec (`app/routes/app.settings.billing.tsx`)
+
+```tsx
+import { useLoaderData, useFetcher, useNavigation } from "@remix-run/react";
+import {
+  Page, Layout, Card, Grid, Badge, Text, Button,
+  BlockStack, InlineStack, Banner, Modal, Spinner
+} from "@shopify/polaris";
+
+export default function BillingSettings() {
+  const { plans, status } = useLoaderData();
+  const fetcher = useFetcher();
+  const [showCancelModal, setShowCancelModal] = useState(false);
+
+  const shopDomain = /* from session */ "";
+  const billingAdminUrl = `https://${shopDomain}/admin/settings/billing`;
+
+  const handleUpgrade = (planName) => {
+    fetcher.submit(
+      { action: "create_subscription", plan_name: planName },
+      { method: "POST" }
+    );
+    // Action returns { confirmation_url } → redirect handled in action()
+  };
+
+  const handleCancelConfirm = () => {
+    fetcher.submit({ action: "cancel_subscription" }, { method: "POST" });
+    setShowCancelModal(false);
+  };
+
+  return (
+    <Page title="Billing">
+      {/* Plan cards */}
+      <Layout>
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="400">
+              <Text variant="headingMd">Subscription Plan</Text>
+              <Grid columns={{ sm: 1, md: 2 }}>
+                {plans.plans.map(plan => (
+                  <Card key={plan.name} background={plan.is_current ? "bg-surface-selected" : undefined}>
+                    <BlockStack gap="300">
+                      <InlineStack align="space-between">
+                        <Text variant="headingMd">{plan.display_name}</Text>
+                        {plan.is_current && <Badge tone="success">Current Plan</Badge>}
+                      </InlineStack>
+                      <Text variant="headingLg">
+                        {plan.price_usd === 0 ? "Free" : `$${plan.price_usd}/mo`}
+                      </Text>
+                      <BlockStack gap="100">
+                        {plan.features.map(f => <Text key={f}>✓ {f}</Text>)}
+                      </BlockStack>
+                      {!plan.is_current && (
+                        <Button
+                          variant="primary"
+                          onClick={() => handleUpgrade(plan.name)}
+                          loading={fetcher.state !== "idle"}
+                        >
+                          {plan.price_usd > 0 ? `Upgrade to ${plan.display_name}` : "Downgrade to Free"}
+                        </Button>
+                      )}
+                    </BlockStack>
+                  </Card>
+                ))}
+              </Grid>
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+
+        {/* Subscription details — only for paid plans */}
+        {status.plan_name !== "free" && (
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="400">
+                <Text variant="headingMd">Subscription Details</Text>
+                <InlineStack gap="600">
+                  <BlockStack>
+                    <Text tone="subdued">Status</Text>
+                    <Text>{status.subscription_status ?? "—"}</Text>
+                  </BlockStack>
+                  <BlockStack>
+                    <Text tone="subdued">Next billing date</Text>
+                    <Text>
+                      {status.current_period_end
+                        ? new Date(status.current_period_end).toLocaleDateString()
+                        : "—"}
+                    </Text>
+                  </BlockStack>
+                </InlineStack>
+                <InlineStack gap="300">
+                  <Button url={billingAdminUrl} external>Update payment method</Button>
+                  <Button url={billingAdminUrl} external>View invoices</Button>
+                </InlineStack>
+                <Button
+                  tone="critical"
+                  variant="plain"
+                  onClick={() => setShowCancelModal(true)}
+                >
+                  Downgrade to Free
+                </Button>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        )}
+      </Layout>
+
+      {/* Downgrade confirmation modal */}
+      <Modal
+        open={showCancelModal}
+        onClose={() => setShowCancelModal(false)}
+        title="Downgrade to Free Plan?"
+        primaryAction={{ content: "Downgrade", destructive: true, onAction: handleCancelConfirm }}
+        secondaryActions={[{ content: "Keep current plan", onAction: () => setShowCancelModal(false) }]}
+      >
+        <Modal.Section>
+          <Text>
+            Your subscription will be cancelled immediately and you'll be moved to the free plan
+            (10 try-ons/month). This cannot be undone — you'll need to upgrade again to access
+            premium features.
+          </Text>
+        </Modal.Section>
+      </Modal>
+    </Page>
+  );
+}
+```
+
+### Action (Remix server-side)
+
+```ts
+export async function action({ request }) {
+  const { session } = await authenticate.admin(request);
+  const formData = await request.formData();
+  const actionType = formData.get("action");
+
+  if (actionType === "create_subscription") {
+    const plan_name = formData.get("plan_name");
+    const returnUrl = `${process.env.SHOPIFY_APP_URL}/app/billing/callback`;
+    const res = await fetch(`${BACKEND_URL}/api/v1/merchant/billing/create-subscription`, {
+      method: "POST",
+      headers: { "X-Store-ID": session.shop, "Content-Type": "application/json" },
+      body: JSON.stringify({ plan_name, return_url: returnUrl }),
+    });
+    const { confirmation_url } = await res.json();
+    return redirect(confirmation_url);  // merchant goes to Shopify approval page
+  }
+
+  if (actionType === "cancel_subscription") {
+    await fetch(`${BACKEND_URL}/api/v1/merchant/billing/cancel-subscription`, {
+      method: "POST",
+      headers: { "X-Store-ID": session.shop },
+    });
+    return redirect("/app/settings/billing?downgraded=1");
+  }
+}
+```
+
+### Billing Callback Route (`app/routes/app.billing.callback.tsx`)
+
+Called by Shopify after merchant approves the subscription.
+
+```ts
+// URL: /app/billing/callback?charge_id=gid://shopify/AppSubscription/123&shop=...
+export async function loader({ request }) {
+  const { session } = await authenticate.admin(request);
+  const url = new URL(request.url);
+  const chargeId = url.searchParams.get("charge_id");
+
+  if (!chargeId) return redirect("/app/settings/billing?error=missing_charge");
+
+  // Activate plan in FastAPI
+  // Determine plan_name by matching charge — for now, derive from session or pass via state
+  // Simplest: store plan_name in a cookie before redirecting to Shopify
+  const planName = url.searchParams.get("plan") ?? "starter";
+
+  await fetch(`${BACKEND_URL}/api/v1/merchant/billing/activate`, {
+    method: "POST",
+    headers: { "X-Store-ID": session.shop, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      plan_name: planName,
+      shopify_subscription_id: chargeId,
+      status: "active",
+    }),
+  });
+
+  return redirect("/app/settings/billing?activated=1");
+}
+```
+
+**Note on passing `plan_name` through the callback:** Include `plan_name` as a query param in the `return_url` (e.g. `?plan=starter`), which Shopify passes through unchanged to the callback URL.
+
+### Behaviour Rules
+- "Upgrade to Starter" → calls Shopify Billing API → full-page redirect to Shopify approval page
+- After approval → Shopify redirects to callback → plan activated → redirect to billing screen with `?activated=1` success banner
+- "Downgrade to Free" → show confirmation modal → on confirm call cancel → redirect with `?downgraded=1` banner
+- "Update payment method" and "View invoices" → external links to `https://{shop}/admin/settings/billing`
+- Subscription details section only visible when `plan_name !== "free"`
+- `current_period_end` displays as a localised date string; shows "—" if null (graceful Shopify call failure)
+- Test subscriptions (dev) show `is_test_subscription: true` as an informational badge
+
+---
+
 **End of Frontend PRD**

@@ -15,6 +15,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session as DBSession
 
 from app.core.database import get_db
+from app.config import get_settings
 from app.models.database import Store, MerchantOnboarding, WidgetConfig, TryOn, Product
 from app.models.schemas import (
     OnboardingStatusResponse,
@@ -33,17 +34,37 @@ from app.models.schemas import (
     DashboardOverviewResponse,
     WidgetConfigUpdateRequest,
     WidgetConfigResponse,
+    PlanConfig,
+    PlansResponse,
+    CreateSubscriptionRequest,
+    CreateSubscriptionResponse,
+    BillingStatusResponse,
+    CancelSubscriptionResponse,
 )
+from app.services.shopify_service import ShopifyService
 
 logger = logging.getLogger(__name__)
 
 merchant_router = APIRouter(prefix="/merchant", tags=["Merchant"])
 widget_router = APIRouter(prefix="/widget", tags=["Widget"])
 
-PLAN_LIMITS = {
-    "free": 10,
-    "starter": 100,
+PLAN_CONFIGS: dict[str, dict] = {
+    "free": {
+        "display_name": "Free Plan",
+        "price_usd": 0.0,
+        "monthly_tryon_limit": 10,
+        "features": ["10 try-ons/month", "Basic widget", "Email support"],
+    },
+    "starter": {
+        "display_name": "Starter Plan",
+        "price_usd": 9.99,
+        "monthly_tryon_limit": 100,
+        "features": ["100 try-ons/month", "AI Studio Look", "Fit heatmap", "Analytics", "Priority support"],
+    },
 }
+
+# Derived lookup kept for backward-compatibility with existing endpoints
+PLAN_LIMITS = {name: cfg["monthly_tryon_limit"] for name, cfg in PLAN_CONFIGS.items()}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -320,6 +341,139 @@ def get_plan(store: Store = Depends(get_store)):
         monthly_tryon_limit=store.monthly_tryon_limit,
         plan_activated_at=store.plan_activated_at,
         shopify_subscription_id=store.plan_shopify_subscription_id,
+    )
+
+
+@merchant_router.get("/billing/plans", response_model=PlansResponse)
+def get_billing_plans(store: Store = Depends(get_store)):
+    """
+    Return all available subscription plans with pricing and feature details.
+    The store's active plan is marked with is_current=True.
+    """
+    plans = [
+        PlanConfig(
+            name=name,
+            display_name=cfg["display_name"],
+            price_usd=cfg["price_usd"],
+            monthly_tryon_limit=cfg["monthly_tryon_limit"],
+            features=cfg["features"],
+            is_current=(name == store.plan_name),
+        )
+        for name, cfg in PLAN_CONFIGS.items()
+    ]
+    return PlansResponse(plans=plans)
+
+
+@merchant_router.get("/billing/status", response_model=BillingStatusResponse)
+async def get_billing_status(store: Store = Depends(get_store)):
+    """
+    Full billing status combining DB plan data with a live Shopify subscription query.
+
+    - If the store is on the free plan (no subscription ID), Shopify fields are null.
+    - If the Shopify call fails (network error, token issue), DB data is returned
+      with null Shopify fields rather than erroring — the screen degrades gracefully.
+    """
+    shopify_status = None
+    if store.plan_shopify_subscription_id:
+        try:
+            svc = ShopifyService(store.shopify_domain, store.shopify_access_token)
+            shopify_status = await svc.billing_get_status()
+        except Exception as exc:
+            logger.warning(f"Shopify billing status call failed for store {store.store_id}: {exc}")
+
+    return BillingStatusResponse(
+        plan_name=store.plan_name,
+        monthly_tryon_limit=store.monthly_tryon_limit,
+        plan_activated_at=store.plan_activated_at,
+        shopify_subscription_id=store.plan_shopify_subscription_id,
+        subscription_status=shopify_status["status"] if shopify_status else None,
+        current_period_end=shopify_status["current_period_end"] if shopify_status else None,
+        is_test_subscription=shopify_status["test"] if shopify_status else None,
+    )
+
+
+@merchant_router.post("/billing/create-subscription", response_model=CreateSubscriptionResponse)
+async def create_subscription(
+    body: CreateSubscriptionRequest,
+    store: Store = Depends(get_store),
+):
+    """
+    Create a Shopify recurring subscription for a paid plan.
+
+    Flow:
+    1. FastAPI calls Shopify appSubscriptionCreate → gets confirmationUrl
+    2. Returns confirmationUrl to Remix
+    3. Remix redirects merchant to confirmationUrl (Shopify's approval page)
+    4. After merchant approves, Shopify calls returnUrl (Remix route)
+    5. Remix callback calls POST /billing/activate to update the DB
+
+    Does NOT update the DB — that happens after merchant approves on Shopify's page.
+    """
+    if body.plan_name not in PLAN_CONFIGS:
+        raise HTTPException(422, f"Unknown plan: {body.plan_name}. Valid plans: {list(PLAN_CONFIGS)}")
+    if body.plan_name == "free":
+        raise HTTPException(422, "Cannot create a Shopify subscription for the free plan")
+    if body.plan_name == store.plan_name:
+        raise HTTPException(409, f"Store is already on the '{body.plan_name}' plan")
+
+    cfg = PLAN_CONFIGS[body.plan_name]
+    settings = get_settings()
+    is_test = settings.APP_ENV == "development"
+    is_upgrade = store.plan_name != "free"  # switching between paid plans
+
+    try:
+        svc = ShopifyService(store.shopify_domain, store.shopify_access_token)
+        result = await svc.billing_create_subscription(
+            plan_name=cfg["display_name"],
+            price_usd=cfg["price_usd"],
+            return_url=body.return_url,
+            test=is_test,
+            is_upgrade=is_upgrade,
+        )
+    except Exception as exc:
+        logger.error(f"Shopify subscription create failed for store {store.store_id}: {exc}")
+        raise HTTPException(502, f"Failed to create Shopify subscription: {exc}")
+
+    logger.info(f"Subscription creation initiated for store {store.store_id}: plan={body.plan_name}")
+    return CreateSubscriptionResponse(
+        confirmation_url=result["confirmation_url"],
+        shopify_subscription_id=result["subscription_id"],
+    )
+
+
+@merchant_router.post("/billing/cancel-subscription", response_model=CancelSubscriptionResponse)
+async def cancel_subscription(
+    store: Store = Depends(get_store),
+    db: DBSession = Depends(get_db),
+):
+    """
+    Cancel the active Shopify subscription and revert the store to the free plan.
+
+    Remix should show a confirmation modal before calling this endpoint.
+    """
+    if store.plan_name == "free":
+        raise HTTPException(400, "Store is already on the free plan")
+    if not store.plan_shopify_subscription_id:
+        raise HTTPException(400, "No active Shopify subscription found")
+
+    try:
+        svc = ShopifyService(store.shopify_domain, store.shopify_access_token)
+        await svc.billing_cancel_subscription(store.plan_shopify_subscription_id)
+    except Exception as exc:
+        logger.error(f"Shopify subscription cancel failed for store {store.store_id}: {exc}")
+        raise HTTPException(502, f"Failed to cancel Shopify subscription: {exc}")
+
+    store.plan_name = "free"
+    store.monthly_tryon_limit = PLAN_CONFIGS["free"]["monthly_tryon_limit"]
+    store.plan_shopify_subscription_id = None
+    store.plan_activated_at = None
+    db.commit()
+
+    logger.info(f"Subscription cancelled for store {store.store_id}, reverted to free plan")
+    return CancelSubscriptionResponse(
+        cancelled=True,
+        plan_name="free",
+        monthly_tryon_limit=PLAN_CONFIGS["free"]["monthly_tryon_limit"],
     )
 
 

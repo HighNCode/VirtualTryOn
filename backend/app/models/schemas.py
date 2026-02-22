@@ -426,6 +426,56 @@ class WidgetConfigUpdateRequest(BaseModel):
 
 
 # ============================================================================
+# Billing Schemas
+# ============================================================================
+
+class PlanConfig(BaseModel):
+    """Definition of a single subscription plan"""
+    name: str                   # 'free' | 'starter'
+    display_name: str           # 'Free Plan' | 'Starter Plan'
+    price_usd: float            # 0.0 | 9.99
+    monthly_tryon_limit: int    # 10 | 100
+    features: List[str]         # Human-readable feature list
+    is_current: bool            # True if this is the store's active plan
+
+
+class PlansResponse(BaseModel):
+    """All available subscription plans"""
+    plans: List[PlanConfig]
+
+
+class CreateSubscriptionRequest(BaseModel):
+    """Request to create a Shopify subscription for a paid plan"""
+    plan_name: str   # 'starter' — only paid plans accepted
+    return_url: str  # Remix callback URL after merchant approves on Shopify
+
+
+class CreateSubscriptionResponse(BaseModel):
+    """Shopify subscription creation result"""
+    confirmation_url: str         # Shopify approval page — Remix redirects merchant here
+    shopify_subscription_id: str  # GID returned by Shopify (for reference)
+
+
+class BillingStatusResponse(BaseModel):
+    """Full billing status — DB data enriched with live Shopify subscription info"""
+    plan_name: str
+    monthly_tryon_limit: int
+    plan_activated_at: Optional[datetime] = None
+    shopify_subscription_id: Optional[str] = None
+    # Live from Shopify (null if free plan or if Shopify call fails gracefully)
+    subscription_status: Optional[str] = None      # 'ACTIVE' | 'PENDING' | 'CANCELLED'
+    current_period_end: Optional[datetime] = None  # Next billing date
+    is_test_subscription: Optional[bool] = None
+
+
+class CancelSubscriptionResponse(BaseModel):
+    """Subscription cancellation confirmation"""
+    cancelled: bool
+    plan_name: str            # Always 'free' after cancellation
+    monthly_tryon_limit: int  # Always 10 after cancellation
+
+
+# ============================================================================
 # Error Schemas
 # ============================================================================
 

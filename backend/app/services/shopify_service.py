@@ -345,3 +345,157 @@ class ShopifyService:
 
         async with httpx.AsyncClient() as client:
             await client.delete(url, headers=headers)
+
+    # ──────────────────────────────────────────────────────────
+    # Billing API
+    # ──────────────────────────────────────────────────────────
+
+    async def billing_create_subscription(
+        self,
+        plan_name: str,
+        price_usd: float,
+        return_url: str,
+        test: bool = False,
+        is_upgrade: bool = False,
+    ) -> dict:
+        """
+        Create a recurring app subscription via Shopify Billing API.
+
+        Args:
+            plan_name: Human-readable plan label (used as subscription name)
+            price_usd: Monthly price in USD
+            return_url: URL Shopify redirects to after merchant approves
+            test: True in development to avoid real charges
+            is_upgrade: If True, uses APPLY_IMMEDIATELY replacement behavior (prorated)
+
+        Returns:
+            { "confirmation_url": "...", "subscription_id": "gid://..." }
+
+        Raises:
+            Exception: If Shopify returns userErrors
+        """
+        mutation = """
+        mutation appSubscriptionCreate(
+          $name: String!
+          $lineItems: [AppSubscriptionLineItemInput!]!
+          $returnUrl: URL!
+          $test: Boolean
+          $replacementBehavior: AppSubscriptionReplacementBehavior
+        ) {
+          appSubscriptionCreate(
+            name: $name
+            lineItems: $lineItems
+            returnUrl: $returnUrl
+            test: $test
+            replacementBehavior: $replacementBehavior
+          ) {
+            confirmationUrl
+            appSubscription { id status }
+            userErrors { field message }
+          }
+        }"""
+
+        variables = {
+            "name": plan_name,
+            "returnUrl": return_url,
+            "test": test,
+            "lineItems": [{
+                "plan": {
+                    "appRecurringPricingDetails": {
+                        "amount": price_usd,
+                        "currencyCode": "USD",
+                        "interval": "EVERY_30_DAYS",
+                    }
+                }
+            }],
+        }
+        if is_upgrade:
+            variables["replacementBehavior"] = "APPLY_IMMEDIATELY"
+
+        result = await self._graphql_request(mutation, variables)
+        payload = result["data"]["appSubscriptionCreate"]
+
+        if payload.get("userErrors"):
+            errors = payload["userErrors"]
+            raise Exception(f"Shopify billing error: {errors}")
+
+        return {
+            "confirmation_url": payload["confirmationUrl"],
+            "subscription_id": payload["appSubscription"]["id"],
+        }
+
+    async def billing_cancel_subscription(self, subscription_gid: str) -> bool:
+        """
+        Cancel an active app subscription via Shopify Billing API.
+
+        Args:
+            subscription_gid: Shopify GID e.g. 'gid://shopify/AppSubscription/123'
+
+        Returns:
+            True on success
+
+        Raises:
+            Exception: If Shopify returns userErrors
+        """
+        mutation = """
+        mutation appSubscriptionCancel($id: ID!) {
+          appSubscriptionCancel(id: $id) {
+            appSubscription { id status }
+            userErrors { field message }
+          }
+        }"""
+
+        result = await self._graphql_request(mutation, {"id": subscription_gid})
+        payload = result["data"]["appSubscriptionCancel"]
+
+        if payload.get("userErrors"):
+            errors = payload["userErrors"]
+            raise Exception(f"Shopify cancel error: {errors}")
+
+        return True
+
+    async def billing_get_status(self) -> dict | None:
+        """
+        Fetch the active app subscription from Shopify.
+
+        Returns:
+            Dict with subscription fields, or None if no active subscription.
+        """
+        query = """
+        query {
+          currentAppInstallation {
+            activeSubscriptions {
+              id name status currentPeriodEnd test trialDays
+              lineItems {
+                plan {
+                  pricingDetails {
+                    ... on AppRecurringPricing {
+                      price { amount currencyCode }
+                      interval
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }"""
+
+        result = await self._graphql_request(query)
+        subscriptions = (
+            result.get("data", {})
+            .get("currentAppInstallation", {})
+            .get("activeSubscriptions", [])
+        )
+
+        if not subscriptions:
+            return None
+
+        sub = subscriptions[0]
+        return {
+            "id": sub["id"],
+            "name": sub["name"],
+            "status": sub["status"],
+            "current_period_end": sub.get("currentPeriodEnd"),
+            "test": sub.get("test", False),
+            "trial_days": sub.get("trialDays", 0),
+        }

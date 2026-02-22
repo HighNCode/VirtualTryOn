@@ -3208,4 +3208,133 @@ The frontend holds the last-saved state from the GET response. On Cancel, it res
 
 ---
 
+## Merchant Settings — Billing Screen
+
+**Added:** 2026-02-22
+
+### Purpose
+Settings → Billing screen. Shows available plan cards, current subscription status, next billing date, and links to Shopify's billing management pages.
+
+### Shopify Billing Flow
+
+```
+Upgrade flow:
+  Remix → POST /billing/create-subscription
+       ← { confirmation_url }
+  Remix → redirect merchant to confirmation_url (Shopify approval page)
+  Merchant approves on Shopify
+  Shopify → redirect to returnUrl with charge_id
+  Remix callback route → POST /billing/activate  ← already exists
+                       ← { plan_name, monthly_tryon_limit, ... }
+  Merchant back on billing screen (activated)
+
+Cancel / downgrade to free flow:
+  Remix → POST /billing/cancel-subscription
+       ← { cancelled: true, plan_name: "free" }
+  (Shopify subscription cancelled server-side by FastAPI)
+```
+
+### Plan Catalog
+
+| Plan | Price | Try-ons/month | Shopify subscription |
+|------|-------|---------------|----------------------|
+| free | $0 | 10 | None |
+| starter | $9.99/mo | 100 | EVERY_30_DAYS recurring |
+
+Defined in `PLAN_CONFIGS` dict in `merchant.py`. `PLAN_LIMITS` is derived from it for backward compatibility.
+
+### Architecture Decision
+FastAPI calls Shopify Billing GraphQL API directly using `store.shopify_access_token` (via existing `ShopifyService._graphql_request()`). Remix only handles: redirect to `confirmation_url`, and the `returnUrl` callback route.
+
+### New Methods in `ShopifyService` (`services/shopify_service.py`)
+- `billing_create_subscription(plan_name, price_usd, return_url, test, is_upgrade)` — calls `appSubscriptionCreate`
+- `billing_cancel_subscription(subscription_gid)` — calls `appSubscriptionCancel`
+- `billing_get_status()` — calls `currentAppInstallation { activeSubscriptions { ... } }`
+
+### Endpoints
+
+#### `GET /api/v1/merchant/billing/plans` → `PlansResponse`
+Returns all plan definitions with `is_current` flag. No Shopify call.
+
+```json
+{
+  "plans": [
+    { "name": "free", "display_name": "Free Plan", "price_usd": 0.0, "monthly_tryon_limit": 10,
+      "features": ["10 try-ons/month", "Basic widget", "Email support"], "is_current": true },
+    { "name": "starter", "display_name": "Starter Plan", "price_usd": 9.99, "monthly_tryon_limit": 100,
+      "features": ["100 try-ons/month", "AI Studio Look", "Fit heatmap", "Analytics", "Priority support"], "is_current": false }
+  ]
+}
+```
+
+#### `GET /api/v1/merchant/billing/status` → `BillingStatusResponse`
+Returns DB plan data + live Shopify subscription info. If Shopify call fails (graceful degradation), Shopify fields are null.
+
+```json
+{
+  "plan_name": "starter",
+  "monthly_tryon_limit": 100,
+  "plan_activated_at": "2026-02-22T12:00:00",
+  "shopify_subscription_id": "gid://shopify/AppSubscription/123",
+  "subscription_status": "ACTIVE",
+  "current_period_end": "2026-03-22T12:00:00",
+  "is_test_subscription": false
+}
+```
+
+#### `POST /api/v1/merchant/billing/create-subscription`
+Creates Shopify subscription, returns `confirmationUrl`. Does NOT update DB.
+
+```http
+POST /api/v1/merchant/billing/create-subscription
+Headers: X-Store-ID: {uuid}
+{
+  "plan_name": "starter",
+  "return_url": "https://myapp.myshopify.com/app/billing/callback"
+}
+
+Response 200:
+{
+  "confirmation_url": "https://partners.shopify.com/...",
+  "shopify_subscription_id": "gid://shopify/AppSubscription/456"
+}
+
+Errors:
+  422 — unknown plan_name or plan_name == "free"
+  409 — store already on that plan
+  502 — Shopify API error
+```
+
+Behaviour:
+- `test: true` when `APP_ENV == "development"` (no real charges)
+- `replacementBehavior: APPLY_IMMEDIATELY` if upgrading between paid plans
+
+#### `POST /api/v1/merchant/billing/cancel-subscription`
+Cancels active Shopify subscription, resets store to free plan in DB.
+
+```http
+POST /api/v1/merchant/billing/cancel-subscription
+Headers: X-Store-ID: {uuid}
+(no body)
+
+Response 200:
+{ "cancelled": true, "plan_name": "free", "monthly_tryon_limit": 10 }
+
+Errors:
+  400 — already on free plan
+  502 — Shopify API error
+```
+
+#### Unchanged existing endpoints
+- `POST /api/v1/merchant/billing/activate` — called by Remix after Shopify approval callback
+- `GET /api/v1/merchant/billing/plan` — quick plan lookup from DB (no Shopify call)
+
+### Payment method & Invoices
+No Shopify API exists for these. Both link to:
+```
+https://{store.shopify_domain}/admin/settings/billing
+```
+
+---
+
 **End of Backend PRD**
