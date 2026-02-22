@@ -7,14 +7,15 @@ All merchant endpoints require the X-Store-ID header.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session as DBSession
 
 from app.core.database import get_db
-from app.models.database import Store, MerchantOnboarding, WidgetConfig
+from app.models.database import Store, MerchantOnboarding, WidgetConfig, TryOn, Product
 from app.models.schemas import (
     OnboardingStatusResponse,
     GoalsRequest,
@@ -29,6 +30,8 @@ from app.models.schemas import (
     BillingActivateRequest,
     PlanResponse,
     WidgetCheckResponse,
+    DashboardOverviewResponse,
+    WidgetConfigUpdateRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -316,6 +319,105 @@ def get_plan(store: Store = Depends(get_store)):
         monthly_tryon_limit=store.monthly_tryon_limit,
         plan_activated_at=store.plan_activated_at,
         shopify_subscription_id=store.plan_shopify_subscription_id,
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# Dashboard — Overview
+# ─────────────────────────────────────────────────────────────
+
+@merchant_router.get("/dashboard/overview", response_model=DashboardOverviewResponse)
+def get_dashboard_overview(
+    store: Store = Depends(get_store),
+    db: DBSession = Depends(get_db),
+):
+    """
+    Single call that feeds all three sections of the merchant dashboard overview screen.
+
+    Section 1 — theme button status (mirrors onboarding step 5 data)
+    Section 2 — try-on usage: count of completed try-ons in last 30 rolling days
+    Section 3 — widget scope summary: scope type + counts of enabled IDs
+    """
+    wc = store.widget_config
+
+    # ── Section 1: theme detection ────────────────────────────
+    theme_detected = wc.theme_extension_detected if wc else False
+    themes_url = f"https://{store.shopify_domain}/admin/online-store/themes"
+
+    # ── Section 2: try-on usage (rolling 30 days) ─────────────
+    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+    tryon_used = (
+        db.query(func.count(TryOn.try_on_id))
+        .join(Product, TryOn.product_id == Product.product_id)
+        .filter(
+            Product.store_id == store.store_id,
+            TryOn.processing_status == "completed",
+            TryOn.created_at >= thirty_days_ago,
+        )
+        .scalar()
+    ) or 0
+
+    # ── Section 3: widget scope summary ───────────────────────
+    scope_type = wc.scope_type if wc else "all"
+    enabled_products_count = len(wc.enabled_product_ids or []) if wc else 0
+    enabled_collections_count = len(wc.enabled_collection_ids or []) if wc else 0
+
+    return DashboardOverviewResponse(
+        theme_extension_detected=theme_detected,
+        themes_url=themes_url,
+        tryon_used_30d=tryon_used,
+        monthly_tryon_limit=store.monthly_tryon_limit,
+        plan_name=store.plan_name,
+        scope_type=scope_type,
+        enabled_collections_count=enabled_collections_count,
+        enabled_products_count=enabled_products_count,
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# Dashboard — Widget Config (post-onboarding update)
+# ─────────────────────────────────────────────────────────────
+
+@merchant_router.patch("/widget-config", response_model=WidgetScopeResponse)
+def update_widget_config(
+    body: WidgetConfigUpdateRequest,
+    store: Store = Depends(get_store),
+    db: DBSession = Depends(get_db),
+):
+    """
+    Partial update of WidgetConfig from the dashboard.
+    Unlike POST /onboarding/widget-scope, this does NOT advance onboarding_step —
+    safe to call for merchants who have already completed onboarding.
+
+    Used by:
+    - "Manage Products and Collections" save action (scope_type + ID lists)
+    - "Mark as added" theme detection button (theme_extension_detected)
+    """
+    if body.scope_type is not None and body.scope_type not in VALID_SCOPE_TYPES:
+        raise HTTPException(422, f"scope_type must be one of: {', '.join(sorted(VALID_SCOPE_TYPES))}")
+
+    wc = store.widget_config
+    if wc is None:
+        wc = WidgetConfig(store_id=store.store_id)
+        db.add(wc)
+
+    if body.scope_type is not None:
+        wc.scope_type = body.scope_type
+    if body.enabled_collection_ids is not None:
+        wc.enabled_collection_ids = body.enabled_collection_ids
+    if body.enabled_product_ids is not None:
+        wc.enabled_product_ids = body.enabled_product_ids
+    if body.theme_extension_detected is not None:
+        wc.theme_extension_detected = body.theme_extension_detected
+
+    db.commit()
+    db.refresh(wc)
+
+    logger.info(f"Widget config updated for store {store.store_id}: {body.model_dump(exclude_none=True)}")
+    return WidgetScopeResponse(
+        scope_type=wc.scope_type,
+        enabled_collection_ids=wc.enabled_collection_ids or [],
+        enabled_product_ids=wc.enabled_product_ids or [],
     )
 
 

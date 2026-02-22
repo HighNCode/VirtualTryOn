@@ -392,6 +392,29 @@ class WidgetCheckResponse(BaseModel):
     enabled: bool
 
 
+class DashboardOverviewResponse(BaseModel):
+    """All data needed to render the merchant dashboard overview screen"""
+    # Section 1 — theme button status
+    theme_extension_detected: bool
+    themes_url: str
+    # Section 2 — try-on usage (rolling 30 days)
+    tryon_used_30d: int
+    monthly_tryon_limit: int
+    plan_name: str
+    # Section 3 — widget scope summary
+    scope_type: str
+    enabled_collections_count: int
+    enabled_products_count: int
+
+
+class WidgetConfigUpdateRequest(BaseModel):
+    """Partial update of WidgetConfig from the dashboard (does not touch onboarding_step)"""
+    scope_type: Optional[str] = None
+    enabled_collection_ids: Optional[List[str]] = None
+    enabled_product_ids: Optional[List[str]] = None
+    theme_extension_detected: Optional[bool] = None
+
+
 # ============================================================================
 # Error Schemas
 # ============================================================================
