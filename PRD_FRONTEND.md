@@ -3318,4 +3318,264 @@ export async function loader({ request }) {
 
 ---
 
+## Settings → Privacy Screen
+
+**Added:** 2026-02-22
+
+### Route
+`app/routes/app.settings.privacy.tsx` — child of Settings layout.
+
+### Purpose
+Static informational screen explaining the app's privacy practices to the merchant. No API calls, no state — pure content.
+
+### Layout (5 policy cards stacked vertically)
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Privacy Policy                                     │
+│ ─────────────────────────────────────────────────── │
+│  ┌───────────────────────────────────────────────┐  │
+│  │  📸  Data We Collect                          │  │
+│  │  • Customer-uploaded photos (front/side pose) │  │
+│  │  • Body measurements derived from photos      │  │
+│  │  • Session identifiers (anonymous)            │  │
+│  │  • Try-on results and preferences             │  │
+│  └───────────────────────────────────────────────┘  │
+│  ┌───────────────────────────────────────────────┐  │
+│  │  🔒  How We Use Your Data                     │  │
+│  │  • Photos are processed to extract body       │  │
+│  │    measurements using AI models               │  │
+│  │  • Measurements are used solely for size      │  │
+│  │    recommendations and virtual try-on         │  │
+│  │  • No data is sold to third parties           │  │
+│  │  • Photos are never used for advertising      │  │
+│  └───────────────────────────────────────────────┘  │
+│  ┌───────────────────────────────────────────────┐  │
+│  │  ⏱️  Data Retention                           │  │
+│  │  • Customer photos: deleted within 24 hours   │  │
+│  │  • Measurements: retained for 30 days to      │  │
+│  │    avoid re-upload on return visits           │  │
+│  │  • Try-on images: cached for 24 hours then    │  │
+│  │    permanently deleted                        │  │
+│  │  • Merchants can request immediate deletion   │  │
+│  │    by contacting support                      │  │
+│  └───────────────────────────────────────────────┘  │
+│  ┌───────────────────────────────────────────────┐  │
+│  │  🌍  Third-Party Services                     │  │
+│  │  • Google Vertex AI (Gemini) — used for       │  │
+│  │    virtual try-on image generation            │  │
+│  │  • Image data is sent to Google's API for     │  │
+│  │    processing and is subject to Google's      │  │
+│  │    data processing terms                      │  │
+│  │  • No other third-party services receive      │  │
+│  │    customer image data                        │  │
+│  └───────────────────────────────────────────────┘  │
+│  ┌───────────────────────────────────────────────┐  │
+│  │  ⚖️  GDPR & CCPA Compliance                   │  │
+│  │  • Customers may request access to or         │  │
+│  │    deletion of their data at any time         │  │
+│  │  • No personally identifiable information     │  │
+│  │    is linked to uploaded photos by default    │  │
+│  │  • Merchants are responsible for updating     │  │
+│  │    their store's own privacy policy to        │  │
+│  │    disclose use of this app                   │  │
+│  │  • Full privacy policy: [link TBD]            │  │
+│  └───────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────┘
+```
+
+### Component spec (`app/routes/app.settings.privacy.tsx`)
+
+```tsx
+import { Page, BlockStack, Card, Text, List } from "@shopify/polaris";
+
+const PRIVACY_SECTIONS = [
+  {
+    title: "Data We Collect",
+    icon: "📸",
+    points: [
+      "Customer-uploaded photos (front and side pose)",
+      "Body measurements derived from those photos using AI",
+      "Anonymous session identifiers",
+      "Try-on results and style preferences",
+    ],
+  },
+  {
+    title: "How We Use Your Data",
+    icon: "🔒",
+    points: [
+      "Photos are processed solely to extract body measurements",
+      "Measurements power size recommendations and virtual try-on",
+      "No customer data is sold to or shared with third parties for marketing",
+      "Photos are never used for advertising or model training without explicit consent",
+    ],
+  },
+  {
+    title: "Data Retention",
+    icon: "⏱️",
+    points: [
+      "Customer photos are deleted from our servers within 24 hours of upload",
+      "Measurements are retained for 30 days to avoid repeat uploads on return visits",
+      "Try-on images are cached for 24 hours, then permanently deleted",
+      "Merchants can request immediate deletion of all store data by contacting support",
+    ],
+  },
+  {
+    title: "Third-Party Services",
+    icon: "🌍",
+    points: [
+      "Google Vertex AI (Gemini) is used for virtual try-on image generation",
+      "Image data is transmitted to Google's API and subject to Google's data processing terms",
+      "No other third-party services receive customer image or measurement data",
+    ],
+  },
+  {
+    title: "GDPR & CCPA Compliance",
+    icon: "⚖️",
+    points: [
+      "Customers may request access to or deletion of their data at any time",
+      "No personally identifiable information is linked to uploaded photos by default",
+      "Merchants are responsible for disclosing use of this app in their store's own privacy policy",
+      "For the full privacy policy, contact support@[yourdomain].com",
+    ],
+  },
+];
+
+export default function PrivacySettings() {
+  return (
+    <Page title="Privacy">
+      <BlockStack gap="400">
+        {PRIVACY_SECTIONS.map(({ title, icon, points }) => (
+          <Card key={title}>
+            <BlockStack gap="300">
+              <Text variant="headingMd">{icon}  {title}</Text>
+              <List type="bullet">
+                {points.map(point => (
+                  <List.Item key={point}>{point}</List.Item>
+                ))}
+              </List>
+            </BlockStack>
+          </Card>
+        ))}
+      </BlockStack>
+    </Page>
+  );
+}
+```
+
+### Behaviour rules
+- Fully static — no loader, no action, no API calls
+- Content is defined in the `PRIVACY_SECTIONS` constant — update copy there as policy evolves
+- The final card's "full privacy policy" link should be updated to the actual hosted policy URL before launch
+
+---
+
+## Settings → Support Screen
+
+**Added:** 2026-02-22
+
+### Route
+`app/routes/app.settings.support.tsx` — child of Settings layout.
+
+### Purpose
+Two-card screen giving the merchant two ways to get help: email (opens their default mail client) and a booking link (opens a Cal.com / Calendly page in a new tab).
+
+### Layout
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Support                                            │
+│ ─────────────────────────────────────────────────── │
+│  ┌───────────────────────────────────────────────┐  │
+│  │  📧  Email Support                            │  │
+│  │                                               │  │
+│  │  Have a question or need help setting up      │  │
+│  │  your store? Our team typically responds      │  │
+│  │  within 24 hours.                             │  │
+│  │                                               │  │
+│  │  [ Email us at support@yourdomain.com ]       │  │
+│  │    (opens default mail client)                │  │
+│  └───────────────────────────────────────────────┘  │
+│  ┌───────────────────────────────────────────────┐  │
+│  │  📅  Book a Call                              │  │
+│  │                                               │  │
+│  │  Want a live walkthrough or have a complex    │  │
+│  │  setup question? Book a free 30-minute call   │  │
+│  │  with our team.                               │  │
+│  │                                               │  │
+│  │  [ Book a time slot → ]                       │  │
+│  │    (opens booking page in new tab)            │  │
+│  └───────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────┘
+```
+
+### Component spec (`app/routes/app.settings.support.tsx`)
+
+```tsx
+import { Page, BlockStack, Card, Text, Button, InlineStack } from "@shopify/polaris";
+
+// ── Update these two constants before launch ─────────────────
+const SUPPORT_EMAIL = "support@yourdomain.com";
+const BOOKING_URL   = "https://cal.com/yourusername/30min";  // or Calendly equivalent
+// ─────────────────────────────────────────────────────────────
+
+export default function SupportSettings() {
+  return (
+    <Page title="Support">
+      <BlockStack gap="400">
+
+        {/* Card 1 — Email */}
+        <Card>
+          <BlockStack gap="400">
+            <Text variant="headingMd">📧  Email Support</Text>
+            <Text tone="subdued">
+              Have a question or need help setting up your store?
+              Our team typically responds within 24 hours.
+            </Text>
+            <InlineStack>
+              <Button
+                url={`mailto:${SUPPORT_EMAIL}`}
+                variant="primary"
+              >
+                Email us at {SUPPORT_EMAIL}
+              </Button>
+            </InlineStack>
+          </BlockStack>
+        </Card>
+
+        {/* Card 2 — Book a call */}
+        <Card>
+          <BlockStack gap="400">
+            <Text variant="headingMd">📅  Book a Call</Text>
+            <Text tone="subdued">
+              Want a live walkthrough or have a complex setup question?
+              Book a free 30-minute call with our team.
+            </Text>
+            <InlineStack>
+              <Button
+                url={BOOKING_URL}
+                external          // opens in new tab
+                variant="primary"
+              >
+                Book a time slot
+              </Button>
+            </InlineStack>
+          </BlockStack>
+        </Card>
+
+      </BlockStack>
+    </Page>
+  );
+}
+```
+
+### Behaviour rules
+- Fully static — no loader, no action, no API calls
+- `mailto:` link opens the merchant's default email client with the To field pre-filled
+- Booking link uses Polaris `Button` with `external` prop → opens in a new tab (not an iframe)
+- Replace `SUPPORT_EMAIL` and `BOOKING_URL` constants before launch
+- Polaris `Button` with `url` prop renders as an `<a>` tag — no JS required for either interaction
+
+---
+
 **End of Frontend PRD**
