@@ -3526,7 +3526,7 @@ Files are saved to `backend/static/` and committed to git for deployment.
 | Customer studio look | `GET /tryon/studio-backgrounds?gender=` | gender only |
 | Merchant try-on-model | `GET /merchant/photoshoot/models?gender=&age=&body_type=` | gender + age + body_type |
 
-Migrated studio background images have `image_path` prefixed with `"studio/"` (e.g. `"studio/female/studio_1.jpg"`). New uploads go to `"photoshoot/{gender}/{file}"`. All paths are relative to `backend/static/`.
+All `image_path` values in `photoshoot_models` are relative to `backend/static/` (e.g. `"photoshoot/female/model_1.jpg"`). New uploads go to `static/photoshoot/{gender}/`.
 
 ---
 
@@ -3534,9 +3534,7 @@ Migrated studio background images have `image_path` prefixed with `"studio/"` (e
 
 ```
 backend/static/
-├── studio/                ← migrated studio_backgrounds images (paths: "studio/female/…")
-│   ├── female/, male/, unisex/
-├── photoshoot/            ← new full-body model photos (paths: "photoshoot/female/…")
+├── photoshoot/            ← full-body model photos (paths: "photoshoot/female/…")
 │   ├── female/, male/, unisex/
 ├── photoshoot_faces/      ← face/headshot photos for model swap (paths: "photoshoot_faces/female/…")
 │   ├── female/, male/
