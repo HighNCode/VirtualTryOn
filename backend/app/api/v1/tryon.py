@@ -13,7 +13,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session as DBSession
 
 from app.core.database import get_db
-from app.models.database import Session, Product, TryOn, StudioBackground
+from app.models.database import Session, Product, TryOn, PhotoshootModel
 from app.models.schemas import (
     TryOnGenerateRequest, TryOnStatusResponse,
     StudioBackgroundResponse, StudioTryOnRequest,
@@ -186,14 +186,16 @@ async def list_studio_backgrounds(
     db: DBSession = Depends(get_db),
 ):
     """
-    List available studio background images, filtered by gender.
+    List available model photos for the studio look feature, filtered by gender.
 
-    Returns active backgrounds for the given gender plus all "unisex" backgrounds.
+    Returns active models for the given gender plus all "unisex" models.
     Frontend should randomize display order client-side.
+
+    Note: Backed by photoshoot_models table (unified model/person photo library).
     """
-    backgrounds = db.query(StudioBackground).filter(
-        StudioBackground.is_active == True,
-        StudioBackground.gender.in_([gender, "unisex"]),
+    backgrounds = db.query(PhotoshootModel).filter(
+        PhotoshootModel.is_active == True,
+        PhotoshootModel.gender.in_([gender, "unisex"]),
     ).all()
 
     return [
@@ -211,15 +213,15 @@ async def get_studio_background_image(
     bg_id: str,
     db: DBSession = Depends(get_db),
 ):
-    """Serve a studio background image from static files."""
+    """Serve a model photo from static files (image_path is relative to backend/static/)."""
     import os
 
-    bg = db.query(StudioBackground).filter_by(id=bg_id, is_active=True).first()
+    bg = db.query(PhotoshootModel).filter_by(id=bg_id, is_active=True).first()
     if not bg:
         raise HTTPException(404, "Studio background not found")
 
-    static_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "static", "studio")
-    file_path = os.path.join(static_dir, bg.image_path)
+    static_root = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "static")
+    file_path = os.path.join(static_root, bg.image_path)
 
     if not os.path.exists(file_path):
         raise HTTPException(404, "Studio background image file not found")
@@ -227,7 +229,7 @@ async def get_studio_background_image(
     with open(file_path, "rb") as f:
         image_bytes = f.read()
 
-    media_type = "image/jpeg" if file_path.endswith(".jpg") else "image/png"
+    media_type = "image/jpeg" if file_path.lower().endswith(".jpg") else "image/png"
     return Response(content=image_bytes, media_type=media_type)
 
 

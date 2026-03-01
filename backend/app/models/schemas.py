@@ -476,6 +476,81 @@ class CancelSubscriptionResponse(BaseModel):
 
 
 # ============================================================================
+# AI Photoshoot Schemas (Merchant-Facing)
+# ============================================================================
+
+class PhotoshootModelResponse(BaseModel):
+    """A full-body model photo from the unified library (customer studio look + merchant try-on)"""
+    id: UUID
+    gender: str
+    age: Optional[str] = None         # "18-25" | "26-35" | "36-45" | "45+"
+    body_type: Optional[str] = None   # "slim" | "athletic" | "regular" | "plus"
+    image_url: str                    # /api/v1/merchant/photoshoot/models/{id}/image
+
+    class Config:
+        from_attributes = True
+
+
+class PhotoshootModelFaceResponse(BaseModel):
+    """A face/headshot photo from the model face library (used for model swap)"""
+    id: UUID
+    gender: str
+    age: Optional[str] = None         # "18-25" | "26-35" | "36-45" | "45+"
+    skin_tone: Optional[str] = None   # "fair" | "light" | "medium" | "tan" | "dark"
+    image_url: str                    # /api/v1/merchant/photoshoot/model-faces/{id}/image
+
+    class Config:
+        from_attributes = True
+
+
+class GhostMannequinRefResponse(BaseModel):
+    """A reference pose image for a clothing type (front/side/back) shown in ghost mannequin UI"""
+    id: UUID
+    clothing_type: str   # "tops" | "bottoms" | "dresses" | "outerwear"
+    pose: str            # "front" | "side" | "back"
+    image_url: str       # /api/v1/merchant/photoshoot/ghost-mannequin-refs/{id}/image
+
+    class Config:
+        from_attributes = True
+
+
+class GhostMannequinRequest(BaseModel):
+    """Start a ghost mannequin job — 2 product images from the same Shopify product"""
+    image1_url: str = Field(..., description="First product image URL (Shopify CDN)")
+    image2_url: str = Field(..., description="Second product image URL (Shopify CDN)")
+    shopify_product_gid: str = Field(..., description="Shopify product GID e.g. gid://shopify/Product/123")
+    clothing_type: str = Field(..., description="Garment type: tops | bottoms | dresses | outerwear")
+
+
+class PhotoshootJobResponse(BaseModel):
+    """Photoshoot job status response — returned by POST (202) and GET /status"""
+    job_id: UUID
+    job_type: str
+    status: str
+    progress: Optional[int] = None
+    message: Optional[str] = None
+    result_image_url: Optional[str] = None     # /api/v1/merchant/photoshoot/jobs/{id}/result
+    processing_time_seconds: Optional[float] = None
+    error: Optional[str] = None
+    retry_allowed: bool = False
+
+    class Config:
+        from_attributes = True
+
+
+class PhotoshootApproveRequest(BaseModel):
+    """Approve a completed photoshoot job and push the image to the Shopify product"""
+    alt_text: Optional[str] = Field(None, description="Alt text for the Shopify product image")
+
+
+class PhotoshootApproveResponse(BaseModel):
+    """Result of approving a photoshoot job"""
+    approved: bool
+    shopify_media_id: Optional[str] = None   # GID from Shopify after upload
+    message: str
+
+
+# ============================================================================
 # Error Schemas
 # ============================================================================
 

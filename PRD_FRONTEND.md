@@ -3578,4 +3578,301 @@ export default function SupportSettings() {
 
 ---
 
+## AI Photoshoot (Merchant Admin Feature)
+
+**Route group:** `app/routes/app.photoshoot.*`
+**Nav entry:** "AI Photoshoot" in the main sidebar nav
+
+### Landing Page — `app/routes/app.photoshoot.tsx`
+
+Three feature cards in a Polaris `Grid` (3-column on desktop, stacked on mobile):
+
+| Card | Icon | Title | Body |
+|---|---|---|---|
+| Ghost Mannequin | 👻 | Ghost Mannequin | Turn any product photo into a professional ghost mannequin shot |
+| Try-On for Model | 👗 | Try-On for Model | Place your product on a model — use our library or upload your own |
+| Model Swap | 🔄 | Model Swap | Swap the model in an existing product photo while keeping the garment |
+
+Each card has a primary `Button` that navigates to the relevant sub-route.
+
+No loader, no API calls on the landing page.
+
+---
+
+### Common UX Pattern (all three sub-screens)
+
+Every sub-screen follows the same flow:
+
+```
+Step 1: Pick product + image  →  Step 2: Second image input (if needed)  →  Step 3: Generate  →  Step 4: Preview + Approve/Download
+```
+
+#### Step 1 — Product & Image Picker
+- `Button` labelled "Select Product" → opens Shopify ResourcePicker (`shopify.resourcePicker({ type: 'product', multiple: false })`)
+- On selection: display product title + thumbnail grid of all its images (Polaris `Thumbnail` components in a flex row)
+- Merchant clicks a thumbnail to select it — selected state shows a blue border/checkmark overlay
+- Selected image URL is stored in state as `selectedImageUrl`
+
+#### Step 2 — Second Image (Try-On & Model Swap only)
+Two tabs or a segmented control:
+- **"Use model library"** — calls `GET /api/v1/merchant/photoshoot/models?gender=unisex` (or filtered), shows a thumbnail grid, merchant picks one
+- **"Upload photo"** — `DropZone` component (Polaris), accepts JPEG/PNG, max 10 MB
+
+#### Step 3 — Generate Button
+- Disabled until required images are selected
+- On click: calls the relevant `POST` endpoint
+  - Ghost mannequin: JSON body
+  - Try-On / Model Swap: `multipart/form-data` (use `fetch` with `FormData`, not `fetcher.submit`)
+- Returns `{ job_id, status: "queued" }` → start polling
+
+#### Step 3b — Polling
+- `useEffect` with `setInterval` every 3 seconds calling `GET /jobs/{job_id}/status`
+- Show Polaris `ProgressBar` (indeterminate spinner) + status message during processing
+- Stop polling when `status === "completed"` or `status === "failed"`
+- Estimated wait: 30–60 seconds
+
+#### Step 4 — Preview
+- Side-by-side layout: original selected image (left) vs generated result (right)
+- Result image loaded from `result_image_url` (e.g. `/api/v1/merchant/photoshoot/jobs/{job_id}/result`)
+- Two action buttons:
+  - **"Regenerate"** — clears result, re-POSTs with same inputs
+  - **"Approve & Push to Shopify"** → calls `POST /jobs/{job_id}/approve` with optional alt text (Polaris `TextField` below the result)
+  - **"Download"** — `<a href={result_image_url} download>` button
+- On approve success: show Polaris `Toast` "Image added to your product gallery!" + disable the Approve button
+
+---
+
+### Sub-Route: Ghost Mannequin — `app/routes/app.photoshoot.ghost-mannequin.tsx`
+
+**No loader.** All state is client-side.
+
+**State:**
+```ts
+selectedProduct: ShopifyProduct | null
+image1Url: string | null
+image2Url: string | null
+jobId: string | null
+jobStatus: "idle" | "generating" | "completed" | "failed"
+resultImageUrl: string | null
+altText: string
+```
+
+**Layout:**
+- `Page` title "Ghost Mannequin"
+- `Card` "Select Product Images" → ResourcePicker + image grid
+  - Merchant selects image 1 (shown with label "Image 1 ✓"), then image 2 (shown with label "Image 2 ✓")
+  - Clicking the same image deselects it; the two slots fill in order of click
+- `Card` "Generate" → `Button` "Create Ghost Mannequin" (disabled until both images selected)
+- Result card (shown after completion)
+
+**API call:**
+```ts
+await fetch('/api/v1/merchant/photoshoot/ghost-mannequin', {
+  method: 'POST',
+  headers: { 'X-Store-ID': storeId, 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    image1_url: image1Url,
+    image2_url: image2Url,
+    shopify_product_gid: selectedProduct.id,
+  }),
+});
+```
+
+---
+
+### Sub-Route: Try-On for Model — `app/routes/app.photoshoot.try-on-model.tsx`
+
+**State:** `selectedProduct`, `productImageUrl`, `modelSource: "library" | "upload"`, `modelLibraryId`, `uploadedModelFile`, `jobId`, `jobStatus`, `resultImageUrl`, `altText`
+
+**Layout:**
+- `Card` "1. Select Product Image" → ResourcePicker + single-select image grid
+- `Card` "2. Choose Model" → Polaris `Tabs` with "Model Library" and "Upload Photo"
+  - Library tab: fetches `GET /api/v1/merchant/photoshoot/models?gender=unisex`, shows thumbnail grid
+  - Upload tab: Polaris `DropZone`
+- `Card` "3. Generate" → `Button` "Generate Try-On" (disabled until step 1 & 2 complete)
+- Result card
+
+**API call (multipart):**
+```ts
+const form = new FormData();
+form.append('shopify_product_gid', selectedProduct.id);
+form.append('product_image_url', productImageUrl);
+if (modelSource === 'library') {
+  form.append('model_library_id', modelLibraryId);
+} else {
+  form.append('model_image', uploadedModelFile);
+}
+await fetch('/api/v1/merchant/photoshoot/try-on-model', {
+  method: 'POST',
+  headers: { 'X-Store-ID': storeId },   // NO Content-Type header — let browser set multipart boundary
+  body: form,
+});
+```
+
+---
+
+### Sub-Route: Model Swap — `app/routes/app.photoshoot.model-swap.tsx`
+
+**State:** `selectedProduct`, `originalImageUrl`, `newModelSource: "library" | "upload"`, `newModelLibraryId`, `uploadedNewModelFile`, `jobId`, `jobStatus`, `resultImageUrl`, `altText`
+
+**Layout:**
+- `Card` "1. Select Original Product Image" → ResourcePicker + single-select image grid
+  - Note below card: *"Select an image that shows a model wearing the product"*
+- `Card` "2. Choose Replacement Model" → Polaris `Tabs` (Library / Upload)
+- `Card` "3. Generate" → `Button` "Swap Model"
+- Result card
+
+**API call (multipart):**
+```ts
+const form = new FormData();
+form.append('shopify_product_gid', selectedProduct.id);
+form.append('original_image_url', originalImageUrl);
+if (newModelSource === 'library') {
+  form.append('new_model_library_id', newModelLibraryId);
+} else {
+  form.append('new_model_image', uploadedNewModelFile);
+}
+await fetch('/api/v1/merchant/photoshoot/model-swap', {
+  method: 'POST',
+  headers: { 'X-Store-ID': storeId },
+  body: form,
+});
+```
+
+---
+
+### Approve Flow Detail
+
+When merchant clicks "Approve & Push to Shopify":
+
+```ts
+// Optional alt text from TextField
+const res = await fetch(`/api/v1/merchant/photoshoot/jobs/${jobId}/approve`, {
+  method: 'POST',
+  headers: { 'X-Store-ID': storeId, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ alt_text: altText || undefined }),
+});
+const data = await res.json();
+if (data.approved) {
+  shopify.toast.show("Image added to your product gallery!");
+  setApproved(true);  // disable Approve button
+}
+```
+
+**Error cases:**
+- `410 Gone` — image expired (24h TTL): show banner "This result has expired. Please regenerate."
+- `502` — Shopify error: show banner with error message
+
+---
+
+### Polling Implementation
+
+```ts
+useEffect(() => {
+  if (!jobId || jobStatus !== "generating") return;
+  const interval = setInterval(async () => {
+    const res = await fetch(`/api/v1/merchant/photoshoot/jobs/${jobId}/status`, {
+      headers: { 'X-Store-ID': storeId },
+    });
+    const data = await res.json();
+    if (data.status === "completed") {
+      setJobStatus("completed");
+      setResultImageUrl(data.result_image_url);
+      clearInterval(interval);
+    } else if (data.status === "failed") {
+      setJobStatus("failed");
+      setErrorMessage(data.error || "Generation failed");
+      clearInterval(interval);
+    }
+  }, 3000);
+  return () => clearInterval(interval);
+}, [jobId, jobStatus]);
+```
+
+---
+
+### Notes
+
+- `X-Store-ID` header must be sent on all authenticated calls; retrieve from `useLoaderData` (populated by `GET /merchant/onboarding/status` or session)
+- Do NOT send `Content-Type: application/json` on multipart requests — the browser sets the boundary automatically
+- The ResourcePicker is opened via `shopify.resourcePicker(...)` from `useAppBridge()` (App Bridge v4 hook)
+- Model library thumbnails: use `<img src={model.image_url} />` where `image_url` is `/api/v1/merchant/photoshoot/models/{id}/image`
+- For the Download button use `<a href={resultImageUrl} download="ai-photoshoot-result.jpg">` — this works because the endpoint serves image bytes with no auth check
+
+---
+
+## AI Photoshoot — Extended Image Library UI (Segment 10b)
+
+The following updates extend the AI Photoshoot screens with richer model/face filtering and ghost mannequin reference images.
+
+---
+
+### Ghost Mannequin Screen — Extended
+
+**New field: Clothing Type dropdown**
+- Label: "Clothing Type"
+- Options: Tops | Bottoms | Dresses | Outerwear
+- Required (shown before the image picker)
+- Sends `clothing_type` in the `POST /merchant/photoshoot/ghost-mannequin` body
+
+**New field: Reference Pose Images**
+- After selecting a clothing type, call `GET /merchant/photoshoot/ghost-mannequin-refs?clothing_type={type}` (requires `X-Store-ID`)
+- Display the 3 returned reference images (front/side/back) as a small gallery labelled "Example poses for [type]"
+- These are read-only reference images — they help the merchant understand which product photos work best
+- Each image is served from `/api/v1/merchant/photoshoot/ghost-mannequin-refs/{id}/image`
+
+**Updated flow:**
+1. Merchant selects Clothing Type → reference poses load dynamically below
+2. Merchant selects 2 product images via ResourcePicker
+3. POST includes `clothing_type` in the JSON body
+
+---
+
+### Try-On for Model Screen — Extended
+
+**New filter controls:**
+
+```
+Gender:    [Male] [Female] [Unisex]   ← existing
+Age:       [All] [18-25] [26-35] [36-45] [45+]    ← NEW
+Body Type: [All] [Slim] [Athletic] [Regular] [Plus] ← NEW
+```
+
+- When any filter changes, re-fetch `GET /merchant/photoshoot/models?gender=&age=&body_type=` with the active values
+- Omit `age` and `body_type` params when "All" is selected (so they default to no filter)
+- Model grid rendering is unchanged — still shows thumbnails from `model.image_url`
+
+---
+
+### Model Swap Screen — Reworked (Face-Only Swap)
+
+**Concept change:** Model swap now replaces only the face in the original product photo. The body, pose, clothing, and background remain identical. The merchant picks a replacement face from the face library (or uploads their own headshot).
+
+**Updated input fields:**
+
+| Field | Type | Notes |
+|---|---|---|
+| Product image | URL (ResourcePicker) | Image of original model wearing the product |
+| Replacement face | Library picker OR upload | Either `face_library_id` (from face library) or `face_image` (file upload) |
+
+**Face Library UI:**
+- Filters: Gender (Male/Female — no unisex), Age (optional), Skin Tone (optional: Fair/Light/Medium/Tan/Dark)
+- API: `GET /merchant/photoshoot/model-faces?gender=&age=&skin_tone=` (requires `X-Store-ID`)
+- Each face is served from `/api/v1/merchant/photoshoot/model-faces/{id}/image`
+- Same thumbnail grid pattern as the full-body model library
+
+**Form submission (multipart/form-data):**
+```
+shopify_product_gid  (string)
+original_image_url   (string — from ResourcePicker)
+face_library_id      (string UUID — if face selected from library)
+face_image           (file — if headshot uploaded)
+```
+Exactly one of `face_library_id` or `face_image` must be provided.
+
+**Result description label:**
+Show "Only the face will be replaced. Body, clothing, and background remain unchanged." near the submit button.
+
+---
+
 **End of Frontend PRD**

@@ -199,20 +199,8 @@ class UserMeasurement(Base, TimestampMixin):
         return f"<UserMeasurement {self.measurement_id}>"
 
 
-class StudioBackground(Base, TimestampMixin):
-    """
-    Pre-defined studio/environment background images for try-on styling.
-    Actual image files stored in backend/static/studio/{gender}/.
-    """
-    __tablename__ = "studio_backgrounds"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    gender = Column(String(10), nullable=False)        # "male", "female", "unisex"
-    image_path = Column(String(300), nullable=False)   # Relative path: "male/studio_1.jpg"
-    is_active = Column(Boolean, default=True)
-
-    def __repr__(self):
-        return f"<StudioBackground {self.id} - {self.gender}>"
+# StudioBackground table was merged into photoshoot_models (migration e5f6g7h8i9j0 → f6g7h8i9j0k1).
+# All model/person photos now live in photoshoot_models regardless of use context.
 
 
 class TryOn(Base, TimestampMixin):
@@ -235,13 +223,14 @@ class TryOn(Base, TimestampMixin):
     completed_at = Column(DateTime)
 
     # Studio look fields
-    studio_background_id = Column(UUID(as_uuid=True), ForeignKey('studio_backgrounds.id'), nullable=True)
+    # studio_background_id now references photoshoot_models.id (migrated from studio_backgrounds)
+    studio_background_id = Column(UUID(as_uuid=True), ForeignKey('photoshoot_models.id'), nullable=True)
     parent_try_on_id = Column(UUID(as_uuid=True), ForeignKey('try_ons.try_on_id'), nullable=True)
 
     # Relationships
     measurement = relationship("UserMeasurement", back_populates="try_ons")
     product = relationship("Product", back_populates="try_ons")
-    studio_background = relationship("StudioBackground")
+    studio_background = relationship("PhotoshootModel", foreign_keys=[studio_background_id])
     parent_try_on = relationship("TryOn", remote_side="TryOn.try_on_id")
 
     def __repr__(self):
@@ -332,6 +321,93 @@ class DataDeletionQueue(Base, TimestampMixin):
 
     def __repr__(self):
         return f"<DataDeletionQueue {self.store_id} - {self.status}>"
+
+
+class PhotoshootModel(Base, TimestampMixin):
+    """
+    Unified model/person photo library.
+    Serves both customer studio look (random by gender) and merchant try-on (full filters).
+    image_path is relative to backend/static/ root, e.g. "photoshoot/female/model_1.jpg"
+    or "studio/male/studio_1.jpg" for records migrated from the old studio_backgrounds table.
+    """
+    __tablename__ = "photoshoot_models"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    gender = Column(String(10), nullable=False)        # "male", "female", "unisex"
+    age = Column(String(10), nullable=True)            # "18-25" | "26-35" | "36-45" | "45+"
+    body_type = Column(String(20), nullable=True)      # "slim" | "athletic" | "regular" | "plus"
+    image_path = Column(String(300), nullable=False)   # Relative to static/: "photoshoot/female/model_1.jpg"
+    is_active = Column(Boolean, default=True)
+
+    def __repr__(self):
+        return f"<PhotoshootModel {self.id} - {self.gender}>"
+
+
+class PhotoshootModelFace(Base, TimestampMixin):
+    """
+    Face/headshot photos used for the model swap feature (face-only replacement).
+    image_path is relative to backend/static/ root, e.g. "photoshoot_faces/female/face_1.jpg".
+    """
+    __tablename__ = "photoshoot_model_faces"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    gender = Column(String(10), nullable=False)        # "male" | "female"
+    age = Column(String(10), nullable=True)            # "18-25" | "26-35" | "36-45" | "45+"
+    skin_tone = Column(String(10), nullable=True)      # "fair" | "light" | "medium" | "tan" | "dark"
+    image_path = Column(String(300), nullable=False)   # Relative to static/: "photoshoot_faces/female/face_1.jpg"
+    is_active = Column(Boolean, default=True)
+
+    def __repr__(self):
+        return f"<PhotoshootModelFace {self.id} - {self.gender}>"
+
+
+class GhostMannequinRef(Base, TimestampMixin):
+    """
+    Reference pose images (front/side/back) for each clothing type, shown in the
+    ghost mannequin UI to guide the merchant on what angles to photograph.
+    12 rows total: 4 clothing types × 3 poses.
+    image_path relative to backend/static/ root: "ghost_mannequin/tops/front.jpg".
+    """
+    __tablename__ = "ghost_mannequin_refs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    clothing_type = Column(String(20), nullable=False)  # "tops" | "bottoms" | "dresses" | "outerwear"
+    pose = Column(String(10), nullable=False)            # "front" | "side" | "back"
+    image_path = Column(String(300), nullable=False)     # "ghost_mannequin/tops/front.jpg"
+
+    def __repr__(self):
+        return f"<GhostMannequinRef {self.clothing_type}/{self.pose}>"
+
+
+class PhotoshootJob(Base, TimestampMixin):
+    """
+    AI Photoshoot generation jobs (merchant-facing).
+    Covers ghost mannequin, try-on for model, and model swap.
+    """
+    __tablename__ = "photoshoot_jobs"
+    __table_args__ = (
+        Index('idx_photoshoot_jobs_store', 'store_id'),
+        Index('idx_photoshoot_jobs_status', 'processing_status'),
+    )
+
+    job_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    store_id = Column(UUID(as_uuid=True), ForeignKey('stores.store_id', ondelete='CASCADE'), nullable=False)
+    job_type = Column(String(20), nullable=False)
+    # values: 'ghost_mannequin' | 'try_on_model' | 'model_swap'
+    shopify_product_gid = Column(String(255), nullable=False)  # e.g. gid://shopify/Product/123
+    processing_status = Column(String(20), default='queued', nullable=False)
+    # values: 'queued' | 'processing' | 'completed' | 'failed'
+    result_cache_key = Column(String(200), nullable=True)   # Redis key for result image
+    processing_time_seconds = Column(Float, nullable=True)
+    error_message = Column(Text, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    approved_at = Column(DateTime, nullable=True)
+    shopify_media_id = Column(String(255), nullable=True)   # GID returned by Shopify after approve
+
+    store = relationship("Store")
+
+    def __repr__(self):
+        return f"<PhotoshootJob {self.job_id} - {self.job_type} - {self.processing_status}>"
 
 
 class MerchantOnboarding(Base, TimestampMixin):

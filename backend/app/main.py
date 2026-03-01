@@ -15,7 +15,7 @@ from app.core.database import check_db_connection
 from app.core.redis import check_redis_connection
 
 # Import API routers
-from app.api.v1 import auth, products, webhooks, sessions, measurements, recommendations, heatmap, tryon, admin, merchant
+from app.api.v1 import auth, products, webhooks, sessions, measurements, recommendations, heatmap, tryon, admin, merchant, photoshoot
 
 # Configure logging
 logging.basicConfig(
@@ -75,6 +75,7 @@ app.include_router(tryon.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(merchant.merchant_router, prefix="/api/v1")
 app.include_router(merchant.widget_router, prefix="/api/v1")
+app.include_router(photoshoot.router, prefix="/api/v1")
 
 
 # Root endpoint

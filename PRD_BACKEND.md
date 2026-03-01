@@ -3337,4 +3337,227 @@ https://{store.shopify_domain}/admin/settings/billing
 
 ---
 
+## Segment 10 — AI Photoshoot (Merchant-Facing)
+
+**Purpose:** Allow merchants to generate professional product imagery using AI directly from the Shopify admin dashboard. Three features share a common backend pattern.
+
+### AI Provider
+Google Vertex AI (Gemini) — same model already used for customer try-ons (`TRYON_MODEL`). No new API credentials needed.
+
+### New Scope Required
+`write_products` added to `SHOPIFY_SCOPES`. Merchants who installed before this segment must reinstall/reauthorize to grant this scope (needed for `productCreateMedia`).
+
+### New Config Variable
+`PUBLIC_URL` (env var) — base URL of this backend, e.g. `https://your-app.railway.app`. Used to construct the result image URL that Shopify fetches during approval. Defaults to `http://localhost:8000` for dev.
+
+---
+
+### Database
+
+#### `photoshoot_models`
+Pre-defined model photos served from `backend/static/photoshoot/{gender}/`.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID PK | |
+| gender | String(10) | "male" / "female" / "unisex" |
+| image_path | String(300) | Relative path e.g. "female/model_1.jpg" |
+| is_active | Boolean | Soft-delete |
+| created_at / updated_at | DateTime | |
+
+#### `photoshoot_jobs`
+One record per generation job. Status lifecycle: `queued → processing → completed / failed`.
+
+| Column | Type | Notes |
+|---|---|---|
+| job_id | UUID PK | |
+| store_id | UUID FK → stores | CASCADE delete |
+| job_type | String(20) | "ghost_mannequin" / "try_on_model" / "model_swap" |
+| shopify_product_gid | String(255) | Full Shopify GID for the approve step |
+| processing_status | String(20) | queued / processing / completed / failed |
+| result_cache_key | String(200) | Redis key: `photoshoot:{job_id}` |
+| processing_time_seconds | Float | |
+| error_message | Text | Populated on failure |
+| completed_at | DateTime | |
+| approved_at | DateTime | Set when merchant pushes to Shopify |
+| shopify_media_id | String(255) | GID returned by productCreateMedia |
+
+**Redis cache:** `photoshoot:{job_id}` — 24h TTL (same as customer try-on). Image served from `GET /jobs/{job_id}/result`, which Shopify fetches immediately on approve.
+
+**Alembic migration:** `20260222_add_photoshoot.py` (revision `e5f6g7h8i9j0`)
+
+---
+
+### Features
+
+#### 1. Ghost Mannequin
+Input: 2 product image URLs from the same Shopify product (any angles — front, back, flat-lay, worn).
+AI: Gemini composites both images into a 3D hollow invisible-mannequin product photo on white/grey background.
+No specific front+back requirement — merchant picks any 2 images from the product's gallery.
+
+#### 2. Try-On for Model
+Input: 1 product image URL (Shopify CDN) + 1 model photo (from built-in library OR merchant upload).
+AI: Gemini places the product garment on the selected model, preserving model appearance and garment details.
+
+#### 3. Model Swap
+Input: 1 image of original model wearing the product (Shopify CDN) + 1 new model photo (library OR upload).
+AI: Gemini replaces the original model with the new model while keeping the garment identical.
+
+---
+
+### Endpoints
+
+**Router prefix:** `/api/v1/merchant/photoshoot`
+**Auth:** All endpoints (except `GET /models/{id}/image` and `GET /jobs/{id}/result`) require `X-Store-ID` header.
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/models` | X-Store-ID | List built-in model photos (filter by `?gender=`) |
+| GET | `/models/{id}/image` | None | Serve model photo bytes |
+| POST | `/ghost-mannequin` | X-Store-ID | Start ghost mannequin job (JSON) → 202 |
+| POST | `/try-on-model` | X-Store-ID | Start try-on job (multipart) → 202 |
+| POST | `/model-swap` | X-Store-ID | Start model swap job (multipart) → 202 |
+| GET | `/jobs/{job_id}/status` | X-Store-ID | Poll job status |
+| GET | `/jobs/{job_id}/result` | None | Serve result image bytes (for preview + Shopify) |
+| POST | `/jobs/{job_id}/approve` | X-Store-ID | Push result image to Shopify product |
+
+#### `POST /ghost-mannequin` — JSON body
+```json
+{
+  "image1_url": "https://cdn.shopify.com/...",
+  "image2_url": "https://cdn.shopify.com/...",
+  "shopify_product_gid": "gid://shopify/Product/123456"
+}
+```
+
+#### `POST /try-on-model` — multipart/form-data
+```
+shopify_product_gid  (string, required)
+product_image_url    (string, required)
+model_library_id     (string, optional UUID — mutually exclusive with model_image)
+model_image          (file, optional — mutually exclusive with model_library_id)
+```
+
+#### `POST /model-swap` — multipart/form-data
+```
+shopify_product_gid    (string, required)
+original_image_url     (string, required — model wearing product)
+new_model_library_id   (string, optional UUID — mutually exclusive with new_model_image)
+new_model_image        (file, optional — mutually exclusive with new_model_library_id)
+```
+
+#### `GET /jobs/{job_id}/status` → `PhotoshootJobResponse`
+```json
+{
+  "job_id": "uuid",
+  "job_type": "ghost_mannequin",
+  "status": "completed",
+  "progress": 100,
+  "message": "Image ready",
+  "result_image_url": "/api/v1/merchant/photoshoot/jobs/{job_id}/result",
+  "processing_time_seconds": 38.2,
+  "error": null,
+  "retry_allowed": false
+}
+```
+
+#### `POST /jobs/{job_id}/approve` — JSON body
+```json
+{ "alt_text": "Ghost mannequin view of Blue Linen Shirt" }
+```
+Response:
+```json
+{
+  "approved": true,
+  "shopify_media_id": "gid://shopify/MediaImage/987654",
+  "message": "Image pushed to Shopify product. It will appear in the product gallery within seconds."
+}
+```
+
+---
+
+### Approve Flow (Shopify image upload)
+
+1. Merchant clicks Approve in the Remix UI
+2. Remix calls `POST /jobs/{job_id}/approve`
+3. Backend verifies image is in Redis (409 if expired, telling merchant to regenerate)
+4. Backend builds public URL: `{PUBLIC_URL}/api/v1/merchant/photoshoot/jobs/{job_id}/result`
+5. Backend calls `ShopifyService.add_product_image(shopify_product_gid, public_url, alt_text)`
+6. Shopify fetches the image from the public URL **immediately** and re-hosts it on its CDN
+7. Backend marks job `approved_at` and stores `shopify_media_id`
+8. Image appears in Shopify product gallery within seconds
+
+Note: `GET /jobs/{job_id}/result` has **no auth** so Shopify can fetch without credentials.
+
+---
+
+### Model Library Management
+Model photos are managed via the Admin API (no UI needed):
+
+```bash
+# Upload full-body model photos (served for both customer studio look + merchant try-on)
+curl -X POST /api/v1/admin/model-photos/upload \
+  -H "X-Admin-Key: <key>" \
+  -F "gender=female" -F "age=26-35" -F "body_type=slim" \
+  -F "images=@model1.jpg" -F "images=@model2.jpg"
+
+# Upload face/headshot photos (for model swap)
+curl -X POST /api/v1/admin/model-faces/upload \
+  -H "X-Admin-Key: <key>" \
+  -F "gender=female" -F "age=26-35" -F "skin_tone=medium" \
+  -F "images=@face1.jpg"
+
+# Upload ghost mannequin reference images (12 total: 4 types × 3 poses)
+curl -X POST /api/v1/admin/ghost-mannequin-refs/upload \
+  -H "X-Admin-Key: <key>" \
+  -F "clothing_type=tops" -F "pose=front" -F "image=@tops_front.jpg"
+```
+
+Files are saved to `backend/static/` and committed to git for deployment.
+
+---
+
+### Unified Model Photo Architecture
+
+`studio_backgrounds` and `photoshoot_models` were merged into one table (`photoshoot_models`) because they store the same type of image (full-body person photos). The customer studio look and merchant AI photoshoot both draw from the same pool.
+
+| Use case | Endpoint | Filter |
+|---|---|---|
+| Customer studio look | `GET /tryon/studio-backgrounds?gender=` | gender only |
+| Merchant try-on-model | `GET /merchant/photoshoot/models?gender=&age=&body_type=` | gender + age + body_type |
+
+Migrated studio background images have `image_path` prefixed with `"studio/"` (e.g. `"studio/female/studio_1.jpg"`). New uploads go to `"photoshoot/{gender}/{file}"`. All paths are relative to `backend/static/`.
+
+---
+
+### Static Directory Structure
+
+```
+backend/static/
+├── studio/                ← migrated studio_backgrounds images (paths: "studio/female/…")
+│   ├── female/, male/, unisex/
+├── photoshoot/            ← new full-body model photos (paths: "photoshoot/female/…")
+│   ├── female/, male/, unisex/
+├── photoshoot_faces/      ← face/headshot photos for model swap (paths: "photoshoot_faces/female/…")
+│   ├── female/, male/
+└── ghost_mannequin/       ← reference pose images (paths: "ghost_mannequin/tops/front.jpg")
+    ├── tops/, bottoms/, dresses/, outerwear/
+```
+
+---
+
+### New / Updated Services & Files
+
+| File | Change |
+|---|---|
+| `backend/app/api/v1/photoshoot.py` | Updated: 12 endpoints total (+4 face & ghost-ref endpoints; model-swap reworked to face-only) |
+| `backend/app/api/v1/admin.py` | Replaced studio admin with unified model-photos admin; added model-faces + ghost-mannequin-refs admin |
+| `backend/app/api/v1/tryon.py` | Updated studio-background endpoints to query `photoshoot_models` |
+| `backend/app/services/photoshoot_service.py` | `generate_ghost_mannequin` adds `clothing_type` hint; `generate_model_swap` updated to face-only prompt |
+| `backend/app/models/database.py` | `PhotoshootModel` + `age`/`body_type`; added `PhotoshootModelFace`, `GhostMannequinRef`; removed `StudioBackground` |
+| `backend/app/models/schemas.py` | Added `PhotoshootModelFaceResponse`, `GhostMannequinRefResponse`; updated `GhostMannequinRequest` (+`clothing_type`) |
+| `backend/alembic/versions/20260222_extend_photoshoot.py` | Migration: merge studio_backgrounds → photoshoot_models; create photoshoot_model_faces + ghost_mannequin_refs |
+
+---
+
 **End of Backend PRD**

@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     # Shopify
     SHOPIFY_API_KEY: Optional[str] = None
     SHOPIFY_API_SECRET: Optional[str] = None
-    SHOPIFY_SCOPES: str = "read_products,write_script_tags"
+    SHOPIFY_SCOPES: str = "read_products,write_products,write_script_tags"
     SHOPIFY_API_VERSION: str = "2024-01"
 
     # Google Vertex AI (Gemini image generation)
@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     GOOGLE_CLOUD_LOCATION: str = "us-central1"
     GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None   # Path to service account JSON
     TRYON_MODEL: str = "gemini-2.5-flash-image"               # Switchable via env var; must support image output
+
+    # Public URL (used to construct image URLs for Shopify productCreateMedia)
+    PUBLIC_URL: str = "http://localhost:8000"
 
     # Admin
     ADMIN_API_KEY: str = "change-this-admin-key-in-production"

@@ -192,6 +192,36 @@ class CacheService:
 
         return self._decompress_image(compressed)
 
+    async def store_photoshoot_result(
+        self,
+        job_id: str,
+        result_image: bytes,
+    ) -> str:
+        """
+        Store AI photoshoot result image with 24h TTL.
+
+        Args:
+            job_id: PhotoshootJob UUID
+            result_image: Generated image bytes
+
+        Returns:
+            Cache key
+        """
+        cache_key = f"photoshoot:{job_id}"
+        compressed = self._compress_image(result_image)
+        success = self.redis.set(cache_key, compressed, self.ttl)
+        if success:
+            logger.info(f"Photoshoot result stored: {cache_key}")
+        return cache_key
+
+    async def get_photoshoot_result(self, job_id: str) -> Optional[bytes]:
+        """Retrieve photoshoot result from cache"""
+        cache_key = f"photoshoot:{job_id}"
+        compressed = self.redis.get(cache_key)
+        if not compressed:
+            return None
+        return self._decompress_image(compressed)
+
     async def cleanup_session(self, session_id: str):
         """
         Delete all cached data for a session

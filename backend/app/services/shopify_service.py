@@ -499,3 +499,59 @@ class ShopifyService:
             "test": sub.get("test", False),
             "trial_days": sub.get("trialDays", 0),
         }
+
+    async def add_product_image(
+        self,
+        shopify_product_gid: str,
+        image_url: str,
+        alt_text: str = "",
+    ) -> dict:
+        """
+        Add an image to a Shopify product via the productCreateMedia mutation.
+
+        Args:
+            shopify_product_gid: Full Shopify GID e.g. "gid://shopify/Product/123"
+            image_url: Publicly accessible HTTPS URL — Shopify fetches and re-hosts it
+            alt_text: Optional alt text for the image (max 512 chars)
+
+        Returns:
+            dict with keys: media_id (Shopify GID), image_url (Shopify CDN URL)
+
+        Raises:
+            Exception if Shopify returns mediaUserErrors
+        """
+        mutation = """
+        mutation productCreateMedia($media: [CreateMediaInput!]!, $productId: ID!) {
+          productCreateMedia(media: $media, productId: $productId) {
+            media {
+              ... on MediaImage {
+                id
+                image { url }
+              }
+            }
+            mediaUserErrors { field message code }
+          }
+        }"""
+
+        variables = {
+            "productId": shopify_product_gid,
+            "media": [{
+                "alt": alt_text[:512] if alt_text else "",
+                "mediaContentType": "IMAGE",
+                "originalSource": image_url,
+            }],
+        }
+
+        result = await self._graphql_request(mutation, variables)
+        payload = result.get("data", {}).get("productCreateMedia", {})
+
+        errors = payload.get("mediaUserErrors", [])
+        if errors:
+            raise Exception(f"Shopify productCreateMedia error: {errors[0]['message']}")
+
+        media_list = payload.get("media", [])
+        media = media_list[0] if media_list else {}
+        return {
+            "media_id": media.get("id"),
+            "image_url": (media.get("image") or {}).get("url"),
+        }
