@@ -26,8 +26,6 @@ from app.models.schemas import (
     WidgetScopeResponse,
     ThemeStatusResponse,
     ThemeStatusUpdateRequest,
-    OnboardingCompleteRequest,
-    OnboardingCompleteResponse,
     BillingActivateRequest,
     PlanResponse,
     WidgetCheckResponse,
@@ -233,53 +231,50 @@ def update_theme_status(
 ):
     """
     Remix reports the theme extension detection result (step 5).
-    Advances onboarding_step to 'plan'.
+
+    For founding merchants (first FOUNDING_MERCHANT_LIMIT installs): auto-completes
+    onboarding with a free 14-day trial and skips the billing step entirely.
+    For all other merchants: advances onboarding_step to 'plan'.
     """
     wc = store.widget_config
     if wc is None:
         wc = WidgetConfig(store_id=store.store_id)
         db.add(wc)
-
     wc.theme_extension_detected = body.detected
+
+    settings = get_settings()
+
+    # ── Founding merchant slot check ──────────────────────────────────────────
+    if not store.is_founding_merchant:
+        founding_used = (
+            db.query(func.count(Store.store_id))
+            .filter(Store.is_founding_merchant == True)  # noqa: E712
+            .scalar()
+        ) or 0
+        qualifies = founding_used < settings.FOUNDING_MERCHANT_LIMIT
+    else:
+        # Already a founding merchant re-entering this step → send to billing to pick a plan
+        qualifies = False
+
+    if qualifies:
+        store.is_founding_merchant = True
+        store.plan_name = "founding_trial"
+        store.credits_limit = settings.FOUNDING_MERCHANT_CREDITS
+        store.trial_ends_at = datetime.utcnow() + timedelta(days=settings.FOUNDING_MERCHANT_TRIAL_DAYS)
+        store.onboarding_step = "complete"
+        store.onboarding_completed_at = datetime.utcnow()
+        db.commit()
+        logger.info(
+            f"Founding merchant trial granted to store {store.store_id} "
+            f"(slot {founding_used + 1}/{settings.FOUNDING_MERCHANT_LIMIT})"
+        )
+        return OnboardingStepResponse(saved=True, next_step="complete")
+    # ─────────────────────────────────────────────────────────────────────────
+
     store.onboarding_step = "plan"
     db.commit()
-
     logger.info(f"Theme status updated for store {store.store_id}: detected={body.detected}")
     return OnboardingStepResponse(saved=True, next_step="plan")
-
-
-# ─────────────────────────────────────────────────────────────
-# Onboarding — Step 6: Complete (free plan)
-# ─────────────────────────────────────────────────────────────
-
-@merchant_router.post("/onboarding/complete", response_model=OnboardingCompleteResponse)
-def complete_onboarding(
-    body: OnboardingCompleteRequest,
-    store: Store = Depends(get_store),
-    db: DBSession = Depends(get_db),
-):
-    """
-    Complete onboarding on the free plan (step 6).
-    Paid plan completion is handled by POST /merchant/billing/activate after
-    Shopify confirms the subscription.
-    """
-    if body.plan != "free":
-        raise HTTPException(422, "Use POST /merchant/billing/activate for paid plans")
-
-    store.plan_name = "free"
-    store.credits_limit = 0
-    store.billing_interval = None
-    store.trial_ends_at = None
-    store.onboarding_step = "complete"
-    store.onboarding_completed_at = datetime.utcnow()
-    db.commit()
-
-    logger.info(f"Onboarding completed (free) for store {store.store_id}")
-    return OnboardingCompleteResponse(
-        completed=True,
-        plan_name="free",
-        credits_limit=0,
-    )
 
 
 # ─────────────────────────────────────────────────────────────
@@ -309,16 +304,18 @@ def activate_billing(
 
     plan = _get_plan_or_404(body.plan_name, db)
 
-    credits = plan.credits_monthly if body.billing_interval == "monthly" else plan.credits_annual
+    full_credits = plan.credits_monthly if body.billing_interval == "monthly" else plan.credits_annual
 
     store.plan_name = body.plan_name
     store.plan_shopify_subscription_id = body.shopify_subscription_id
     store.plan_activated_at = datetime.utcnow()
-    store.credits_limit = credits
     store.billing_interval = body.billing_interval
-    if body.with_trial and plan.trial_days:
+    if plan.trial_days:
+        # Trial is always applied. During trial, grant trial_credits (80); full credits after.
+        store.credits_limit = plan.trial_credits if plan.trial_credits else full_credits
         store.trial_ends_at = datetime.utcnow() + timedelta(days=plan.trial_days)
     else:
+        store.credits_limit = full_credits
         store.trial_ends_at = None
 
     if store.onboarding_completed_at is None:
@@ -329,7 +326,8 @@ def activate_billing(
 
     logger.info(
         f"Billing activated for store {store.store_id}: "
-        f"plan={body.plan_name}, interval={body.billing_interval}, credits={credits}"
+        f"plan={body.plan_name}, interval={body.billing_interval}, "
+        f"credits={store.credits_limit}, trial_ends_at={store.trial_ends_at}"
     )
     return PlanResponse(
         plan_name=store.plan_name,
@@ -383,13 +381,18 @@ def get_billing_plans(
 
 
 @merchant_router.get("/billing/status", response_model=BillingStatusResponse)
-async def get_billing_status(store: Store = Depends(get_store)):
+async def get_billing_status(
+    store: Store = Depends(get_store),
+    db: DBSession = Depends(get_db),
+):
     """
     Full billing status combining DB plan data with a live Shopify subscription query.
 
     - If the store is on the free plan (no subscription ID), Shopify fields are null.
     - If the Shopify call fails (network error, token issue), DB data is returned
       with null Shopify fields rather than erroring — the screen degrades gracefully.
+    - If the trial has expired and Shopify confirms ACTIVE status, the store is
+      automatically upgraded to full plan credits (lazy upgrade, no webhook needed).
     """
     shopify_status = None
     if store.plan_shopify_subscription_id:
@@ -398,6 +401,29 @@ async def get_billing_status(store: Store = Depends(get_store)):
             shopify_status = await svc.billing_get_status()
         except Exception as exc:
             logger.warning(f"Shopify billing status call failed for store {store.store_id}: {exc}")
+
+    # ── Auto-upgrade: trial ended + Shopify is actively billing ──────────────
+    if (
+        store.trial_ends_at
+        and store.trial_ends_at < datetime.utcnow()
+        and shopify_status
+        and shopify_status.get("status") == "ACTIVE"
+    ):
+        plan = db.query(Plan).filter_by(name=store.plan_name, is_active=True).first()
+        if plan:
+            full_credits = (
+                plan.credits_monthly
+                if store.billing_interval == "monthly"
+                else plan.credits_annual
+            )
+            store.credits_limit = full_credits
+            store.trial_ends_at = None
+            db.commit()
+            logger.info(
+                f"Trial expired for store {store.store_id}: "
+                f"credits upgraded to {full_credits} ({store.billing_interval})"
+            )
+    # ─────────────────────────────────────────────────────────────────────────
 
     return BillingStatusResponse(
         plan_name=store.plan_name,
@@ -439,7 +465,7 @@ async def create_subscription(
         raise HTTPException(409, f"Store is already on '{body.plan_name}' ({body.billing_interval})")
 
     price = float(plan.price_monthly if body.billing_interval == "monthly" else plan.price_annual_total)
-    trial_days = plan.trial_days if body.with_trial else 0
+    trial_days = plan.trial_days or 0  # Trial is always applied
 
     settings = get_settings()
     is_test = settings.APP_ENV == "development"
@@ -462,7 +488,7 @@ async def create_subscription(
 
     logger.info(
         f"Subscription creation initiated for store {store.store_id}: "
-        f"plan={body.plan_name}, interval={body.billing_interval}, trial={trial_days}d"
+        f"plan={body.plan_name}, interval={body.billing_interval}, trial_days={trial_days}"
     )
     return CreateSubscriptionResponse(
         confirmation_url=result["confirmation_url"],
@@ -655,7 +681,18 @@ def check_widget_enabled(
     - 'mixed'                 → enabled if GID is in enabled_product_ids (default true if list is empty)
     - 'selected_collections'  → enabled=true (collection membership check deferred to Remix layer)
     - no config yet           → enabled=true (default open)
+
+    Billing gate: widget is disabled for founding merchants whose trial has expired.
     """
+    # ── Billing gate: founding trial expired → widget disabled ────────────────
+    if (
+        store.plan_name == "founding_trial"
+        and store.trial_ends_at
+        and store.trial_ends_at < datetime.utcnow()
+    ):
+        return WidgetCheckResponse(enabled=False)
+    # ─────────────────────────────────────────────────────────────────────────
+
     wc = store.widget_config
     if wc is None or wc.scope_type == "all":
         return WidgetCheckResponse(enabled=True)

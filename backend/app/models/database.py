@@ -42,12 +42,13 @@ class Store(Base, TimestampMixin):
     # values: 'welcome' | 'goals' | 'referral' | 'widget_scope' | 'theme_setup' | 'plan' | 'complete'
     onboarding_completed_at = Column(DateTime, nullable=True)
     plan_name = Column(String(50), default='free', nullable=False)
-    # values: 'free' | 'starter' | 'growth'
+    # values: 'free' | 'founding_trial' | 'starter' | 'growth'
     plan_shopify_subscription_id = Column(String(255), nullable=True)
     plan_activated_at = Column(DateTime, nullable=True)
     credits_limit = Column(Integer, default=0, nullable=False)
     billing_interval = Column(String(10), nullable=True)   # 'monthly' | 'annual' | null for free
     trial_ends_at = Column(DateTime, nullable=True)
+    is_founding_merchant = Column(Boolean, nullable=False, default=False)
 
     # Relationships
     products = relationship("Product", back_populates="store", cascade="all, delete-orphan")

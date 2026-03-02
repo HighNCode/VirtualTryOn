@@ -295,9 +295,15 @@ class WebhookAppUninstallData(BaseModel):
 # ============================================================================
 
 class AnalyticsEventCreate(BaseModel):
-    """Create analytics event"""
+    """Create analytics event — sent by the storefront widget"""
     event_type: str
+    session_id: Optional[UUID] = None
     event_data: Optional[Dict[str, Any]] = None
+
+
+class AnalyticsEventSaved(BaseModel):
+    """Acknowledgement returned after a successful event ingestion"""
+    saved: bool
 
 
 # ============================================================================
@@ -360,25 +366,13 @@ class ThemeStatusUpdateRequest(BaseModel):
     detected: bool
 
 
-class OnboardingCompleteRequest(BaseModel):
-    """Step 6: merchant completes onboarding (free plan path)"""
-    plan: str   # "free"
-
-
-class OnboardingCompleteResponse(BaseModel):
-    """Onboarding completion confirmation"""
-    completed: bool
-    plan_name: str
-    credits_limit: int
-
-
 class BillingActivateRequest(BaseModel):
     """Called by Remix after Shopify billing callback confirms a paid subscription"""
     plan_name: str
     billing_interval: str        # 'monthly' | 'annual'
     shopify_subscription_id: str
     status: str                  # 'active'
-    with_trial: bool = False
+    # Trial is always applied when the plan has trial_days set — no opt-in flag needed
 
 
 class PlanResponse(BaseModel):
@@ -458,8 +452,8 @@ class CreateSubscriptionRequest(BaseModel):
     """Request to create a Shopify subscription for a paid plan"""
     plan_name: str           # 'starter' | 'growth'
     billing_interval: str    # 'monthly' | 'annual'
-    with_trial: bool = False
     return_url: str          # Remix callback URL after merchant approves on Shopify
+    # Trial is always applied (trial_days from the plan) — no opt-in flag
 
 
 class CreateSubscriptionResponse(BaseModel):
@@ -562,6 +556,47 @@ class PhotoshootApproveResponse(BaseModel):
     approved: bool
     shopify_media_id: Optional[str] = None   # GID from Shopify after upload
     message: str
+
+
+# ============================================================================
+# Analytics Schemas
+# ============================================================================
+
+class TopProductEntry(BaseModel):
+    """Top product entry for analytics"""
+    shopify_product_id: str
+    title: str
+    try_on_count: int
+    cart_count: int         # added_to_cart events for this product
+    conversion_rate: float  # cart_count / try_on_count × 100 (0.0 if try_on_count == 0)
+
+
+class TrendEntry(BaseModel):
+    """One calendar day in the try-on trend (line chart data)"""
+    date: str   # ISO date "2026-03-02"
+    try_ons: int
+
+
+class StandardAnalyticsResponse(BaseModel):
+    """All data for the Standard analytics sub-tab"""
+    period_days: int
+    period_start: datetime
+    period_end: datetime
+    # Engagement (from our DB)
+    widget_opens: int
+    unique_users: int
+    total_try_ons: int
+    credits_used: int
+    add_to_cart_count: int
+    # Conversions (Shopify Orders cross-ref — null if Shopify unavailable)
+    conversions: Optional[int] = None
+    conversion_rate: Optional[float] = None   # conversions / widget_opens × 100
+    revenue_impact: Optional[float] = None    # sum of converted order totals (USD)
+    # Returns (Shopify — null if Shopify unavailable)
+    return_count: Optional[int] = None
+    # Breakdown
+    top_products: List[TopProductEntry]  # sorted by conversion_rate DESC
+    trend: List[TrendEntry]              # one entry per calendar day; Y-axis = try_ons
 
 
 # ============================================================================

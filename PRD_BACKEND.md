@@ -3222,7 +3222,7 @@ Replaces the hardcoded PLAN_CONFIGS dict with a DB-backed `plans` table. Introdu
 | Starter | $17/mo | $179/yr | $14/mo | 17% | 600 | 7,600 | 14 days / 80 credits |
 | Growth | $29/mo | $299/yr | $24/mo | 17% | 1,000 | 12,800 | 14 days / 80 credits |
 
-Free plan: implied when no matching row in `plans` table. `credits_limit = 0`.
+Free plan: legacy only. New merchants must subscribe to Starter or Growth (both include a mandatory 14-day trial). Founding merchants (first 50 by default) get `plan_name="founding_trial"` with 300 credits for 14 days at no charge, skipping the billing step.
 
 ### Database Changes (migration `20260302_billing_plans.py`, revision `g7h8i9j0k1l2`)
 
@@ -3246,21 +3246,24 @@ All plan config lives in DB — editable without code deploys.
 | is_active | Boolean | soft-disable without delete |
 | sort_order | Integer | display order |
 
-#### `stores` table alterations
+#### `stores` table alterations (migration `20260302_billing_plans.py`)
 - `monthly_tryon_limit` renamed → `credits_limit` (Integer, default 0 for free)
 - `billing_interval` VARCHAR(10) added — `"monthly"` \| `"annual"` \| null (free)
 - `trial_ends_at` TIMESTAMP added — null unless on trial
+
+#### `stores` table alterations (migration `20260302_founding_merchant.py`, revision `h8i9j0k1l2m3`)
+- `is_founding_merchant` BOOLEAN NOT NULL DEFAULT FALSE — persists even after upgrade to paid plan
 
 ### Shopify Billing Flow
 
 ```
 Monthly upgrade:
-  Remix → POST /billing/create-subscription { plan_name, billing_interval: "monthly", with_trial: true, return_url }
+  Remix → POST /billing/create-subscription { plan_name, billing_interval: "monthly", return_url }
        <- { confirmation_url }
   Remix redirect -> Shopify approval page (EVERY_30_DAYS, trialDays: 14)
   Merchant approves
   Shopify -> returnUrl callback
-  Remix -> POST /billing/activate { plan_name, billing_interval, shopify_subscription_id, with_trial }
+  Remix -> POST /billing/activate { plan_name, billing_interval, shopify_subscription_id, status }
         <- { plan_name, credits_limit, ... }
 
 Annual upgrade:
@@ -3270,6 +3273,11 @@ Cancel / downgrade:
   Remix -> POST /billing/cancel-subscription
        <- { cancelled: true, plan_name: "free", credits_limit: 0 }
 ```
+
+#### Founding Merchant Flow (first FOUNDING_MERCHANT_LIMIT installs)
+`POST /onboarding/theme-status` counts `is_founding_merchant=true` stores.
+- If count < limit: auto-completes the store with `plan_name="founding_trial"`, `credits_limit=300`, `trial_ends_at=now+14d`, `is_founding_merchant=true`, `onboarding_step="complete"`. Returns `next_step="complete"` — billing step skipped entirely.
+- After 14 days: `GET /widget/check-enabled` returns `enabled=false`. Frontend redirects to billing screen (same Starter/Growth screen as regular merchants).
 
 ### ShopifyService update (billing_create_subscription)
 Signature: `billing_create_subscription(plan_name, price_usd, return_url, billing_interval="monthly", trial_days=0, test=False, is_upgrade=False)`
@@ -3298,7 +3306,6 @@ Queries active plans from DB ordered by `sort_order`. Marks `is_current` by `sto
 {
   "plan_name": "starter",
   "billing_interval": "annual",
-  "with_trial": true,
   "return_url": "https://myapp.myshopify.com/app/billing/callback"
 }
 ```
@@ -3306,7 +3313,7 @@ Response: `{ "confirmation_url": "...", "shopify_subscription_id": "gid://..." }
 Errors: 422 unknown/inactive plan, 409 already on same plan+interval, 502 Shopify error.
 
 #### POST /api/v1/merchant/billing/activate
-Sets `credits_limit = plan.credits_annual` (or `credits_monthly`), `billing_interval`, and `trial_ends_at = now + 14d` if `with_trial`.
+Sets `credits_limit = plan.trial_credits` (80 during trial), `billing_interval`, and `trial_ends_at = now + 14d`. After trial expiry, `GET /billing/status` auto-upgrades `credits_limit` to full plan credits.
 
 #### GET /api/v1/merchant/billing/status -> BillingStatusResponse
 Returns `plan_name`, `billing_interval`, `credits_limit`, `trial_ends_at`, `plan_activated_at`, `shopify_subscription_id`, plus live Shopify fields.
@@ -3543,6 +3550,129 @@ backend/static/
 | `backend/app/models/database.py` | `PhotoshootModel` + `age`/`body_type`; added `PhotoshootModelFace`, `GhostMannequinRef`; removed `StudioBackground` |
 | `backend/app/models/schemas.py` | Added `PhotoshootModelFaceResponse`, `GhostMannequinRefResponse`; updated `GhostMannequinRequest` (+`clothing_type`) |
 | `backend/alembic/versions/20260222_extend_photoshoot.py` | Migration: merge studio_backgrounds → photoshoot_models; create photoshoot_model_faces + ghost_mannequin_refs |
+
+---
+
+## Segment 12 — Standard Analytics
+
+### Overview
+
+Adds the Standard analytics sub-tab to the merchant dashboard.
+Provides engagement metrics, conversion data (cross-referenced with Shopify Orders), and a daily try-on trend line chart.
+
+### Conversion Attribution Model
+
+The widget flow ends at `added_to_cart`. The widget cannot reliably fire a checkout event (that happens on Shopify's hosted checkout page). Conversions are computed by cross-referencing `added_to_cart` events (those that carry a `customer_id` in `event_data`) against the Shopify Orders REST API. An order is considered a conversion if the order's `customer.id` matches a `customer_id` from our cart events within the look-back period.
+
+### Valid Event Types
+
+Only these 8 funnel event types are accepted for ingestion:
+
+| Event | Funnel stage |
+|---|---|
+| `widget_opened` | Top of funnel |
+| `photo_captured` | User took a photo |
+| `measurement_completed` | Body measurements extracted |
+| `size_recommended` | Size recommendation shown |
+| `try_on_generated` | Virtual try-on generated |
+| `try_on_viewed` | Try-on result viewed |
+| `size_selected` | User selected a size |
+| `added_to_cart` | Bottom of our funnel |
+
+`checkout_completed` is not in scope (not reliably fireable from widget context). Future: Shopify App Pixels or Order Webhooks could surface this.
+
+### New File: `backend/app/api/v1/analytics.py`
+
+Two routers:
+
+```
+analytics_public_router   → prefix /analytics    (widget-facing)
+analytics_merchant_router → prefix /merchant/analytics  (merchant auth)
+```
+
+#### POST /api/v1/analytics/events
+
+Widget-facing event ingestion. Requires `X-Store-ID` header.
+
+**Request body:**
+```json
+{
+  "event_type": "widget_opened",
+  "session_id": "uuid (optional)",
+  "event_data": {
+    "product_id": "gid://shopify/Product/123",
+    "anonymous_id": "fp_abc"
+  }
+}
+```
+
+**Response:** `{ "saved": true }`
+
+Returns 422 if `event_type` is not in the valid set.
+
+#### GET /api/v1/merchant/analytics/standard
+
+Merchant dashboard analytics. Requires `X-Store-ID` header.
+
+**Query param:** `period` — look-back window in days. Accepted values: `7`, `30` (default), `90`.
+
+**Response (`StandardAnalyticsResponse`):**
+
+| Field | Source | Notes |
+|---|---|---|
+| `period_days` | Query param | 7 / 30 / 90 |
+| `period_start` / `period_end` | Computed | UTC datetimes |
+| `widget_opens` | `analytics_events` WHERE `event_type=widget_opened` | — |
+| `unique_users` | COUNT DISTINCT `session_id` on widget_opened events | — |
+| `total_try_ons` | `try_ons` WHERE `status=completed` + product join | — |
+| `credits_used` | `total_try_ons × 4` | 1 try-on = 4 credits |
+| `add_to_cart_count` | `analytics_events` WHERE `event_type=added_to_cart` | — |
+| `conversions` | Shopify Orders cross-ref | null if Shopify call fails |
+| `conversion_rate` | `conversions / widget_opens × 100` | null if widget_opens==0 or Shopify fails |
+| `revenue_impact` | SUM(`total_price`) for matched orders | null if Shopify fails |
+| `return_count` | Orders with at least one refund | null if Shopify fails |
+| `top_products` | Merged try-on + cart counts, sorted by `conversion_rate` DESC, limit 5 | `[]` if no data |
+| `trend` | Per-calendar-day try-on count for the period | 0-filled for days with no data |
+
+### New Shopify Service Method
+
+`ShopifyService.get_orders_with_refunds(since, customer_ids?)` added to `backend/app/services/shopify_service.py`:
+
+- Calls `GET /admin/api/2024-01/orders.json?status=any&created_at_min=...&limit=250&fields=id,customer,total_price,refunds,created_at`
+- Paginates via `Link` header
+- Filters by `customer_ids` client-side if provided
+- Returns `{ "orders": [...], "return_count": int }`
+
+### Schema Changes (`backend/app/models/schemas.py`)
+
+Added `session_id` field to existing `AnalyticsEventCreate`.
+
+New schemas added:
+- `AnalyticsEventSaved` — `{ saved: bool }`
+- `TopProductEntry` — `shopify_product_id`, `title`, `try_on_count`, `cart_count`, `conversion_rate`
+- `TrendEntry` — `date` (ISO string), `try_ons` (int)
+- `StandardAnalyticsResponse` — all fields listed in the table above
+
+### `backend/app/main.py` Changes
+
+```python
+from app.api.v1 import ... analytics
+app.include_router(analytics.analytics_public_router, prefix="/api/v1")
+app.include_router(analytics.analytics_merchant_router, prefix="/api/v1")
+```
+
+### Verification Checklist
+
+1. `POST /analytics/events` with `event_type="widget_opened"` → 200 `{ "saved": true }`
+2. `POST /analytics/events` with `event_type="checkout_completed"` → 422
+3. `POST /analytics/events` with unknown event type → 422
+4. `GET /merchant/analytics/standard` → DB metrics populated; Shopify fields null if no subscription
+5. `GET /merchant/analytics/standard?period=7` → `trend` has 7 entries
+6. `GET /merchant/analytics/standard?period=90` → `trend` has 90 entries
+7. No events in DB → all zeros, Shopify fields null, `top_products` empty, trend all zeros
+8. Shopify API error → `conversions`, `revenue_impact`, `return_count` are null; rest of response intact
+9. `top_products` sorted by `conversion_rate` DESC
+10. `trend` dates are contiguous, ascending, `period_days` entries total
 
 ---
 

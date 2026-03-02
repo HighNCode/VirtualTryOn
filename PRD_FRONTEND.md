@@ -2690,15 +2690,12 @@ import { ResourcePicker } from "@shopify/app-bridge-react";
 - Headline: "Choose your plan"
 - Sub-text: "You can upgrade or downgrade anytime."
 - **Monthly / Annual toggle** (default: Monthly) — annual shows "Save 17%"
-- Three plan cards (Free + Starter + Growth):
+- Two plan cards (Starter + Growth). No free plan option.
+All plans include a mandatory 14-day free trial (always applied, no toggle).
 
-**Free Plan Card:**
-- Badge: "Current Plan" (if already on free)
-- Title: "Free"
-- Price: "$0 / month"
-- Feature list: basic try-on widget, community support
-- CTA Button: **Continue with Free Plan**
-  - Action: calls `POST /api/v1/merchant/onboarding/complete` with `plan: "free"`, redirects to `/app/dashboard`
+Note: Founding merchants (first 50 installs, configurable via FOUNDING_MERCHANT_LIMIT env var)
+skip this step entirely. They receive plan_name="founding_trial" with 300 credits for 14 days,
+auto-assigned during step 5 (theme-status). After their trial expires, this billing screen is shown.
 
 **Starter Plan Card:**
 - Badge: "Most Popular"
@@ -2706,8 +2703,8 @@ import { ResourcePicker } from "@shopify/app-bridge-react";
 - Price: "$17/mo" (monthly) or "$14/mo · $179 billed annually" (annual)
 - Trial badge: "14-day free trial"
 - Feature list: 600 credits/month, AI Try-On, AI Studio Look, Fit heatmap, Analytics, Email support
-- CTA Button: **Start Free Trial** (or **Select Starter**)
-  - Posts `billing_interval` ("monthly" | "annual"), `with_trial: true`, to `POST /billing/create-subscription`
+- CTA Button: **Start Free Trial**
+  - Posts `{ plan_name: "starter", billing_interval, return_url }` to `POST /billing/create-subscription`
   - Redirects to Shopify approval page; after approval: callback calls `POST /billing/activate`
 
 **Growth Plan Card:**
@@ -2716,7 +2713,7 @@ import { ResourcePicker } from "@shopify/app-bridge-react";
 - Price: "$29/mo" (monthly) or "$24/mo · $299 billed annually" (annual)
 - Trial badge: "14-day free trial"
 - Feature list: 1,000 credits/month, AI Try-On, AI Studio Look, Fit heatmap, Analytics, Priority support, Custom widget branding
-- CTA Button: **Start Free Trial** (or **Select Growth**)
+- CTA Button: **Start Free Trial**
   - Same billing flow as Starter with `plan_name: "growth"`
 
 **Credits note:** 1 try-on = 4 credits (displayed as a tooltip/footnote on plan cards).
@@ -3258,14 +3255,13 @@ export async function action({ request }) {
   if (actionType === "create_subscription") {
     const plan_name = formData.get("plan_name");
     const billing_interval = formData.get("billing_interval") ?? "monthly";
-    const with_trial = formData.get("with_trial") === "true";
     // Encode params so they survive Shopify's redirect pass-through
-    const callbackParams = `plan=${plan_name}&interval=${billing_interval}&trial=${with_trial ? "1" : "0"}`;
+    const callbackParams = `plan=${plan_name}&interval=${billing_interval}`;
     const returnUrl = `${process.env.SHOPIFY_APP_URL}/app/billing/callback?${callbackParams}`;
     const res = await fetch(`${BACKEND_URL}/api/v1/merchant/billing/create-subscription`, {
       method: "POST",
       headers: { "X-Store-ID": session.shop, "Content-Type": "application/json" },
-      body: JSON.stringify({ plan_name, billing_interval, with_trial, return_url: returnUrl }),
+      body: JSON.stringify({ plan_name, billing_interval, return_url: returnUrl }),
     });
     const { confirmation_url } = await res.json();
     return redirect(confirmation_url);  // merchant goes to Shopify approval page
@@ -3294,10 +3290,9 @@ export async function loader({ request }) {
 
   if (!chargeId) return redirect("/app/settings/billing?error=missing_charge");
 
-  // plan_name, billing_interval, with_trial are passed as query params in return_url
+  // plan_name, billing_interval are passed as query params in return_url
   const planName = url.searchParams.get("plan") ?? "starter";
   const billingInterval = url.searchParams.get("interval") ?? "monthly";
-  const withTrial = url.searchParams.get("trial") === "1";
 
   await fetch(`${BACKEND_URL}/api/v1/merchant/billing/activate`, {
     method: "POST",
@@ -3307,7 +3302,6 @@ export async function loader({ request }) {
       billing_interval: billingInterval,
       shopify_subscription_id: chargeId,
       status: "active",
-      with_trial: withTrial,
     }),
   });
 
@@ -3320,7 +3314,7 @@ export async function loader({ request }) {
 ### Behaviour Rules
 - Upgrade → calls Shopify Billing API with selected interval → full-page redirect to Shopify approval page
 - Annual toggle shows "Save 17%" badge; selected plan card shows discounted per-month price
-- After approval → Shopify redirects to callback → plan activated (with trial if applicable) → redirect to billing screen with `?activated=1` success banner
+- After approval → Shopify redirects to callback → plan activated (14-day trial always applied) → redirect to billing screen with `?activated=1` success banner
 - "Downgrade to Free" → show confirmation modal → on confirm call cancel → redirect with `?downgraded=1` banner
 - "Update payment method" and "View invoices" → external links to `https://{shop}/admin/settings/billing`
 - Subscription details section only visible when `plan_name !== "free"`
@@ -3883,6 +3877,220 @@ Exactly one of `face_library_id` or `face_image` must be provided.
 
 **Result description label:**
 Show "Only the face will be replaced. Body, clothing, and background remain unchanged." near the submit button.
+
+---
+
+## Analytics Screen — Standard Sub-Tab
+
+**Route:** `app/routes/app.analytics.tsx` (parent) + `app/routes/app.analytics.standard.tsx`
+
+The Analytics screen mirrors the Settings screen tab pattern: a top-level page with two sub-tabs — **Standard** (this segment) and **Advanced** (future).
+
+---
+
+### Tab Bar
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Analytics                                                    │
+│  [ Standard ]  [ Advanced ]                                   │
+│ ─────────────────────────────────────────────────────────────│
+```
+
+Use Polaris `Tabs` component. "Advanced" tab renders a "Coming soon" placeholder.
+
+---
+
+### Period Filter
+
+Immediately below the tab bar — a right-aligned segmented control:
+
+```
+                        Period:  [ 7 days ]  [ 30 days ]  [ 90 days ]
+```
+
+Use Polaris `ButtonGroup` (segmented). Default selection: **30 days**.
+On change, re-fetch `GET /api/v1/merchant/analytics/standard?period={n}` and re-render all cards/charts.
+
+---
+
+### Layout — Standard Sub-Tab
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│  Analytics › Standard                        Period: [30 days]  │
+│ ─────────────────────────────────────────────────────────────  │
+│                                                                  │
+│  ENGAGEMENT                                                      │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌────────┐ │
+│  │ Widget Opens │ │ Active Users │ │  Try-Ons     │ │Credits │ │
+│  │    1,240     │ │     834      │ │     412      │ │ 1,648  │ │
+│  │              │ │              │ │   completed  │ │  used  │ │
+│  └──────────────┘ └──────────────┘ └──────────────┘ └────────┘ │
+│                                                                  │
+│  CONVERSIONS                                                     │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌────────┐ │
+│  │  Add to Cart │ │ Conversions  │ │ Conv. Rate   │ │Revenue │ │
+│  │     198      │ │      87      │ │    7.0 %     │ │$3,240  │ │
+│  │              │ │  (orders)    │ │ / widget open│ │ impact │ │
+│  └──────────────┘ └──────────────┘ └──────────────┘ └────────┘ │
+│                                                                  │
+│  RETURNS                                                         │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │  Returns (orders with refund): 12                          │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  TRY-ON TREND ─────────────────────────────────────────────── │ │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │  Try-Ons Per Day                                            │ │
+│  │                                                             │ │
+│  │  25 ┤                  *                                    │ │
+│  │  20 ┤           *   *     *                                 │ │
+│  │  15 ┤       *              *   *                            │ │
+│  │  10 ┤   *                       *                           │ │
+│  │   5 ┤ *                           *   *                     │ │
+│  │   0 └─────────────────────────────────────────────── days  │ │
+│  │      Mar 1  Mar 5  Mar 10  Mar 15  Mar 20  Mar 25  Mar 30  │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  TOP PERFORMING PRODUCTS ──────────────────────────────────── │ │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │ #  Product            Try-Ons  Add-to-Cart  Conv. Rate     │ │
+│  │ ─────────────────────────────────────────────────────────  │ │
+│  │ 1  Blue Slim Jeans        82        41       50.0 %        │ │
+│  │ 2  White Linen Shirt      61        24       39.3 %        │ │
+│  │ 3  Floral Dress           45        14       31.1 %        │ │
+│  │ 4  Classic Blazer         38         9       23.7 %        │ │
+│  │ 5  Grey Hoodie            29         5       17.2 %        │ │
+│  └────────────────────────────────────────────────────────────┘ │
+└────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Component Breakdown
+
+#### Metric Cards (Engagement + Conversions rows)
+
+- Use Polaris `Card` + `BlockStack` in a 4-column `Grid`.
+- Each card: large bold number (`Text variant="heading2xl"`), small label below.
+- **Null / loading states:**
+  - When Shopify data is unavailable (`conversions`, `conversion_rate`, `revenue_impact`, `return_count` are `null`): show `—` with a subdued tooltip "Shopify data unavailable".
+  - While loading: replace number with a `SkeletonDisplayText`.
+
+**Engagement row (always from DB — never null):**
+| Card | Value field | Label |
+|---|---|---|
+| Widget Opens | `widget_opens` | "widget sessions" |
+| Active Users | `unique_users` | "unique sessions" |
+| Try-Ons | `total_try_ons` | "completed" |
+| Credits Used | `credits_used` | "this period" |
+
+**Conversions row (Shopify cross-ref — may be null):**
+| Card | Value field | Label |
+|---|---|---|
+| Add to Cart | `add_to_cart_count` | "from widget" |
+| Conversions | `conversions` | "orders placed" |
+| Conv. Rate | `conversion_rate` + "%" | "per widget open" |
+| Revenue Impact | "$" + `revenue_impact` | "from conversions" |
+
+**Returns (single wide card, Shopify — may be null):**
+- One full-width card: "Returns (orders with refund): `return_count`"
+
+---
+
+#### Try-On Trend Chart (Line Chart)
+
+- **Library:** Recharts (`LineChart`) — already used in many Shopify Remix apps. Install: `npm install recharts`.
+- **Data:** `trend` array — `[{ date: "2026-03-01", try_ons: 14 }, ...]`
+- **X-axis:** `date` field formatted as `MMM D` (e.g. "Mar 1"). Tick density: show every N-th label to avoid crowding (every 3rd for 30 days, every 7th for 90 days, every 1st for 7 days).
+- **Y-axis:** `try_ons` count; always starts at 0.
+- **Line:** single line, Shopify Indigo (`#5C6AC4`), dot on each point, smooth curve (`type="monotone"`).
+- **Tooltip:** on hover — show "Mar 15: 21 try-ons".
+- **Empty state:** if all `try_ons === 0` across the period, show a centred subdued message "No try-ons in this period" instead of the chart.
+- **Container:** wrap in a Polaris `Card` with title "Try-Ons Per Day".
+
+```tsx
+// Minimal Recharts example
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+
+<ResponsiveContainer width="100%" height={220}>
+  <LineChart data={trend}>
+    <CartesianGrid strokeDasharray="3 3" stroke="#E4E5E7" />
+    <XAxis dataKey="date" tickFormatter={(d) => formatAxisDate(d)} />
+    <YAxis allowDecimals={false} />
+    <Tooltip formatter={(v) => [`${v} try-ons`, ""]} labelFormatter={(d) => formatTooltipDate(d)} />
+    <Line type="monotone" dataKey="try_ons" stroke="#5C6AC4" strokeWidth={2} dot={{ r: 3 }} />
+  </LineChart>
+</ResponsiveContainer>
+```
+
+---
+
+#### Top Performing Products Table
+
+- Polaris `IndexTable` (or plain `DataTable`) with 5 rows max.
+- Columns: Rank, Product Name, Try-Ons, Add-to-Cart, Conv. Rate
+- **Conv. Rate column:** colour-coded badge:
+  - `>= 30%` → `status="success"` (green)
+  - `10–29%` → `status="warning"` (yellow)
+  - `< 10%` → `status="critical"` (red)
+  - `0 try-ons` → `—` (no badge)
+- **Rank column:** `#1` through `#5` in subdued text.
+- **Empty state:** "No product data yet" centred in the table body.
+
+---
+
+### Loader
+
+```typescript
+// app/routes/app.analytics.standard.tsx
+export async function loader({ request }: LoaderFunctionArgs) {
+  const { session } = await authenticate.admin(request);
+  const url = new URL(request.url);
+  const period = url.searchParams.get("period") ?? "30";
+
+  const store = await getStoreByDomain(session.shop);
+  const res = await fetch(
+    `${BACKEND_URL}/api/v1/merchant/analytics/standard?period=${period}`,
+    { headers: { "X-Store-ID": store.store_id } }
+  );
+  const data = await res.json();
+  return { analytics: data, period: Number(period) };
+}
+```
+
+Period switching is handled by the client: clicking a period button navigates to the same route with `?period=7/30/90` as a search param (use `useNavigate` or `<Link>`), which triggers the loader to re-fetch.
+
+---
+
+### Error / Loading States Summary
+
+| Situation | Behaviour |
+|---|---|
+| Initial load | Show `SkeletonDisplayText` in all metric cards, skeleton rows in table, no chart |
+| Shopify fields null | Show `—` in Conversions / Revenue / Returns cards with tooltip |
+| All try-ons = 0 | Show zeros in cards; replace chart with "No try-ons in this period" message |
+| Top products empty | Show "No product data yet" placeholder in table |
+| API error (500) | Polaris `Banner` (status="critical"): "Could not load analytics. Please try again." |
+
+---
+
+### Navigation Update
+
+Update the main app sidebar to include the Analytics link (no longer "future"):
+
+```tsx
+// app/components/Sidebar.tsx (or equivalent nav)
+<Navigation.Item
+  label="Analytics"
+  icon={ChartLineIcon}
+  url="/app/analytics"
+  selected={location.pathname.startsWith("/app/analytics")}
+/>
+```
+
+Default redirect: `/app/analytics` → `/app/analytics/standard`.
 
 ---
 

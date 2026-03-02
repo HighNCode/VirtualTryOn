@@ -509,6 +509,85 @@ class ShopifyService:
             "trial_days": sub.get("trialDays", 0),
         }
 
+    # ──────────────────────────────────────────────────────────
+    # Orders API
+    # ──────────────────────────────────────────────────────────
+
+    async def get_orders_with_refunds(
+        self,
+        since: datetime,
+        customer_ids: Optional[List[str]] = None,
+    ) -> dict:
+        """
+        Fetch orders via Shopify REST Admin API created since `since`.
+
+        Args:
+            since: Fetch orders created at or after this datetime (UTC)
+            customer_ids: Optional list of customer IDs to filter by (client-side)
+
+        Returns:
+            {
+                "orders": [{"id", "customer_id", "total_price", "refunds", "created_at"}, ...],
+                "return_count": int   # orders that have at least one refund
+            }
+        """
+        headers = {
+            "X-Shopify-Access-Token": self.access_token,
+            "Content-Type": "application/json",
+        }
+
+        url = (
+            f"{self.rest_url}/orders.json"
+            f"?status=any"
+            f"&created_at_min={since.isoformat()}Z"
+            f"&limit=250"
+            f"&fields=id,customer,total_price,refunds,created_at"
+        )
+
+        all_orders: List[dict] = []
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            while url:
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+                page_orders = data.get("orders", [])
+
+                for order in page_orders:
+                    customer = order.get("customer") or {}
+                    all_orders.append({
+                        "id": str(order.get("id", "")),
+                        "customer_id": str(customer.get("id", "")) if customer.get("id") else None,
+                        "total_price": order.get("total_price", "0.00"),
+                        "refunds": order.get("refunds", []),
+                        "created_at": order.get("created_at"),
+                    })
+
+                # Paginate via Link header
+                link_header = response.headers.get("Link", "")
+                url = self._parse_next_link(link_header)
+
+        # Filter by customer_ids if provided
+        customer_id_set = set(customer_ids) if customer_ids else None
+        if customer_id_set:
+            all_orders = [o for o in all_orders if o["customer_id"] in customer_id_set]
+
+        return_count = sum(1 for o in all_orders if o["refunds"])
+        return {"orders": all_orders, "return_count": return_count}
+
+    @staticmethod
+    def _parse_next_link(link_header: str) -> Optional[str]:
+        """Parse the 'next' URL from a Shopify Link header."""
+        if not link_header:
+            return None
+        for part in link_header.split(","):
+            part = part.strip()
+            if 'rel="next"' in part:
+                # Format: <https://...>; rel="next"
+                url_part = part.split(";")[0].strip()
+                return url_part.strip("<>")
+        return None
+
     async def add_product_image(
         self,
         shopify_product_gid: str,

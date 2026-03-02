@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     # Admin
     ADMIN_API_KEY: str = "change-this-admin-key-in-production"
 
+    # Founding Merchant Trial
+    FOUNDING_MERCHANT_LIMIT: int = 50        # Max slots; change via env var
+    FOUNDING_MERCHANT_TRIAL_DAYS: int = 14   # Trial length in days
+    FOUNDING_MERCHANT_CREDITS: int = 300     # Credits granted during trial
+
     # Security
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:8000"
     ALLOWED_UPLOAD_EXTENSIONS: str = "jpg,jpeg,png,webp"
