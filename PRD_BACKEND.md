@@ -3208,134 +3208,122 @@ The frontend holds the last-saved state from the GET response. On Cancel, it res
 
 ---
 
-## Merchant Settings — Billing Screen
+## Segment 11 — Billing Module Overhaul
 
-**Added:** 2026-02-22
+**Added:** 2026-03-02
 
-### Purpose
-Settings → Billing screen. Shows available plan cards, current subscription status, next billing date, and links to Shopify's billing management pages.
+### Overview
+Replaces the hardcoded PLAN_CONFIGS dict with a DB-backed `plans` table. Introduces monthly/annual billing toggle, 17% annual discount, 14-day free trial, and credits as the primary usage metric (1 try-on = 4 credits).
+
+### Plan Catalog
+
+| Plan | Monthly | Annual (billed) | Annual (display/mo) | Discount | Credits/mo | Credits/yr | Trial |
+|---|---|---|---|---|---|---|---|
+| Starter | $17/mo | $179/yr | $14/mo | 17% | 600 | 7,600 | 14 days / 80 credits |
+| Growth | $29/mo | $299/yr | $24/mo | 17% | 1,000 | 12,800 | 14 days / 80 credits |
+
+Free plan: implied when no matching row in `plans` table. `credits_limit = 0`.
+
+### Database Changes (migration `20260302_billing_plans.py`, revision `g7h8i9j0k1l2`)
+
+#### New `plans` table
+All plan config lives in DB — editable without code deploys.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID PK | |
+| name | String(50) UNIQUE | `"starter"` \| `"growth"` |
+| display_name | String(100) | `"Starter"` |
+| price_monthly | Numeric(8,2) | `17.00` |
+| price_annual_total | Numeric(8,2) | `179.00` — Shopify charge amount |
+| price_annual_per_month | Numeric(8,2) | `14.00` — display only |
+| annual_discount_pct | Integer | `17` |
+| credits_monthly | Integer | `600` |
+| credits_annual | Integer | `7600` — full yearly total |
+| trial_days | Integer nullable | `14` |
+| trial_credits | Integer nullable | `80` |
+| features | JSONB | List of feature strings |
+| is_active | Boolean | soft-disable without delete |
+| sort_order | Integer | display order |
+
+#### `stores` table alterations
+- `monthly_tryon_limit` renamed → `credits_limit` (Integer, default 0 for free)
+- `billing_interval` VARCHAR(10) added — `"monthly"` \| `"annual"` \| null (free)
+- `trial_ends_at` TIMESTAMP added — null unless on trial
 
 ### Shopify Billing Flow
 
 ```
-Upgrade flow:
-  Remix → POST /billing/create-subscription
-       ← { confirmation_url }
-  Remix → redirect merchant to confirmation_url (Shopify approval page)
-  Merchant approves on Shopify
-  Shopify → redirect to returnUrl with charge_id
-  Remix callback route → POST /billing/activate  ← already exists
-                       ← { plan_name, monthly_tryon_limit, ... }
-  Merchant back on billing screen (activated)
+Monthly upgrade:
+  Remix → POST /billing/create-subscription { plan_name, billing_interval: "monthly", with_trial: true, return_url }
+       <- { confirmation_url }
+  Remix redirect -> Shopify approval page (EVERY_30_DAYS, trialDays: 14)
+  Merchant approves
+  Shopify -> returnUrl callback
+  Remix -> POST /billing/activate { plan_name, billing_interval, shopify_subscription_id, with_trial }
+        <- { plan_name, credits_limit, ... }
 
-Cancel / downgrade to free flow:
-  Remix → POST /billing/cancel-subscription
-       ← { cancelled: true, plan_name: "free" }
-  (Shopify subscription cancelled server-side by FastAPI)
+Annual upgrade:
+  Same flow but interval: "annual" -> Shopify ANNUAL, price = price_annual_total
+
+Cancel / downgrade:
+  Remix -> POST /billing/cancel-subscription
+       <- { cancelled: true, plan_name: "free", credits_limit: 0 }
 ```
 
-### Plan Catalog
+### ShopifyService update (billing_create_subscription)
+Signature: `billing_create_subscription(plan_name, price_usd, return_url, billing_interval="monthly", trial_days=0, test=False, is_upgrade=False)`
+- `"monthly"` -> Shopify `EVERY_30_DAYS`
+- `"annual"` -> Shopify `ANNUAL`
+- `trial_days > 0` -> adds `trialDays` to GraphQL variables
 
-| Plan | Price | Try-ons/month | Shopify subscription |
-|------|-------|---------------|----------------------|
-| free | $0 | 10 | None |
-| starter | $9.99/mo | 100 | EVERY_30_DAYS recurring |
+### Admin Plan Management Endpoints
+Protected by `X-Admin-Key` header.
 
-Defined in `PLAN_CONFIGS` dict in `merchant.py`. `PLAN_LIMITS` is derived from it for backward compatibility.
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/v1/admin/plans` | List all plans with `store_count` |
+| POST | `/api/v1/admin/plans` | Create new plan |
+| PATCH | `/api/v1/admin/plans/{id}` | Partial update any field |
+| PATCH | `/api/v1/admin/plans/{id}/toggle` | Toggle `is_active` |
+| DELETE | `/api/v1/admin/plans/{id}` | Delete (422 if stores subscribed) |
 
-### Architecture Decision
-FastAPI calls Shopify Billing GraphQL API directly using `store.shopify_access_token` (via existing `ShopifyService._graphql_request()`). Remix only handles: redirect to `confirmation_url`, and the `returnUrl` callback route.
+### Merchant Billing Endpoints
 
-### New Methods in `ShopifyService` (`services/shopify_service.py`)
-- `billing_create_subscription(plan_name, price_usd, return_url, test, is_upgrade)` — calls `appSubscriptionCreate`
-- `billing_cancel_subscription(subscription_gid)` — calls `appSubscriptionCancel`
-- `billing_get_status()` — calls `currentAppInstallation { activeSubscriptions { ... } }`
+#### GET /api/v1/merchant/billing/plans -> PlansResponse
+Queries active plans from DB ordered by `sort_order`. Marks `is_current` by `store.plan_name`.
 
-### Endpoints
-
-#### `GET /api/v1/merchant/billing/plans` → `PlansResponse`
-Returns all plan definitions with `is_current` flag. No Shopify call.
-
-```json
-{
-  "plans": [
-    { "name": "free", "display_name": "Free Plan", "price_usd": 0.0, "monthly_tryon_limit": 10,
-      "features": ["10 try-ons/month", "Basic widget", "Email support"], "is_current": true },
-    { "name": "starter", "display_name": "Starter Plan", "price_usd": 9.99, "monthly_tryon_limit": 100,
-      "features": ["100 try-ons/month", "AI Studio Look", "Fit heatmap", "Analytics", "Priority support"], "is_current": false }
-  ]
-}
-```
-
-#### `GET /api/v1/merchant/billing/status` → `BillingStatusResponse`
-Returns DB plan data + live Shopify subscription info. If Shopify call fails (graceful degradation), Shopify fields are null.
-
+#### POST /api/v1/merchant/billing/create-subscription
 ```json
 {
   "plan_name": "starter",
-  "monthly_tryon_limit": 100,
-  "plan_activated_at": "2026-02-22T12:00:00",
-  "shopify_subscription_id": "gid://shopify/AppSubscription/123",
-  "subscription_status": "ACTIVE",
-  "current_period_end": "2026-03-22T12:00:00",
-  "is_test_subscription": false
-}
-```
-
-#### `POST /api/v1/merchant/billing/create-subscription`
-Creates Shopify subscription, returns `confirmationUrl`. Does NOT update DB.
-
-```http
-POST /api/v1/merchant/billing/create-subscription
-Headers: X-Store-ID: {uuid}
-{
-  "plan_name": "starter",
+  "billing_interval": "annual",
+  "with_trial": true,
   "return_url": "https://myapp.myshopify.com/app/billing/callback"
 }
-
-Response 200:
-{
-  "confirmation_url": "https://partners.shopify.com/...",
-  "shopify_subscription_id": "gid://shopify/AppSubscription/456"
-}
-
-Errors:
-  422 — unknown plan_name or plan_name == "free"
-  409 — store already on that plan
-  502 — Shopify API error
 ```
+Response: `{ "confirmation_url": "...", "shopify_subscription_id": "gid://..." }`
+Errors: 422 unknown/inactive plan, 409 already on same plan+interval, 502 Shopify error.
 
-Behaviour:
-- `test: true` when `APP_ENV == "development"` (no real charges)
-- `replacementBehavior: APPLY_IMMEDIATELY` if upgrading between paid plans
+#### POST /api/v1/merchant/billing/activate
+Sets `credits_limit = plan.credits_annual` (or `credits_monthly`), `billing_interval`, and `trial_ends_at = now + 14d` if `with_trial`.
 
-#### `POST /api/v1/merchant/billing/cancel-subscription`
-Cancels active Shopify subscription, resets store to free plan in DB.
+#### GET /api/v1/merchant/billing/status -> BillingStatusResponse
+Returns `plan_name`, `billing_interval`, `credits_limit`, `trial_ends_at`, `plan_activated_at`, `shopify_subscription_id`, plus live Shopify fields.
 
-```http
-POST /api/v1/merchant/billing/cancel-subscription
-Headers: X-Store-ID: {uuid}
-(no body)
+#### POST /api/v1/merchant/billing/cancel-subscription
+Resets: `credits_limit=0`, `billing_interval=null`, `trial_ends_at=null`, `plan_name="free"`, clears subscription ID.
+Response: `{ "cancelled": true, "plan_name": "free", "credits_limit": 0 }`
 
-Response 200:
-{ "cancelled": true, "plan_name": "free", "monthly_tryon_limit": 10 }
+#### GET /api/v1/merchant/billing/plan
+Quick DB-only plan lookup. Returns `plan_name`, `credits_limit`, `plan_activated_at`, `shopify_subscription_id`.
 
-Errors:
-  400 — already on free plan
-  502 — Shopify API error
-```
-
-#### Unchanged existing endpoints
-- `POST /api/v1/merchant/billing/activate` — called by Remix after Shopify approval callback
-- `GET /api/v1/merchant/billing/plan` — quick plan lookup from DB (no Shopify call)
+### Dashboard
+`GET /api/v1/merchant/dashboard/overview` field renamed: `monthly_tryon_limit` -> `credits_limit`.
 
 ### Payment method & Invoices
-No Shopify API exists for these. Both link to:
-```
-https://{store.shopify_domain}/admin/settings/billing
-```
+No Shopify API exists for these. Both link to `https://{store.shopify_domain}/admin/settings/billing`.
 
----
 
 ## Segment 10 — AI Photoshoot (Merchant-Facing)
 

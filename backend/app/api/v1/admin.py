@@ -1,19 +1,23 @@
 """
 Admin API Endpoints
-Internal endpoints for managing the model photo, face, and ghost mannequin
-reference image libraries. Protected by X-Admin-Key header.
+Internal endpoints for managing the model photo, face, ghost mannequin
+reference image libraries, and subscription plans. Protected by X-Admin-Key header.
 """
 
 import os
 import uuid
 import logging
-from typing import Literal, Optional
+from datetime import datetime
+from decimal import Decimal
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, UploadFile, File, Form
+from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session as DBSession
 
 from app.core.database import get_db
-from app.models.database import PhotoshootModel, PhotoshootModelFace, GhostMannequinRef
+from app.models.database import PhotoshootModel, PhotoshootModelFace, GhostMannequinRef, Plan, Store
 from app.config import get_settings
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
@@ -474,3 +478,188 @@ def list_ghost_mannequin_refs(
         })
 
     return {"total": len(result), "refs": result}
+
+
+# ─────────────────────────────────────────────────────────────
+# Subscription Plans CRUD
+# ─────────────────────────────────────────────────────────────
+
+class PlanCreateRequest(BaseModel):
+    name: str
+    display_name: str
+    price_monthly: float
+    price_annual_total: float
+    price_annual_per_month: float
+    annual_discount_pct: int = 17
+    credits_monthly: int
+    credits_annual: int
+    trial_days: Optional[int] = None
+    trial_credits: Optional[int] = None
+    features: List[str]
+    is_active: bool = True
+    sort_order: int = 0
+
+
+class PlanUpdateRequest(BaseModel):
+    display_name: Optional[str] = None
+    price_monthly: Optional[float] = None
+    price_annual_total: Optional[float] = None
+    price_annual_per_month: Optional[float] = None
+    annual_discount_pct: Optional[int] = None
+    credits_monthly: Optional[int] = None
+    credits_annual: Optional[int] = None
+    trial_days: Optional[int] = None
+    trial_credits: Optional[int] = None
+    features: Optional[List[str]] = None
+    sort_order: Optional[int] = None
+
+
+def _plan_to_dict(p: Plan, store_count: int = 0) -> Dict[str, Any]:
+    return {
+        "id": str(p.id),
+        "name": p.name,
+        "display_name": p.display_name,
+        "price_monthly": float(p.price_monthly),
+        "price_annual_total": float(p.price_annual_total),
+        "price_annual_per_month": float(p.price_annual_per_month),
+        "annual_discount_pct": p.annual_discount_pct,
+        "credits_monthly": p.credits_monthly,
+        "credits_annual": p.credits_annual,
+        "trial_days": p.trial_days,
+        "trial_credits": p.trial_credits,
+        "features": p.features,
+        "is_active": p.is_active,
+        "sort_order": p.sort_order,
+        "store_count": store_count,
+        "created_at": p.created_at.isoformat(),
+        "updated_at": p.updated_at.isoformat(),
+    }
+
+
+@router.get("/plans")
+def list_plans(
+    db: DBSession = Depends(get_db),
+    _: None = Depends(require_admin),
+):
+    """List all plans (active + inactive) with the number of stores currently on each plan."""
+    plans = db.query(Plan).order_by(Plan.sort_order, Plan.created_at).all()
+
+    # Count stores per plan in one query
+    counts = dict(
+        db.query(Store.plan_name, func.count(Store.store_id))
+        .group_by(Store.plan_name)
+        .all()
+    )
+
+    return {
+        "total": len(plans),
+        "plans": [_plan_to_dict(p, counts.get(p.name, 0)) for p in plans],
+    }
+
+
+@router.post("/plans", status_code=201)
+def create_plan(
+    body: PlanCreateRequest,
+    db: DBSession = Depends(get_db),
+    _: None = Depends(require_admin),
+):
+    """Create a new subscription plan."""
+    if db.query(Plan).filter_by(name=body.name).first():
+        raise HTTPException(409, f"Plan with name '{body.name}' already exists")
+
+    now = datetime.utcnow()
+    plan = Plan(
+        id=uuid.uuid4(),
+        name=body.name,
+        display_name=body.display_name,
+        price_monthly=Decimal(str(body.price_monthly)),
+        price_annual_total=Decimal(str(body.price_annual_total)),
+        price_annual_per_month=Decimal(str(body.price_annual_per_month)),
+        annual_discount_pct=body.annual_discount_pct,
+        credits_monthly=body.credits_monthly,
+        credits_annual=body.credits_annual,
+        trial_days=body.trial_days,
+        trial_credits=body.trial_credits,
+        features=body.features,
+        is_active=body.is_active,
+        sort_order=body.sort_order,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+
+    logger.info(f"Admin: plan created — {plan.name}")
+    return _plan_to_dict(plan)
+
+
+@router.patch("/plans/{plan_id}")
+def update_plan(
+    plan_id: str,
+    body: PlanUpdateRequest,
+    db: DBSession = Depends(get_db),
+    _: None = Depends(require_admin),
+):
+    """Partially update a plan's fields."""
+    plan = db.query(Plan).filter_by(id=plan_id).first()
+    if not plan:
+        raise HTTPException(404, "Plan not found")
+
+    updates = body.model_dump(exclude_none=True)
+    for field, value in updates.items():
+        if field in {"price_monthly", "price_annual_total", "price_annual_per_month"}:
+            value = Decimal(str(value))
+        setattr(plan, field, value)
+
+    plan.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(plan)
+
+    logger.info(f"Admin: plan updated — {plan.name}: {list(updates.keys())}")
+    return _plan_to_dict(plan)
+
+
+@router.patch("/plans/{plan_id}/toggle")
+def toggle_plan(
+    plan_id: str,
+    db: DBSession = Depends(get_db),
+    _: None = Depends(require_admin),
+):
+    """Toggle a plan's is_active flag."""
+    plan = db.query(Plan).filter_by(id=plan_id).first()
+    if not plan:
+        raise HTTPException(404, "Plan not found")
+
+    plan.is_active = not plan.is_active
+    plan.updated_at = datetime.utcnow()
+    db.commit()
+
+    logger.info(f"Admin: plan toggled — {plan.name}: is_active={plan.is_active}")
+    return {"id": plan_id, "name": plan.name, "is_active": plan.is_active}
+
+
+@router.delete("/plans/{plan_id}", status_code=204)
+def delete_plan(
+    plan_id: str,
+    db: DBSession = Depends(get_db),
+    _: None = Depends(require_admin),
+):
+    """
+    Delete a plan.
+    Returns 422 if any stores are currently subscribed to this plan.
+    """
+    plan = db.query(Plan).filter_by(id=plan_id).first()
+    if not plan:
+        raise HTTPException(404, "Plan not found")
+
+    store_count = db.query(func.count(Store.store_id)).filter_by(plan_name=plan.name).scalar() or 0
+    if store_count > 0:
+        raise HTTPException(
+            422,
+            f"Cannot delete plan '{plan.name}': {store_count} store(s) are currently subscribed",
+        )
+
+    db.delete(plan)
+    db.commit()
+    logger.info(f"Admin: plan deleted — {plan.name}")

@@ -2683,46 +2683,45 @@ import { ResourcePicker } from "@shopify/app-bridge-react";
 
 ## Step 6 — Plan Selection
 
-**Route:** `/app/onboarding/step-6`
-**Polaris components:** `Page`, `Layout`, `Card`, `List`, `Button`, `Badge`, `Text`, `InlineStack`
 **Billing:** Shopify Billing API via `admin.graphql()` in Remix loader/action
 **Backend call:** `POST /api/v1/merchant/billing/activate` (after billing confirmation)
 
 **Content:**
 - Headline: "Choose your plan"
 - Sub-text: "You can upgrade or downgrade anytime."
-- Two plan cards side by side:
+- **Monthly / Annual toggle** (default: Monthly) — annual shows "Save 17%"
+- Three plan cards (Free + Starter + Growth):
 
 **Free Plan Card:**
 - Badge: "Current Plan" (if already on free)
 - Title: "Free"
 - Price: "$0 / month"
-- Sub-text: "Start with our free plan and upgrade anytime"
-- Feature list:
-  - 10 monthly try-ons included
-  - Virtual try-on widget
-  - Basic size recommendations
-  - Community support
-- CTA Button: **Continue with Free Plan** (primary)
+- Feature list: basic try-on widget, community support
+- CTA Button: **Continue with Free Plan**
   - Action: calls `POST /api/v1/merchant/onboarding/complete` with `plan: "free"`, redirects to `/app/dashboard`
 
 **Starter Plan Card:**
 - Badge: "Most Popular"
 - Title: "Starter"
-- Price: "$10 / month"
-- Sub-text: "Everything you need to grow with virtual try-on"
-- Feature list:
-  - 100 monthly try-ons
-  - AI Studio Look backgrounds
-  - Fit heatmap visualization
-  - Analytics dashboard
-  - Email support
-- CTA Button: **Select Starter Plan** (secondary/highlighted)
-  - Action: calls Shopify Billing API (`appSubscriptionCreate`), redirects merchant to Shopify's billing confirmation URL
-  - After merchant approves billing on Shopify: Shopify redirects back to `/app/billing/callback`
-  - Billing callback: calls `POST /api/v1/merchant/billing/activate`, then redirects to `/app/dashboard`
+- Price: "$17/mo" (monthly) or "$14/mo · $179 billed annually" (annual)
+- Trial badge: "14-day free trial"
+- Feature list: 600 credits/month, AI Try-On, AI Studio Look, Fit heatmap, Analytics, Email support
+- CTA Button: **Start Free Trial** (or **Select Starter**)
+  - Posts `billing_interval` ("monthly" | "annual"), `with_trial: true`, to `POST /billing/create-subscription`
+  - Redirects to Shopify approval page; after approval: callback calls `POST /billing/activate`
 
-**Navigation:** **← Back** only (no Skip — merchant must choose a plan to complete onboarding).
+**Growth Plan Card:**
+- Badge: "Best Value" (annual) or none
+- Title: "Growth"
+- Price: "$29/mo" (monthly) or "$24/mo · $299 billed annually" (annual)
+- Trial badge: "14-day free trial"
+- Feature list: 1,000 credits/month, AI Try-On, AI Studio Look, Fit heatmap, Analytics, Priority support, Custom widget branding
+- CTA Button: **Start Free Trial** (or **Select Growth**)
+  - Same billing flow as Starter with `plan_name: "growth"`
+
+**Credits note:** 1 try-on = 4 credits (displayed as a tooltip/footnote on plan cards).
+
+**Navigation:** **← Back** only (no Skip — merchant must choose a plan).
 
 ---
 
@@ -3163,7 +3162,12 @@ export default function BillingSettings() {
                         {plan.is_current && <Badge tone="success">Current Plan</Badge>}
                       </InlineStack>
                       <Text variant="headingLg">
-                        {plan.price_usd === 0 ? "Free" : `$${plan.price_usd}/mo`}
+                        {/* billingInterval: "monthly" | "annual" from component state */}
+                        {plan.price_monthly === 0
+                          ? "Free"
+                          : billingInterval === "annual"
+                          ? `$${plan.price_annual_per_month}/mo · $${plan.price_annual_total} billed annually`
+                          : `$${plan.price_monthly}/mo`}
                       </Text>
                       <BlockStack gap="100">
                         {plan.features.map(f => <Text key={f}>✓ {f}</Text>)}
@@ -3253,11 +3257,15 @@ export async function action({ request }) {
 
   if (actionType === "create_subscription") {
     const plan_name = formData.get("plan_name");
-    const returnUrl = `${process.env.SHOPIFY_APP_URL}/app/billing/callback`;
+    const billing_interval = formData.get("billing_interval") ?? "monthly";
+    const with_trial = formData.get("with_trial") === "true";
+    // Encode params so they survive Shopify's redirect pass-through
+    const callbackParams = `plan=${plan_name}&interval=${billing_interval}&trial=${with_trial ? "1" : "0"}`;
+    const returnUrl = `${process.env.SHOPIFY_APP_URL}/app/billing/callback?${callbackParams}`;
     const res = await fetch(`${BACKEND_URL}/api/v1/merchant/billing/create-subscription`, {
       method: "POST",
       headers: { "X-Store-ID": session.shop, "Content-Type": "application/json" },
-      body: JSON.stringify({ plan_name, return_url: returnUrl }),
+      body: JSON.stringify({ plan_name, billing_interval, with_trial, return_url: returnUrl }),
     });
     const { confirmation_url } = await res.json();
     return redirect(confirmation_url);  // merchant goes to Shopify approval page
@@ -3286,18 +3294,20 @@ export async function loader({ request }) {
 
   if (!chargeId) return redirect("/app/settings/billing?error=missing_charge");
 
-  // Activate plan in FastAPI
-  // Determine plan_name by matching charge — for now, derive from session or pass via state
-  // Simplest: store plan_name in a cookie before redirecting to Shopify
+  // plan_name, billing_interval, with_trial are passed as query params in return_url
   const planName = url.searchParams.get("plan") ?? "starter";
+  const billingInterval = url.searchParams.get("interval") ?? "monthly";
+  const withTrial = url.searchParams.get("trial") === "1";
 
   await fetch(`${BACKEND_URL}/api/v1/merchant/billing/activate`, {
     method: "POST",
     headers: { "X-Store-ID": session.shop, "Content-Type": "application/json" },
     body: JSON.stringify({
       plan_name: planName,
+      billing_interval: billingInterval,
       shopify_subscription_id: chargeId,
       status: "active",
+      with_trial: withTrial,
     }),
   });
 
@@ -3305,11 +3315,12 @@ export async function loader({ request }) {
 }
 ```
 
-**Note on passing `plan_name` through the callback:** Include `plan_name` as a query param in the `return_url` (e.g. `?plan=starter`), which Shopify passes through unchanged to the callback URL.
+**Note on passing params through the callback:** Include `plan`, `interval`, and `trial` as query params in the `return_url` (e.g. `?plan=starter&interval=annual&trial=1`), which Shopify passes through unchanged.
 
 ### Behaviour Rules
-- "Upgrade to Starter" → calls Shopify Billing API → full-page redirect to Shopify approval page
-- After approval → Shopify redirects to callback → plan activated → redirect to billing screen with `?activated=1` success banner
+- Upgrade → calls Shopify Billing API with selected interval → full-page redirect to Shopify approval page
+- Annual toggle shows "Save 17%" badge; selected plan card shows discounted per-month price
+- After approval → Shopify redirects to callback → plan activated (with trial if applicable) → redirect to billing screen with `?activated=1` success banner
 - "Downgrade to Free" → show confirmation modal → on confirm call cancel → redirect with `?downgraded=1` banner
 - "Update payment method" and "View invoices" → external links to `https://{shop}/admin/settings/billing`
 - Subscription details section only visible when `plan_name !== "free"`

@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from app.core.database import get_db
 from app.config import get_settings
-from app.models.database import Store, MerchantOnboarding, WidgetConfig, TryOn, Product
+from app.models.database import Store, MerchantOnboarding, WidgetConfig, TryOn, Product, Plan
 from app.models.schemas import (
     OnboardingStatusResponse,
     GoalsRequest,
@@ -34,7 +34,7 @@ from app.models.schemas import (
     DashboardOverviewResponse,
     WidgetConfigUpdateRequest,
     WidgetConfigResponse,
-    PlanConfig,
+    PlanConfigResponse,
     PlansResponse,
     CreateSubscriptionRequest,
     CreateSubscriptionResponse,
@@ -47,24 +47,6 @@ logger = logging.getLogger(__name__)
 
 merchant_router = APIRouter(prefix="/merchant", tags=["Merchant"])
 widget_router = APIRouter(prefix="/widget", tags=["Widget"])
-
-PLAN_CONFIGS: dict[str, dict] = {
-    "free": {
-        "display_name": "Free Plan",
-        "price_usd": 0.0,
-        "monthly_tryon_limit": 10,
-        "features": ["10 try-ons/month", "Basic widget", "Email support"],
-    },
-    "starter": {
-        "display_name": "Starter Plan",
-        "price_usd": 9.99,
-        "monthly_tryon_limit": 100,
-        "features": ["100 try-ons/month", "AI Studio Look", "Fit heatmap", "Analytics", "Priority support"],
-    },
-}
-
-# Derived lookup kept for backward-compatibility with existing endpoints
-PLAN_LIMITS = {name: cfg["monthly_tryon_limit"] for name, cfg in PLAN_CONFIGS.items()}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -285,7 +267,9 @@ def complete_onboarding(
         raise HTTPException(422, "Use POST /merchant/billing/activate for paid plans")
 
     store.plan_name = "free"
-    store.monthly_tryon_limit = PLAN_LIMITS["free"]
+    store.credits_limit = 0
+    store.billing_interval = None
+    store.trial_ends_at = None
     store.onboarding_step = "complete"
     store.onboarding_completed_at = datetime.utcnow()
     db.commit()
@@ -294,13 +278,21 @@ def complete_onboarding(
     return OnboardingCompleteResponse(
         completed=True,
         plan_name="free",
-        monthly_tryon_limit=PLAN_LIMITS["free"],
+        credits_limit=0,
     )
 
 
 # ─────────────────────────────────────────────────────────────
 # Billing
 # ─────────────────────────────────────────────────────────────
+
+def _get_plan_or_404(plan_name: str, db: DBSession) -> Plan:
+    """Fetch a Plan row by name, raising 422 if not found or inactive."""
+    plan = db.query(Plan).filter_by(name=plan_name, is_active=True).first()
+    if not plan:
+        raise HTTPException(422, f"Unknown or inactive plan: '{plan_name}'")
+    return plan
+
 
 @merchant_router.post("/billing/activate", response_model=PlanResponse)
 def activate_billing(
@@ -310,24 +302,38 @@ def activate_billing(
 ):
     """
     Called by Remix after the Shopify billing callback confirms a paid subscription.
-    Sets plan details and marks onboarding as complete.
+    Sets plan details, credits_limit, billing_interval, optional trial, and marks onboarding complete.
     """
-    limit = PLAN_LIMITS.get(body.plan_name)
-    if limit is None:
-        raise HTTPException(422, f"Unknown plan: {body.plan_name}. Valid plans: {list(PLAN_LIMITS)}")
+    if body.billing_interval not in {"monthly", "annual"}:
+        raise HTTPException(422, "billing_interval must be 'monthly' or 'annual'")
+
+    plan = _get_plan_or_404(body.plan_name, db)
+
+    credits = plan.credits_monthly if body.billing_interval == "monthly" else plan.credits_annual
 
     store.plan_name = body.plan_name
     store.plan_shopify_subscription_id = body.shopify_subscription_id
     store.plan_activated_at = datetime.utcnow()
-    store.monthly_tryon_limit = limit
-    store.onboarding_step = "complete"
-    store.onboarding_completed_at = datetime.utcnow()
+    store.credits_limit = credits
+    store.billing_interval = body.billing_interval
+    if body.with_trial and plan.trial_days:
+        store.trial_ends_at = datetime.utcnow() + timedelta(days=plan.trial_days)
+    else:
+        store.trial_ends_at = None
+
+    if store.onboarding_completed_at is None:
+        store.onboarding_step = "complete"
+        store.onboarding_completed_at = datetime.utcnow()
+
     db.commit()
 
-    logger.info(f"Billing activated for store {store.store_id}: plan={body.plan_name}")
+    logger.info(
+        f"Billing activated for store {store.store_id}: "
+        f"plan={body.plan_name}, interval={body.billing_interval}, credits={credits}"
+    )
     return PlanResponse(
         plan_name=store.plan_name,
-        monthly_tryon_limit=store.monthly_tryon_limit,
+        credits_limit=store.credits_limit,
         plan_activated_at=store.plan_activated_at,
         shopify_subscription_id=store.plan_shopify_subscription_id,
     )
@@ -338,28 +344,40 @@ def get_plan(store: Store = Depends(get_store)):
     """Return the store's current plan details."""
     return PlanResponse(
         plan_name=store.plan_name,
-        monthly_tryon_limit=store.monthly_tryon_limit,
+        credits_limit=store.credits_limit,
         plan_activated_at=store.plan_activated_at,
         shopify_subscription_id=store.plan_shopify_subscription_id,
     )
 
 
 @merchant_router.get("/billing/plans", response_model=PlansResponse)
-def get_billing_plans(store: Store = Depends(get_store)):
+def get_billing_plans(
+    store: Store = Depends(get_store),
+    db: DBSession = Depends(get_db),
+):
     """
-    Return all available subscription plans with pricing and feature details.
+    Return all active subscription plans from DB with pricing and feature details.
     The store's active plan is marked with is_current=True.
     """
+    db_plans = db.query(Plan).filter_by(is_active=True).order_by(Plan.sort_order).all()
     plans = [
-        PlanConfig(
-            name=name,
-            display_name=cfg["display_name"],
-            price_usd=cfg["price_usd"],
-            monthly_tryon_limit=cfg["monthly_tryon_limit"],
-            features=cfg["features"],
-            is_current=(name == store.plan_name),
+        PlanConfigResponse(
+            id=p.id,
+            name=p.name,
+            display_name=p.display_name,
+            price_monthly=float(p.price_monthly),
+            price_annual_total=float(p.price_annual_total),
+            price_annual_per_month=float(p.price_annual_per_month),
+            annual_discount_pct=p.annual_discount_pct,
+            credits_monthly=p.credits_monthly,
+            credits_annual=p.credits_annual,
+            trial_days=p.trial_days,
+            trial_credits=p.trial_credits,
+            features=p.features,
+            is_current=(p.name == store.plan_name),
+            is_active=p.is_active,
         )
-        for name, cfg in PLAN_CONFIGS.items()
+        for p in db_plans
     ]
     return PlansResponse(plans=plans)
 
@@ -383,7 +401,9 @@ async def get_billing_status(store: Store = Depends(get_store)):
 
     return BillingStatusResponse(
         plan_name=store.plan_name,
-        monthly_tryon_limit=store.monthly_tryon_limit,
+        billing_interval=store.billing_interval,
+        credits_limit=store.credits_limit,
+        trial_ends_at=store.trial_ends_at,
         plan_activated_at=store.plan_activated_at,
         shopify_subscription_id=store.plan_shopify_subscription_id,
         subscription_status=shopify_status["status"] if shopify_status else None,
@@ -396,6 +416,7 @@ async def get_billing_status(store: Store = Depends(get_store)):
 async def create_subscription(
     body: CreateSubscriptionRequest,
     store: Store = Depends(get_store),
+    db: DBSession = Depends(get_db),
 ):
     """
     Create a Shopify recurring subscription for a paid plan.
@@ -409,24 +430,29 @@ async def create_subscription(
 
     Does NOT update the DB — that happens after merchant approves on Shopify's page.
     """
-    if body.plan_name not in PLAN_CONFIGS:
-        raise HTTPException(422, f"Unknown plan: {body.plan_name}. Valid plans: {list(PLAN_CONFIGS)}")
-    if body.plan_name == "free":
-        raise HTTPException(422, "Cannot create a Shopify subscription for the free plan")
-    if body.plan_name == store.plan_name:
-        raise HTTPException(409, f"Store is already on the '{body.plan_name}' plan")
+    if body.billing_interval not in {"monthly", "annual"}:
+        raise HTTPException(422, "billing_interval must be 'monthly' or 'annual'")
 
-    cfg = PLAN_CONFIGS[body.plan_name]
+    plan = _get_plan_or_404(body.plan_name, db)
+
+    if body.plan_name == store.plan_name and body.billing_interval == store.billing_interval:
+        raise HTTPException(409, f"Store is already on '{body.plan_name}' ({body.billing_interval})")
+
+    price = float(plan.price_monthly if body.billing_interval == "monthly" else plan.price_annual_total)
+    trial_days = plan.trial_days if body.with_trial else 0
+
     settings = get_settings()
     is_test = settings.APP_ENV == "development"
-    is_upgrade = store.plan_name != "free"  # switching between paid plans
+    is_upgrade = store.plan_name not in {"free", body.plan_name}
 
     try:
         svc = ShopifyService(store.shopify_domain, store.shopify_access_token)
         result = await svc.billing_create_subscription(
-            plan_name=cfg["display_name"],
-            price_usd=cfg["price_usd"],
+            plan_name=plan.display_name,
+            price_usd=price,
             return_url=body.return_url,
+            billing_interval=body.billing_interval,
+            trial_days=trial_days,
             test=is_test,
             is_upgrade=is_upgrade,
         )
@@ -434,7 +460,10 @@ async def create_subscription(
         logger.error(f"Shopify subscription create failed for store {store.store_id}: {exc}")
         raise HTTPException(502, f"Failed to create Shopify subscription: {exc}")
 
-    logger.info(f"Subscription creation initiated for store {store.store_id}: plan={body.plan_name}")
+    logger.info(
+        f"Subscription creation initiated for store {store.store_id}: "
+        f"plan={body.plan_name}, interval={body.billing_interval}, trial={trial_days}d"
+    )
     return CreateSubscriptionResponse(
         confirmation_url=result["confirmation_url"],
         shopify_subscription_id=result["subscription_id"],
@@ -464,7 +493,9 @@ async def cancel_subscription(
         raise HTTPException(502, f"Failed to cancel Shopify subscription: {exc}")
 
     store.plan_name = "free"
-    store.monthly_tryon_limit = PLAN_CONFIGS["free"]["monthly_tryon_limit"]
+    store.credits_limit = 0
+    store.billing_interval = None
+    store.trial_ends_at = None
     store.plan_shopify_subscription_id = None
     store.plan_activated_at = None
     db.commit()
@@ -473,7 +504,7 @@ async def cancel_subscription(
     return CancelSubscriptionResponse(
         cancelled=True,
         plan_name="free",
-        monthly_tryon_limit=PLAN_CONFIGS["free"]["monthly_tryon_limit"],
+        credits_limit=0,
     )
 
 
@@ -521,7 +552,7 @@ def get_dashboard_overview(
         theme_extension_detected=theme_detected,
         themes_url=themes_url,
         tryon_used_30d=tryon_used,
-        monthly_tryon_limit=store.monthly_tryon_limit,
+        credits_limit=store.credits_limit,
         plan_name=store.plan_name,
         scope_type=scope_type,
         enabled_collections_count=enabled_collections_count,

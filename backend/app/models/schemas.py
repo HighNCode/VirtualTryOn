@@ -369,20 +369,22 @@ class OnboardingCompleteResponse(BaseModel):
     """Onboarding completion confirmation"""
     completed: bool
     plan_name: str
-    monthly_tryon_limit: int
+    credits_limit: int
 
 
 class BillingActivateRequest(BaseModel):
     """Called by Remix after Shopify billing callback confirms a paid subscription"""
     plan_name: str
+    billing_interval: str        # 'monthly' | 'annual'
     shopify_subscription_id: str
-    status: str   # "active"
+    status: str                  # 'active'
+    with_trial: bool = False
 
 
 class PlanResponse(BaseModel):
     """Current plan information"""
     plan_name: str
-    monthly_tryon_limit: int
+    credits_limit: int
     plan_activated_at: Optional[datetime] = None
     shopify_subscription_id: Optional[str] = None
 
@@ -399,7 +401,7 @@ class DashboardOverviewResponse(BaseModel):
     themes_url: str
     # Section 2 — try-on usage (rolling 30 days)
     tryon_used_30d: int
-    monthly_tryon_limit: int
+    credits_limit: int
     plan_name: str
     # Section 3 — widget scope summary
     scope_type: str
@@ -429,25 +431,35 @@ class WidgetConfigUpdateRequest(BaseModel):
 # Billing Schemas
 # ============================================================================
 
-class PlanConfig(BaseModel):
-    """Definition of a single subscription plan"""
-    name: str                   # 'free' | 'starter'
-    display_name: str           # 'Free Plan' | 'Starter Plan'
-    price_usd: float            # 0.0 | 9.99
-    monthly_tryon_limit: int    # 10 | 100
-    features: List[str]         # Human-readable feature list
-    is_current: bool            # True if this is the store's active plan
+class PlanConfigResponse(BaseModel):
+    """Definition of a single subscription plan (DB-backed)"""
+    id: UUID
+    name: str                       # 'starter' | 'growth'
+    display_name: str               # 'Starter' | 'Growth'
+    price_monthly: float            # 17.0
+    price_annual_total: float       # 179.0  (Shopify charge amount)
+    price_annual_per_month: float   # 14.0   (UI display only)
+    annual_discount_pct: int        # 17
+    credits_monthly: int            # 600
+    credits_annual: int             # 7600
+    trial_days: Optional[int] = None
+    trial_credits: Optional[int] = None
+    features: List[str]
+    is_current: bool                # True if this is the store's active plan
+    is_active: bool
 
 
 class PlansResponse(BaseModel):
     """All available subscription plans"""
-    plans: List[PlanConfig]
+    plans: List[PlanConfigResponse]
 
 
 class CreateSubscriptionRequest(BaseModel):
     """Request to create a Shopify subscription for a paid plan"""
-    plan_name: str   # 'starter' — only paid plans accepted
-    return_url: str  # Remix callback URL after merchant approves on Shopify
+    plan_name: str           # 'starter' | 'growth'
+    billing_interval: str    # 'monthly' | 'annual'
+    with_trial: bool = False
+    return_url: str          # Remix callback URL after merchant approves on Shopify
 
 
 class CreateSubscriptionResponse(BaseModel):
@@ -459,7 +471,9 @@ class CreateSubscriptionResponse(BaseModel):
 class BillingStatusResponse(BaseModel):
     """Full billing status — DB data enriched with live Shopify subscription info"""
     plan_name: str
-    monthly_tryon_limit: int
+    billing_interval: Optional[str] = None      # 'monthly' | 'annual' | null for free
+    credits_limit: int
+    trial_ends_at: Optional[datetime] = None
     plan_activated_at: Optional[datetime] = None
     shopify_subscription_id: Optional[str] = None
     # Live from Shopify (null if free plan or if Shopify call fails gracefully)
@@ -471,8 +485,8 @@ class BillingStatusResponse(BaseModel):
 class CancelSubscriptionResponse(BaseModel):
     """Subscription cancellation confirmation"""
     cancelled: bool
-    plan_name: str            # Always 'free' after cancellation
-    monthly_tryon_limit: int  # Always 10 after cancellation
+    plan_name: str     # Always 'free' after cancellation
+    credits_limit: int # Always 0 after cancellation
 
 
 # ============================================================================

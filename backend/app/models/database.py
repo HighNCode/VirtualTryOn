@@ -5,7 +5,7 @@ All database tables for Virtual Try-On app
 
 from sqlalchemy import (
     Column, String, Integer, Float, Boolean, DateTime, Text,
-    ForeignKey, Index, UniqueConstraint, text
+    ForeignKey, Index, UniqueConstraint, text, Numeric
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
@@ -42,10 +42,12 @@ class Store(Base, TimestampMixin):
     # values: 'welcome' | 'goals' | 'referral' | 'widget_scope' | 'theme_setup' | 'plan' | 'complete'
     onboarding_completed_at = Column(DateTime, nullable=True)
     plan_name = Column(String(50), default='free', nullable=False)
-    # values: 'free' | 'starter'
+    # values: 'free' | 'starter' | 'growth'
     plan_shopify_subscription_id = Column(String(255), nullable=True)
     plan_activated_at = Column(DateTime, nullable=True)
-    monthly_tryon_limit = Column(Integer, default=10, nullable=False)
+    credits_limit = Column(Integer, default=0, nullable=False)
+    billing_interval = Column(String(10), nullable=True)   # 'monthly' | 'annual' | null for free
+    trial_ends_at = Column(DateTime, nullable=True)
 
     # Relationships
     products = relationship("Product", back_populates="store", cascade="all, delete-orphan")
@@ -197,6 +199,33 @@ class UserMeasurement(Base, TimestampMixin):
 
     def __repr__(self):
         return f"<UserMeasurement {self.measurement_id}>"
+
+
+class Plan(Base, TimestampMixin):
+    """
+    Subscription plan definitions (Starter, Growth).
+    Stored in DB so plans can be updated without code deploys.
+    Free plan is implied when a store has no plan_name match in this table.
+    """
+    __tablename__ = "plans"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(50), unique=True, nullable=False)          # 'starter' | 'growth'
+    display_name = Column(String(100), nullable=False)              # 'Starter' | 'Growth'
+    price_monthly = Column(Numeric(8, 2), nullable=False)          # 17.00
+    price_annual_total = Column(Numeric(8, 2), nullable=False)     # 179.00 (charged by Shopify)
+    price_annual_per_month = Column(Numeric(8, 2), nullable=False) # 14.00 (display only)
+    annual_discount_pct = Column(Integer, nullable=False, default=17)
+    credits_monthly = Column(Integer, nullable=False)               # 600
+    credits_annual = Column(Integer, nullable=False)                # 7600
+    trial_days = Column(Integer, nullable=True)                     # 14
+    trial_credits = Column(Integer, nullable=True)                  # 80
+    features = Column(JSONB, nullable=False)                        # List[str]
+    is_active = Column(Boolean, default=True, nullable=False)
+    sort_order = Column(Integer, default=0, nullable=False)
+
+    def __repr__(self):
+        return f"<Plan {self.name}>"
 
 
 # StudioBackground table was merged into photoshoot_models (migration e5f6g7h8i9j0 → f6g7h8i9j0k1).

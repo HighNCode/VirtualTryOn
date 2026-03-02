@@ -355,6 +355,8 @@ class ShopifyService:
         plan_name: str,
         price_usd: float,
         return_url: str,
+        billing_interval: str = "monthly",
+        trial_days: int = 0,
         test: bool = False,
         is_upgrade: bool = False,
     ) -> dict:
@@ -363,8 +365,10 @@ class ShopifyService:
 
         Args:
             plan_name: Human-readable plan label (used as subscription name)
-            price_usd: Monthly price in USD
+            price_usd: Charge amount in USD (monthly price or annual total)
             return_url: URL Shopify redirects to after merchant approves
+            billing_interval: 'monthly' → EVERY_30_DAYS, 'annual' → ANNUAL
+            trial_days: Number of free trial days (0 = no trial)
             test: True in development to avoid real charges
             is_upgrade: If True, uses APPLY_IMMEDIATELY replacement behavior (prorated)
 
@@ -374,12 +378,15 @@ class ShopifyService:
         Raises:
             Exception: If Shopify returns userErrors
         """
+        shopify_interval = "ANNUAL" if billing_interval == "annual" else "EVERY_30_DAYS"
+
         mutation = """
         mutation appSubscriptionCreate(
           $name: String!
           $lineItems: [AppSubscriptionLineItemInput!]!
           $returnUrl: URL!
           $test: Boolean
+          $trialDays: Int
           $replacementBehavior: AppSubscriptionReplacementBehavior
         ) {
           appSubscriptionCreate(
@@ -387,6 +394,7 @@ class ShopifyService:
             lineItems: $lineItems
             returnUrl: $returnUrl
             test: $test
+            trialDays: $trialDays
             replacementBehavior: $replacementBehavior
           ) {
             confirmationUrl
@@ -399,12 +407,13 @@ class ShopifyService:
             "name": plan_name,
             "returnUrl": return_url,
             "test": test,
+            "trialDays": trial_days if trial_days > 0 else None,
             "lineItems": [{
                 "plan": {
                     "appRecurringPricingDetails": {
                         "amount": price_usd,
                         "currencyCode": "USD",
-                        "interval": "EVERY_30_DAYS",
+                        "interval": shopify_interval,
                     }
                 }
             }],
