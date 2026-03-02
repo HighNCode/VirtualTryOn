@@ -2905,13 +2905,13 @@ export default function SettingsLayout() {
 
 ### Settings — Custom Screen (`app/routes/app.settings.custom.tsx`)
 
-**Purpose:** Brand customisation for the storefront widget (colour only for now).
+**Purpose:** Brand customisation and usage controls for the storefront widget.
 
 **API calls:**
 - `GET /api/v1/merchant/widget-config` on load → initial state
-- `PATCH /api/v1/merchant/widget-config` on Save → `{ "widget_color": "#RRGGBB" }`
+- `PATCH /api/v1/merchant/widget-config` on Save → `{ "widget_color": "#RRGGBB", "weekly_tryon_limit": 10 }`
 
-**Layout (two vertical sections inside a Card):**
+**Layout (three vertical sections inside a Card):**
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -2929,6 +2929,15 @@ export default function SettingsLayout() {
 │  │  [ Try it on ]   ← widget button in chosen  │  │
 │  │                    color, real styling        │  │
 │  └──────────────────────────────────────────────┘  │
+│                                                     │
+│  ─────────────────────────────────────────────────  │
+│                                                     │
+│  Usage Controls                                     │
+│  Weekly Generation Limit                            │
+│  [ 10  ▲▼ ]   (whole numbers, min 5)               │
+│  Help text: "Maximum try-ons a single customer can  │
+│  generate per week. Minimum 5. Set higher to allow  │
+│  more exploration, lower to prevent misuse."        │
 └─────────────────────────────────────────────────────┘
                             [ Cancel ]  [ Save ]
 ```
@@ -2939,7 +2948,7 @@ export default function SettingsLayout() {
 // app/routes/app.settings.custom.tsx
 import { useState } from "react";
 import { useLoaderData, useFetcher } from "@remix-run/react";
-import { Card, BlockStack, Text, InlineStack, Button, TextField, Banner } from "@shopify/polaris";
+import { Card, BlockStack, Text, InlineStack, Button, TextField, Banner, Divider } from "@shopify/polaris";
 
 // Loader: fetch current config from backend
 export async function loader({ request }) {
@@ -2950,30 +2959,52 @@ export async function loader({ request }) {
   return await res.json();
 }
 
-// Action: save updated color
+// Action: save updated color + weekly limit
 export async function action({ request }) {
   const { session } = await authenticate.admin(request);
   const formData = await request.formData();
   const widget_color = formData.get("widget_color");
+  const weekly_tryon_limit = Number(formData.get("weekly_tryon_limit"));
   const res = await fetch(`${BACKEND_URL}/api/v1/merchant/widget-config`, {
     method: "PATCH",
     headers: { "X-Store-ID": session.shop, "Content-Type": "application/json" },
-    body: JSON.stringify({ widget_color }),
+    body: JSON.stringify({ widget_color, weekly_tryon_limit }),
   });
   return await res.json();
 }
+
+const MIN_WEEKLY_LIMIT = 5;
 
 export default function CustomSettings() {
   const saved = useLoaderData();
   const fetcher = useFetcher();
 
-  const [color, setColor] = useState(saved.widget_color);
-  const isDirty = color !== saved.widget_color;
+  const [color, setColor] = useState(saved.widget_color ?? "#FF0000");
+  const [weeklyLimit, setWeeklyLimit] = useState(String(saved.weekly_tryon_limit ?? 10));
+
+  const weeklyLimitNum = parseInt(weeklyLimit, 10);
+  const weeklyLimitError =
+    isNaN(weeklyLimitNum) || weeklyLimitNum < MIN_WEEKLY_LIMIT
+      ? `Minimum is ${MIN_WEEKLY_LIMIT}`
+      : undefined;
+
+  const isDirty =
+    color !== (saved.widget_color ?? "#FF0000") ||
+    weeklyLimitNum !== (saved.weekly_tryon_limit ?? 10);
+
+  const canSave = isDirty && !weeklyLimitError;
 
   const handleSave = () => {
-    fetcher.submit({ widget_color: color }, { method: "PATCH" });
+    fetcher.submit(
+      { widget_color: color, weekly_tryon_limit: String(weeklyLimitNum) },
+      { method: "PATCH" }
+    );
   };
-  const handleCancel = () => setColor(saved.widget_color);
+
+  const handleCancel = () => {
+    setColor(saved.widget_color ?? "#FF0000");
+    setWeeklyLimit(String(saved.weekly_tryon_limit ?? 10));
+  };
 
   return (
     <BlockStack gap="400">
@@ -3024,13 +3055,34 @@ export default function CustomSettings() {
               </button>
             </div>
           </BlockStack>
+
+          <Divider />
+
+          {/* Section 3: Usage controls */}
+          <BlockStack gap="300">
+            <Text variant="headingMd">Usage Controls</Text>
+            <TextField
+              label="Weekly Generation Limit"
+              type="number"
+              value={weeklyLimit}
+              onChange={(v) => {
+                // Allow only whole numbers
+                if (/^\d*$/.test(v)) setWeeklyLimit(v);
+              }}
+              min={MIN_WEEKLY_LIMIT}
+              step={1}
+              error={weeklyLimitError}
+              helpText={`Maximum try-ons a single customer can generate per week. Minimum ${MIN_WEEKLY_LIMIT}. Set higher to allow more exploration, lower to prevent misuse.`}
+              autoComplete="off"
+            />
+          </BlockStack>
         </BlockStack>
       </Card>
 
       {/* Action bar */}
       <InlineStack gap="300" align="end">
         <Button onClick={handleCancel} disabled={!isDirty}>Cancel</Button>
-        <Button variant="primary" onClick={handleSave} disabled={!isDirty}
+        <Button variant="primary" onClick={handleSave} disabled={!canSave}
           loading={fetcher.state !== "idle"}>
           Save
         </Button>
@@ -3041,11 +3093,18 @@ export default function CustomSettings() {
 ```
 
 **Behaviour rules:**
-- Cancel reverts `color` state to `saved.widget_color` — no API call
-- Save is only enabled when `color !== saved.widget_color` (dirty check)
-- After a successful PATCH, `fetcher.data` triggers a success Banner; the `saved` value is updated on next loader call
+- Cancel reverts both `color` and `weeklyLimit` to their saved values — no API call
+- Save is enabled only when at least one field is dirty AND there are no validation errors (`canSave`)
+- `weekly_tryon_limit` must be a whole number ≥ 5; a Polaris `TextField` inline error is shown if the value is below 5 or non-numeric
+- The `type="number"` field rejects decimals via the `/^\d*$/` onChange guard (no dot, no negative sign)
+- After a successful PATCH, the success Banner appears; saved values update on next loader call
 - The hex `TextField` validates that input matches `#[0-9A-Fa-f]{0,6}` to prevent storing invalid values
 - The native `<input type="color">` provides the full colour palette including custom hex entry
+
+**Backend note (implementation pending):**
+- `widget_color` field already exists in `widget_configs` table and `PATCH /merchant/widget-config`
+- `weekly_tryon_limit` field needs to be added to the `widget_configs` table (new column), the `WidgetConfig` DB model, the `WidgetConfigUpdateRequest` schema, and the PATCH endpoint handler
+- The widget itself will need to enforce this limit client-side by tracking per-customer usage against a backend counter (implementation tracked separately)
 
 ---
 
