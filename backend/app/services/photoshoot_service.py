@@ -9,8 +9,8 @@ import os
 import time
 from typing import Optional
 
-import vertexai
-from vertexai.generative_models import GenerativeModel, GenerationConfig, Part
+from google import genai
+from google.genai import types
 
 from app.config import get_settings
 
@@ -18,7 +18,7 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 
-def _init_vertex():
+def _make_client() -> genai.Client:
     if not settings.GOOGLE_CLOUD_PROJECT:
         raise ValueError("GOOGLE_CLOUD_PROJECT is not configured")
     if settings.GOOGLE_APPLICATION_CREDENTIALS:
@@ -26,20 +26,22 @@ def _init_vertex():
             "GOOGLE_APPLICATION_CREDENTIALS",
             settings.GOOGLE_APPLICATION_CREDENTIALS,
         )
-    vertexai.init(
+    return genai.Client(
+        vertexai=True,
         project=settings.GOOGLE_CLOUD_PROJECT,
         location=settings.GOOGLE_CLOUD_LOCATION,
     )
 
 
-_init_vertex()
+_client = _make_client()
 
 
 class PhotoshootService:
     """Service for merchant AI photoshoot features via Vertex AI (Gemini)"""
 
     def __init__(self):
-        self.model = GenerativeModel(settings.TRYON_MODEL)
+        self._client = _client
+        self._model = settings.TRYON_MODEL
 
     # ------------------------------------------------------------------
     # Public API
@@ -90,13 +92,14 @@ class PhotoshootService:
 
         logger.info(f"PhotoshootService: ghost_mannequin clothing_type={clothing_type}, model={settings.TRYON_MODEL}")
 
-        response = self.model.generate_content(
-            [
-                Part.from_data(data=image1_bytes, mime_type="image/jpeg"),
-                Part.from_data(data=image2_bytes, mime_type="image/jpeg"),
+        response = self._client.models.generate_content(
+            model=self._model,
+            contents=[
+                types.Part.from_bytes(data=image1_bytes, mime_type="image/jpeg"),
+                types.Part.from_bytes(data=image2_bytes, mime_type="image/jpeg"),
                 prompt,
             ],
-            generation_config=GenerationConfig(response_modalities=["IMAGE"]),
+            config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
         )
 
         result = self._extract_image(response)
@@ -131,13 +134,14 @@ class PhotoshootService:
 
         logger.info(f"PhotoshootService: try_on_model, model={settings.TRYON_MODEL}")
 
-        response = self.model.generate_content(
-            [
-                Part.from_data(data=product_image_bytes, mime_type="image/jpeg"),
-                Part.from_data(data=model_image_bytes, mime_type="image/jpeg"),
+        response = self._client.models.generate_content(
+            model=self._model,
+            contents=[
+                types.Part.from_bytes(data=product_image_bytes, mime_type="image/jpeg"),
+                types.Part.from_bytes(data=model_image_bytes, mime_type="image/jpeg"),
                 prompt,
             ],
-            generation_config=GenerationConfig(response_modalities=["IMAGE"]),
+            config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
         )
 
         result = self._extract_image(response)
@@ -174,13 +178,14 @@ class PhotoshootService:
 
         logger.info(f"PhotoshootService: model_swap (face-only), model={settings.TRYON_MODEL}")
 
-        response = self.model.generate_content(
-            [
-                Part.from_data(data=original_wearing_bytes, mime_type="image/jpeg"),
-                Part.from_data(data=face_bytes, mime_type="image/jpeg"),
+        response = self._client.models.generate_content(
+            model=self._model,
+            contents=[
+                types.Part.from_bytes(data=original_wearing_bytes, mime_type="image/jpeg"),
+                types.Part.from_bytes(data=face_bytes, mime_type="image/jpeg"),
                 prompt,
             ],
-            generation_config=GenerationConfig(response_modalities=["IMAGE"]),
+            config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
         )
 
         result = self._extract_image(response)

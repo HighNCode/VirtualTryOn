@@ -8,40 +8,39 @@ import os
 import time
 from typing import Optional
 
-import vertexai
-from vertexai.generative_models import GenerativeModel, GenerationConfig, Part
+from google import genai
+from google.genai import types
 
 from app.config import get_settings
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
-# Initialise Vertex AI once at module load
-def _init_vertex():
+
+def _make_client() -> genai.Client:
     if not settings.GOOGLE_CLOUD_PROJECT:
         raise ValueError("GOOGLE_CLOUD_PROJECT is not configured")
-
-    # If a service account JSON path is set, point the env var so ADC picks it up
     if settings.GOOGLE_APPLICATION_CREDENTIALS:
         os.environ.setdefault(
             "GOOGLE_APPLICATION_CREDENTIALS",
             settings.GOOGLE_APPLICATION_CREDENTIALS,
         )
-
-    vertexai.init(
+    return genai.Client(
+        vertexai=True,
         project=settings.GOOGLE_CLOUD_PROJECT,
         location=settings.GOOGLE_CLOUD_LOCATION,
     )
 
 
-_init_vertex()
+_client = _make_client()
 
 
 class TryOnService:
     """Service for generating virtual try-on images via Vertex AI (Gemini)"""
 
     def __init__(self):
-        self.model = GenerativeModel(settings.TRYON_MODEL)
+        self._client = _client
+        self._model = settings.TRYON_MODEL
 
     # ------------------------------------------------------------------
     # Public API
@@ -76,15 +75,14 @@ class TryOnService:
             f"prompt_len={len(prompt)}"
         )
 
-        response = self.model.generate_content(
-            [
-                Part.from_data(data=person_image, mime_type="image/jpeg"),
-                Part.from_data(data=product_bytes, mime_type="image/jpeg"),
+        response = self._client.models.generate_content(
+            model=self._model,
+            contents=[
+                types.Part.from_bytes(data=person_image, mime_type="image/jpeg"),
+                types.Part.from_bytes(data=product_bytes, mime_type="image/jpeg"),
                 prompt,
             ],
-            generation_config=GenerationConfig(
-                response_modalities=["IMAGE"],
-            ),
+            config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
         )
 
         result_image = self._extract_image(response)
@@ -123,15 +121,14 @@ class TryOnService:
 
         logger.info(f"Calling Vertex AI for studio look, model={settings.TRYON_MODEL}")
 
-        response = self.model.generate_content(
-            [
-                Part.from_data(data=tryon_image, mime_type="image/png"),
-                Part.from_data(data=studio_image, mime_type="image/jpeg"),
+        response = self._client.models.generate_content(
+            model=self._model,
+            contents=[
+                types.Part.from_bytes(data=tryon_image, mime_type="image/png"),
+                types.Part.from_bytes(data=studio_image, mime_type="image/jpeg"),
                 prompt,
             ],
-            generation_config=GenerationConfig(
-                response_modalities=["IMAGE"],
-            ),
+            config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
         )
 
         result_image = self._extract_image(response)
