@@ -51,9 +51,7 @@ httpx==0.25.2
 python-dateutil==2.8.2
 
 # ---- SMPL Body Measurement Pipeline ----
-# Core ML framework
-torch>=2.0.0
-torchvision>=0.15.0
+# Core ML framework (CPU-only torch installed separately in Dockerfile)
 
 # SMPL body model (Python implementation)
 smplx>=0.1.28
