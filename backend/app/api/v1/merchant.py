@@ -15,6 +15,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session as DBSession
 
 from app.core.database import get_db
+from app.core.security import verify_session_token
 from app.config import get_settings
 from app.models.database import Store, MerchantOnboarding, WidgetConfig, TryOn, Product, Plan
 from app.models.schemas import (
@@ -48,13 +49,26 @@ widget_router = APIRouter(prefix="/widget", tags=["Widget"])
 
 
 # ─────────────────────────────────────────────────────────────
-# Shared dependency
+# Shared dependencies
 # ─────────────────────────────────────────────────────────────
 
 def get_store(
+    payload: dict = Depends(verify_session_token),
+    db: DBSession = Depends(get_db),
+) -> Store:
+    """Merchant dashboard dependency — identified by App Bridge JWT."""
+    shop = payload["dest"].replace("https://", "")
+    store = db.query(Store).filter_by(shopify_domain=shop).first()
+    if not store:
+        raise HTTPException(404, "Store not found")
+    return store
+
+
+def _get_store_by_id(
     x_store_id: str = Header(..., alias="X-Store-ID"),
     db: DBSession = Depends(get_db),
 ) -> Store:
+    """Widget (storefront) dependency — identified by X-Store-ID header."""
     store = db.query(Store).filter_by(store_id=x_store_id).first()
     if not store:
         raise HTTPException(404, "Store not found")
@@ -670,7 +684,7 @@ def update_widget_config(
 @widget_router.get("/check-enabled", response_model=WidgetCheckResponse)
 def check_widget_enabled(
     shopify_product_gid: str = Query(..., description="Shopify product GID, e.g. gid://shopify/Product/123"),
-    store: Store = Depends(get_store),
+    store: Store = Depends(_get_store_by_id),
 ):
     """
     Called by the storefront widget to decide whether to render the try-on button.

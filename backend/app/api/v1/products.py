@@ -10,7 +10,7 @@ from datetime import datetime
 import logging
 
 from app.core.database import get_db
-from app.core.security import decrypt_token
+from app.core.security import decrypt_token, verify_session_token
 from app.models.database import Store, Product
 from app.models.schemas import ProductSyncResponse, ProductResponse
 from app.services.shopify_service import ShopifyService
@@ -20,25 +20,17 @@ logger = logging.getLogger(__name__)
 
 
 async def get_store_from_header(
-    x_store_id: str = Header(..., alias="X-Store-ID"),
+    payload: dict = Depends(verify_session_token),
     db: Session = Depends(get_db)
 ) -> Store:
     """
-    Dependency to get store from X-Store-ID header
-
-    Args:
-        x_store_id: Store UUID from header
-        db: Database session
-
-    Returns:
-        Store object
-
-    Raises:
-        HTTPException: If store not found
+    Dependency to get store from App Bridge session token (JWT).
+    Extracts shop domain from token payload["dest"].
     """
-    store = db.query(Store).filter_by(store_id=x_store_id).first()
+    shop = payload["dest"].replace("https://", "")
+    store = db.query(Store).filter_by(shopify_domain=shop).first()
     if not store:
-        raise HTTPException(404, f"Store not found: {x_store_id}")
+        raise HTTPException(404, f"Store not found for shop: {shop}")
     return store
 
 

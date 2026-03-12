@@ -3,6 +3,8 @@ Authentication & OAuth Endpoints
 Handles Shopify OAuth flow
 """
 
+import asyncio
+import shopify
 from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
@@ -10,12 +12,7 @@ from datetime import datetime
 import logging
 
 from app.core.database import get_db
-from app.core.security import (
-    verify_shopify_hmac,
-    get_shopify_auth_url,
-    exchange_code_for_token,
-    encrypt_token
-)
+from app.core.security import encrypt_token
 from app.models.database import Store
 from app.models.schemas import StoreResponse
 from app.services.shopify_service import ShopifyService
@@ -42,24 +39,18 @@ async def shopify_oauth_init(shop: str, request: Request):
     if not settings.SHOPIFY_API_KEY:
         raise HTTPException(500, "Shopify API key not configured")
 
-    # Build redirect URI (this endpoint's callback)
+    shopify.Session.setup(api_key=settings.SHOPIFY_API_KEY, secret=settings.SHOPIFY_API_SECRET)
+    session = shopify.Session(shop, settings.SHOPIFY_API_VERSION)
     redirect_uri = str(request.url_for('shopify_oauth_callback'))
-
-    # Generate Shopify OAuth URL
-    auth_url = get_shopify_auth_url(shop, redirect_uri)
+    auth_url = session.create_permission_url(settings.SHOPIFY_SCOPES.split(","), redirect_uri)
 
     logger.info(f"OAuth initiated for shop: {shop}")
-
     return RedirectResponse(url=auth_url)
 
 
 @router.get("/callback", name="shopify_oauth_callback")
 async def shopify_oauth_callback(
-    code: str,
-    shop: str,
-    hmac: str,
-    timestamp: str = None,
-    state: str = None,
+    request: Request,
     db: Session = Depends(get_db)
 ):
     """
@@ -68,59 +59,49 @@ async def shopify_oauth_callback(
     Shopify redirects here after user approves app installation
 
     Steps:
-    1. Verify HMAC signature
-    2. Exchange code for access token
-    3. Save store to database
-    4. Install script tag
-    5. Sync products
-    6. Redirect to Shopify admin
+    1. Verify HMAC + exchange code for token (via shopify.Session)
+    2. Save store to database
+    3. Install script tag
+    4. Sync products
+    5. Redirect to embedded app
 
     Args:
-        code: OAuth authorization code
-        shop: Shop domain
-        hmac: HMAC signature for verification
-        timestamp: Request timestamp
-        state: CSRF state token
+        request: FastAPI request (all query params extracted as dict)
         db: Database session
 
     Returns:
-        Redirect to Shopify admin dashboard
+        Redirect to embedded app entry point
     """
-    # Verify HMAC
-    params = {
-        'code': code,
-        'shop': shop,
-        'timestamp': timestamp or '',
-        'state': state or ''
-    }
+    params = dict(request.query_params)
+    shop = params.get("shop")
+    host = params.get("host")
 
-    if not verify_shopify_hmac(params, hmac):
-        logger.error(f"HMAC verification failed for shop: {shop}")
-        raise HTTPException(403, "Invalid HMAC signature")
+    if not shop:
+        raise HTTPException(400, "Missing shop parameter")
+
+    shopify.Session.setup(api_key=settings.SHOPIFY_API_KEY, secret=settings.SHOPIFY_API_SECRET)
+    session = shopify.Session(shop, settings.SHOPIFY_API_VERSION)
 
     try:
-        # Exchange code for access token
-        access_token = await exchange_code_for_token(shop, code)
+        # session.request_token() is synchronous and auto-validates HMAC
+        loop = asyncio.get_running_loop()
+        access_token = await loop.run_in_executor(None, session.request_token, params)
+    except Exception as e:
+        logger.error(f"Token exchange failed for shop {shop}: {e}")
+        raise HTTPException(403, "HMAC verification or token exchange failed")
 
-        # Encrypt token for storage
+    try:
         encrypted_token = encrypt_token(access_token)
 
-        # Check if store already exists (reinstallation)
         existing_store = db.query(Store).filter_by(shopify_domain=shop).first()
 
         if existing_store:
-            # Reinstallation - update token and status
             existing_store.shopify_access_token = encrypted_token
             existing_store.installation_status = 'active'
             existing_store.reinstalled_at = datetime.utcnow()
-
-            # Cancel any scheduled deletion
-            # TODO: Implement deletion cancellation
-
             store = existing_store
             logger.info(f"Store reinstalled: {shop}")
         else:
-            # New installation
             store = Store(
                 shopify_domain=shop,
                 shopify_access_token=encrypted_token,
@@ -132,7 +113,6 @@ async def shopify_oauth_callback(
         db.commit()
         db.refresh(store)
 
-        # Initialize Shopify service
         shopify_service = ShopifyService(shop, access_token)
 
         # Install script tag (widget)
@@ -145,20 +125,15 @@ async def shopify_oauth_callback(
             logger.info(f"Script tag installed: {script_tag_id}")
         except Exception as e:
             logger.error(f"Script tag installation failed: {e}")
-            # Continue anyway - can retry later
 
-        # Trigger product sync (async background task)
-        # For now, sync immediately (in production, use background task)
         try:
             sync_result = await shopify_service.sync_all_products(db, str(store.store_id))
             logger.info(f"Product sync completed: {sync_result}")
         except Exception as e:
             logger.error(f"Product sync failed: {e}")
-            # Continue anyway - can retry later
 
-        # Redirect to Shopify admin
-        redirect_url = f"https://{shop}/admin/apps"
-        return RedirectResponse(url=redirect_url)
+        # Redirect to embedded app entry point
+        return RedirectResponse(url=f"/?shop={shop}&host={host}")
 
     except Exception as e:
         logger.error(f"OAuth callback error: {e}", exc_info=True)

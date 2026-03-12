@@ -9,6 +9,7 @@ import base64
 from typing import Dict, Optional
 from fastapi import Header, HTTPException, Request
 from urllib.parse import urlencode
+from jose import jwt, JWTError
 import logging
 
 from app.config import get_settings
@@ -214,3 +215,40 @@ def decrypt_token(encrypted_token: str) -> str:
     """
     # TODO: Implement proper decryption
     return encrypted_token
+
+
+def verify_session_token(authorization: Optional[str] = Header(None)) -> dict:
+    """
+    Verify Shopify session token (JWT) from App Bridge.
+
+    The React frontend sends: Authorization: Bearer <session_token>
+    Token is HS256 signed with SHOPIFY_API_SECRET, audience = SHOPIFY_API_KEY.
+
+    Args:
+        authorization: Authorization header value
+
+    Returns:
+        Decoded JWT payload dict
+
+    Raises:
+        HTTPException 401: If token is missing, malformed, or invalid
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing session token")
+
+    token = authorization.replace("Bearer ", "")
+
+    try:
+        payload = jwt.decode(
+            token,
+            settings.SHOPIFY_API_SECRET,
+            algorithms=["HS256"],
+            audience=settings.SHOPIFY_API_KEY,
+        )
+        dest = payload.get("dest")
+        iss = payload.get("iss")
+        if not dest or not iss or dest not in iss:
+            raise HTTPException(status_code=401, detail="Invalid token claims")
+        return payload
+    except JWTError as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")

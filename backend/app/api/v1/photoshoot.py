@@ -21,6 +21,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session as DBSession
 
 from app.core.database import get_db
+from app.core.security import verify_session_token
 from app.config import get_settings
 from app.models.database import Store, PhotoshootJob, PhotoshootModel, PhotoshootModelFace, GhostMannequinRef
 from app.models.schemas import (
@@ -41,14 +42,15 @@ router = APIRouter(prefix="/merchant/photoshoot", tags=["AI Photoshoot"])
 
 
 # ─────────────────────────────────────────────────────────────
-# Auth dependency (mirrors merchant.py)
+# Auth dependency — App Bridge JWT (merchant dashboard)
 # ─────────────────────────────────────────────────────────────
 
 def get_store(
-    x_store_id: str = Header(..., alias="X-Store-ID"),
+    payload: dict = Depends(verify_session_token),
     db: DBSession = Depends(get_db),
 ) -> Store:
-    store = db.query(Store).filter_by(store_id=x_store_id).first()
+    shop = payload["dest"].replace("https://", "")
+    store = db.query(Store).filter_by(shopify_domain=shop).first()
     if not store:
         raise HTTPException(404, "Store not found")
     return store
@@ -407,8 +409,8 @@ async def start_try_on_model(
     background_tasks: BackgroundTasks,
     shopify_product_gid: str = Form(..., description="Shopify product GID"),
     product_image_url: str = Form(..., description="Product garment image URL (Shopify CDN)"),
-    model_library_id: Optional[str] = Form(None, description="ID of a built-in model photo"),
-    model_image: Optional[UploadFile] = File(None, description="Uploaded model photo"),
+    library_id: Optional[str] = Form(None, description="ID of a built-in model photo"),
+    photo_upload: Optional[UploadFile] = File(None, description="Uploaded model photo"),
     store: Store = Depends(get_store),
     db: DBSession = Depends(get_db),
 ):
@@ -416,17 +418,17 @@ async def start_try_on_model(
     Start a try-on for model job.
 
     Provide the product image URL (from the ResourcePicker) and either:
-    - model_library_id — pick from the built-in model library
-    - model_image — upload your own model photo
+    - library_id — pick from the built-in model library
+    - photo_upload — upload your own model photo
 
     Returns 202 immediately. Poll GET /jobs/{job_id}/status for result.
     """
     import requests as req_lib
 
-    if not model_library_id and not model_image:
-        raise HTTPException(422, "Provide either model_library_id or upload a model_image file")
-    if model_library_id and model_image and model_image.filename:
-        raise HTTPException(422, "Provide only one of model_library_id or model_image, not both")
+    if not library_id and not photo_upload:
+        raise HTTPException(422, "Provide either library_id or upload a photo_upload file")
+    if library_id and photo_upload and photo_upload.filename:
+        raise HTTPException(422, "Provide only one of library_id or photo_upload, not both")
 
     try:
         try:
@@ -436,17 +438,17 @@ async def start_try_on_model(
         except Exception as e:
             raise HTTPException(422, f"Could not download product image: {e}")
 
-        if model_library_id:
+        if library_id:
             model_record = db.query(PhotoshootModel).filter_by(
-                id=model_library_id, is_active=True
+                id=library_id, is_active=True
             ).first()
             if not model_record:
                 raise HTTPException(404, "Model not found in library")
             model_bytes = _read_static_image(model_record.image_path)
         else:
-            model_bytes = await model_image.read()
+            model_bytes = await photo_upload.read()
             if not model_bytes:
-                raise HTTPException(422, "Uploaded model image is empty")
+                raise HTTPException(422, "Uploaded photo is empty")
 
         job_id = uuid.uuid4()
         job = PhotoshootJob(
