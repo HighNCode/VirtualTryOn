@@ -177,12 +177,55 @@ Development: http://localhost:8000
 ```
 
 ### Authentication
-All API calls (except OAuth) require:
+
+#### Header-Based Auth (Store/Session APIs)
+All API calls (except OAuth and App Bridge routes) require:
 ```
 Headers:
   X-Store-ID: {store_uuid}
   X-Session-ID: {session_uuid}  # For customer requests
 ```
+
+#### FastAPI Setup
+
+**ShopifyAPI handles the OAuth flow, and python-jose handles session token JWT verification.**
+
+**Step 1: OAuth Endpoints**
+
+```
+GET /api/v1/auth/shopify?shop={shop_domain}
+  → Redirects to Shopify OAuth consent screen
+
+GET /api/v1/auth/callback?shop=...&code=...&hmac=...&host=...
+  → session.request_token(params) auto-validates HMAC
+  → Saves store + encrypted access_token to DB
+  → Installs script tag, triggers product sync
+  → Redirects to /?shop={shop}&host={host}  (embedded app entry point)
+```
+
+Uses `shopify.Session` from `ShopifyAPI==10.0.0`. `session.request_token()` exchanges the code for an access token and verifies the HMAC automatically — no manual HMAC computation needed.
+
+**Step 2: Session Token Verification Middleware**
+
+Every API request from the React frontend (via Shopify App Bridge) carries a Shopify-issued JWT in the `Authorization` header. Verified by the `verify_session_token` dependency in `core/security.py`:
+
+- Decodes HS256 JWT using `SHOPIFY_API_SECRET` as key, `audience=SHOPIFY_API_KEY`
+- Validates `dest` claim is contained within `iss` claim (shop domain check)
+- Returns decoded payload on success; raises HTTP 401 on failure
+
+```python
+# Protect any endpoint with:
+from app.core.security import verify_session_token
+
+@router.get("/some-endpoint")
+async def endpoint(payload: dict = Depends(verify_session_token)):
+    shop = payload["dest"]  # e.g. "https://mystore.myshopify.com"
+    # use shop to look up access_token from DB for Shopify API calls
+```
+
+**CORS**
+
+`main.py` configures `CORSMiddleware` with `allow_origin_regex=r"https://.*\.myshopify\.com"` in addition to the explicit `CORS_ORIGINS` env var, so requests from any merchant's embedded app iframe are accepted.
 
 ---
 
@@ -656,7 +699,7 @@ Response 200:
 ```http
 POST /api/v1/products/sync
 Headers:
-  X-Store-ID: {store_uuid}
+  Authorization: Bearer <shopify_session_token>
 
 Response 200:
 {
@@ -1821,7 +1864,7 @@ Merchant-facing dashboard to show ROI and value metrics. Demonstrates decreased 
 ```http
 GET /api/v1/merchant/dashboard
 Headers:
-  X-Store-ID: {store_uuid}
+  Authorization: Bearer <shopify_session_token>
 
 Response 200:
 {
@@ -3298,6 +3341,8 @@ Protected by `X-Admin-Key` header.
 
 ### Merchant Billing Endpoints
 
+**Auth:** All `/merchant/billing/*` endpoints require `Authorization: Bearer <shopify_session_token>` (App Bridge JWT). Shop identity is derived from the token — no `X-Store-ID` header needed.
+
 #### GET /api/v1/merchant/billing/plans -> PlansResponse
 Queries active plans from DB ordered by `sort_order`. Marks `is_current` by `store.plan_name`.
 
@@ -3403,18 +3448,18 @@ AI: Gemini replaces the original model with the new model while keeping the garm
 ### Endpoints
 
 **Router prefix:** `/api/v1/merchant/photoshoot`
-**Auth:** All endpoints (except `GET /models/{id}/image` and `GET /jobs/{id}/result`) require `X-Store-ID` header.
+**Auth:** All endpoints (except `GET /models/{id}/image` and `GET /jobs/{id}/result`) require `Authorization: Bearer <shopify_session_token>` (App Bridge JWT). Image-serving endpoints are public so Shopify CDN can fetch them.
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| GET | `/models` | X-Store-ID | List built-in model photos (filter by `?gender=`) |
+| GET | `/models` | App Bridge JWT | List built-in model photos (filter by `?gender=`) |
 | GET | `/models/{id}/image` | None | Serve model photo bytes |
-| POST | `/ghost-mannequin` | X-Store-ID | Start ghost mannequin job (JSON) → 202 |
-| POST | `/try-on-model` | X-Store-ID | Start try-on job (multipart) → 202 |
-| POST | `/model-swap` | X-Store-ID | Start model swap job (multipart) → 202 |
-| GET | `/jobs/{job_id}/status` | X-Store-ID | Poll job status |
+| POST | `/ghost-mannequin` | App Bridge JWT | Start ghost mannequin job (JSON) → 202 |
+| POST | `/try-on-model` | App Bridge JWT | Start try-on job (multipart) → 202 |
+| POST | `/model-swap` | App Bridge JWT | Start model swap job (multipart) → 202 |
+| GET | `/jobs/{job_id}/status` | App Bridge JWT | Poll job status |
 | GET | `/jobs/{job_id}/result` | None | Serve result image bytes (for preview + Shopify) |
-| POST | `/jobs/{job_id}/approve` | X-Store-ID | Push result image to Shopify product |
+| POST | `/jobs/{job_id}/approve` | App Bridge JWT | Push result image to Shopify product |
 
 #### `POST /ghost-mannequin` — JSON body
 ```json
@@ -3429,8 +3474,8 @@ AI: Gemini replaces the original model with the new model while keeping the garm
 ```
 shopify_product_gid  (string, required)
 product_image_url    (string, required)
-model_library_id     (string, optional UUID — mutually exclusive with model_image)
-model_image          (file, optional — mutually exclusive with model_library_id)
+library_id           (string, optional UUID — mutually exclusive with photo_upload)
+photo_upload         (file, optional — mutually exclusive with library_id)
 ```
 
 #### `POST /model-swap` — multipart/form-data
@@ -3612,7 +3657,7 @@ Returns 422 if `event_type` is not in the valid set.
 
 #### GET /api/v1/merchant/analytics/standard
 
-Merchant dashboard analytics. Requires `X-Store-ID` header.
+Merchant dashboard analytics. Requires `Authorization: Bearer <shopify_session_token>` (App Bridge JWT).
 
 **Query param:** `period` — look-back window in days. Accepted values: `7`, `30` (default), `90`.
 

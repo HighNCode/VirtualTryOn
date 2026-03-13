@@ -7,7 +7,8 @@ import hmac
 import hashlib
 import base64
 from typing import Dict, Optional
-from fastapi import Header, HTTPException, Request
+from fastapi import Depends, Header, HTTPException, Request
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from urllib.parse import urlencode
 from jose import jwt, JWTError
 import logging
@@ -217,15 +218,20 @@ def decrypt_token(encrypted_token: str) -> str:
     return encrypted_token
 
 
-def verify_session_token(authorization: Optional[str] = Header(None)) -> dict:
+_bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def verify_session_token(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
+) -> dict:
     """
     Verify Shopify session token (JWT) from App Bridge.
 
     The React frontend sends: Authorization: Bearer <session_token>
     Token is HS256 signed with SHOPIFY_API_SECRET, audience = SHOPIFY_API_KEY.
 
-    Args:
-        authorization: Authorization header value
+    Uses HTTPBearer so FastAPI registers it as an OpenAPI security scheme —
+    this makes the Swagger UI Authorize button work correctly.
 
     Returns:
         Decoded JWT payload dict
@@ -233,10 +239,10 @@ def verify_session_token(authorization: Optional[str] = Header(None)) -> dict:
     Raises:
         HTTPException 401: If token is missing, malformed, or invalid
     """
-    if not authorization or not authorization.startswith("Bearer "):
+    if not credentials:
         raise HTTPException(status_code=401, detail="Missing session token")
 
-    token = authorization.replace("Bearer ", "")
+    token = credentials.credentials
 
     try:
         payload = jwt.decode(
