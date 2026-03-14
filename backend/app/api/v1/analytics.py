@@ -5,19 +5,19 @@ Public router  → /api/v1/analytics
   POST /analytics/events         — Widget-facing event ingestion (X-Store-ID header)
 
 Merchant router → /api/v1/merchant/analytics
-  GET  /merchant/analytics/standard — Standard analytics tab (X-Store-ID merchant auth)
+  GET  /merchant/analytics/standard — Standard analytics tab (merchant store context)
 """
 
 import logging
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
 from typing import List, Optional, Set
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import func, cast, Date as SADate
 from sqlalchemy.orm import Session as DBSession
 
+from app.api.store_context import get_current_merchant_store
 from app.core.database import get_db
-from app.core.security import verify_session_token
 from app.models.database import AnalyticsEvent, Store, TryOn, Product
 from app.models.schemas import (
     AnalyticsEventCreate,
@@ -54,27 +54,12 @@ analytics_merchant_router = APIRouter(prefix="/merchant/analytics", tags=["Analy
 
 
 # ─────────────────────────────────────────────────────────────
-# Shared dependencies
-# ─────────────────────────────────────────────────────────────
-
 def get_store_by_header(
     x_store_id: str = Header(..., alias="X-Store-ID"),
     db: DBSession = Depends(get_db),
 ) -> Store:
     """Widget-facing dependency — X-Store-ID header."""
     store = db.query(Store).filter_by(store_id=x_store_id).first()
-    if not store:
-        raise HTTPException(404, "Store not found")
-    return store
-
-
-def get_store_from_token(
-    payload: dict = Depends(verify_session_token),
-    db: DBSession = Depends(get_db),
-) -> Store:
-    """Merchant dashboard dependency — App Bridge JWT."""
-    shop = payload["dest"].replace("https://", "")
-    store = db.query(Store).filter_by(shopify_domain=shop).first()
     if not store:
         raise HTTPException(404, "Store not found")
     return store
@@ -121,7 +106,7 @@ def ingest_event(
 @analytics_merchant_router.get("/standard", response_model=StandardAnalyticsResponse)
 async def get_standard_analytics(
     period: int = Query(30, description="Look-back window in days: 7, 30, or 90"),
-    store: Store = Depends(get_store_from_token),
+    store: Store = Depends(get_current_merchant_store),
     db: DBSession = Depends(get_db),
 ):
     """

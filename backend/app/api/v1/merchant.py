@@ -3,7 +3,8 @@ Merchant Admin Endpoints
 Covers the 6-step onboarding wizard, billing plan management, and the
 widget check-enabled endpoint consumed by the storefront widget.
 
-All merchant endpoints require the X-Store-ID header.
+Merchant routes resolve the active store from Shopify App Bridge auth when present,
+with header fallbacks for the current embedded-app migration state.
 """
 
 import logging
@@ -14,8 +15,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session as DBSession
 
+from app.api.store_context import get_current_merchant_store, require_shopify_access_token
 from app.core.database import get_db
-from app.core.security import verify_session_token
 from app.config import get_settings
 from app.models.database import Store, MerchantOnboarding, WidgetConfig, TryOn, Product, Plan
 from app.models.schemas import (
@@ -52,18 +53,6 @@ widget_router = APIRouter(prefix="/widget", tags=["Widget"])
 # Shared dependencies
 # ─────────────────────────────────────────────────────────────
 
-def get_store(
-    payload: dict = Depends(verify_session_token),
-    db: DBSession = Depends(get_db),
-) -> Store:
-    """Merchant dashboard dependency — identified by App Bridge JWT."""
-    shop = payload["dest"].replace("https://", "")
-    store = db.query(Store).filter_by(shopify_domain=shop).first()
-    if not store:
-        raise HTTPException(404, "Store not found")
-    return store
-
-
 def _get_store_by_id(
     x_store_id: str = Header(..., alias="X-Store-ID"),
     db: DBSession = Depends(get_db),
@@ -81,7 +70,7 @@ def _get_store_by_id(
 
 @merchant_router.get("/onboarding/status", response_model=OnboardingStatusResponse)
 def get_onboarding_status(
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_current_merchant_store),
 ):
     """
     Return the full onboarding state for the store.
@@ -111,7 +100,7 @@ def get_onboarding_status(
 @merchant_router.post("/onboarding/goals", response_model=OnboardingStepResponse)
 def save_goals(
     body: GoalsRequest,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_current_merchant_store),
     db: DBSession = Depends(get_db),
 ):
     """
@@ -141,7 +130,7 @@ def save_goals(
 @merchant_router.post("/onboarding/referral", response_model=OnboardingStepResponse)
 def save_referral(
     body: ReferralRequest,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_current_merchant_store),
     db: DBSession = Depends(get_db),
 ):
     """
@@ -173,7 +162,7 @@ VALID_SCOPE_TYPES = {"all", "selected_collections", "selected_products", "mixed"
 
 
 @merchant_router.get("/onboarding/widget-scope", response_model=WidgetScopeResponse)
-def get_widget_scope(store: Store = Depends(get_store)):
+def get_widget_scope(store: Store = Depends(get_current_merchant_store)):
     """Return current widget scope configuration (or defaults if not yet set)."""
     wc = store.widget_config
     if wc is None:
@@ -192,7 +181,7 @@ def get_widget_scope(store: Store = Depends(get_store)):
 @merchant_router.post("/onboarding/widget-scope", response_model=WidgetScopeResponse)
 def save_widget_scope(
     body: WidgetScopeRequest,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_current_merchant_store),
     db: DBSession = Depends(get_db),
 ):
     """
@@ -226,7 +215,7 @@ def save_widget_scope(
 # ─────────────────────────────────────────────────────────────
 
 @merchant_router.get("/onboarding/theme-status", response_model=ThemeStatusResponse)
-def get_theme_status(store: Store = Depends(get_store)):
+def get_theme_status(store: Store = Depends(get_current_merchant_store)):
     """
     Return whether the theme app extension block has been detected.
     Also returns a link to the merchant's Themes admin page.
@@ -240,7 +229,7 @@ def get_theme_status(store: Store = Depends(get_store)):
 @merchant_router.post("/onboarding/theme-status", response_model=OnboardingStepResponse)
 def update_theme_status(
     body: ThemeStatusUpdateRequest,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_current_merchant_store),
     db: DBSession = Depends(get_db),
 ):
     """
@@ -306,7 +295,7 @@ def _get_plan_or_404(plan_name: str, db: DBSession) -> Plan:
 @merchant_router.post("/billing/activate", response_model=PlanResponse)
 def activate_billing(
     body: BillingActivateRequest,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_current_merchant_store),
     db: DBSession = Depends(get_db),
 ):
     """
@@ -352,7 +341,7 @@ def activate_billing(
 
 
 @merchant_router.get("/billing/plan", response_model=PlanResponse)
-def get_plan(store: Store = Depends(get_store)):
+def get_plan(store: Store = Depends(get_current_merchant_store)):
     """Return the store's current plan details."""
     return PlanResponse(
         plan_name=store.plan_name,
@@ -364,7 +353,7 @@ def get_plan(store: Store = Depends(get_store)):
 
 @merchant_router.get("/billing/plans", response_model=PlansResponse)
 def get_billing_plans(
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_current_merchant_store),
     db: DBSession = Depends(get_db),
 ):
     """
@@ -396,7 +385,7 @@ def get_billing_plans(
 
 @merchant_router.get("/billing/status", response_model=BillingStatusResponse)
 async def get_billing_status(
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_current_merchant_store),
     db: DBSession = Depends(get_db),
 ):
     """
@@ -411,7 +400,7 @@ async def get_billing_status(
     shopify_status = None
     if store.plan_shopify_subscription_id:
         try:
-            svc = ShopifyService(store.shopify_domain, store.shopify_access_token)
+            svc = ShopifyService(store.shopify_domain, require_shopify_access_token(store))
             shopify_status = await svc.billing_get_status()
         except Exception as exc:
             logger.warning(f"Shopify billing status call failed for store {store.store_id}: {exc}")
@@ -455,7 +444,7 @@ async def get_billing_status(
 @merchant_router.post("/billing/create-subscription", response_model=CreateSubscriptionResponse)
 async def create_subscription(
     body: CreateSubscriptionRequest,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_current_merchant_store),
     db: DBSession = Depends(get_db),
 ):
     """
@@ -486,7 +475,7 @@ async def create_subscription(
     is_upgrade = store.plan_name not in {"free", body.plan_name}
 
     try:
-        svc = ShopifyService(store.shopify_domain, store.shopify_access_token)
+        svc = ShopifyService(store.shopify_domain, require_shopify_access_token(store))
         result = await svc.billing_create_subscription(
             plan_name=plan.display_name,
             price_usd=price,
@@ -512,7 +501,7 @@ async def create_subscription(
 
 @merchant_router.post("/billing/cancel-subscription", response_model=CancelSubscriptionResponse)
 async def cancel_subscription(
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_current_merchant_store),
     db: DBSession = Depends(get_db),
 ):
     """
@@ -526,7 +515,7 @@ async def cancel_subscription(
         raise HTTPException(400, "No active Shopify subscription found")
 
     try:
-        svc = ShopifyService(store.shopify_domain, store.shopify_access_token)
+        svc = ShopifyService(store.shopify_domain, require_shopify_access_token(store))
         await svc.billing_cancel_subscription(store.plan_shopify_subscription_id)
     except Exception as exc:
         logger.error(f"Shopify subscription cancel failed for store {store.store_id}: {exc}")
@@ -554,7 +543,7 @@ async def cancel_subscription(
 
 @merchant_router.get("/dashboard/overview", response_model=DashboardOverviewResponse)
 def get_dashboard_overview(
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_current_merchant_store),
     db: DBSession = Depends(get_db),
 ):
     """
@@ -627,7 +616,7 @@ def _widget_config_response(wc: Optional[WidgetConfig]) -> WidgetConfigResponse:
 
 
 @merchant_router.get("/widget-config", response_model=WidgetConfigResponse)
-def get_widget_config(store: Store = Depends(get_store)):
+def get_widget_config(store: Store = Depends(get_current_merchant_store)):
     """
     Return the full widget configuration for the Settings → Custom screen.
     If no config has been saved yet, returns defaults (scope_type='all', widget_color='#FF0000').
@@ -638,7 +627,7 @@ def get_widget_config(store: Store = Depends(get_store)):
 @merchant_router.patch("/widget-config", response_model=WidgetConfigResponse)
 def update_widget_config(
     body: WidgetConfigUpdateRequest,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_current_merchant_store),
     db: DBSession = Depends(get_db),
 ):
     """

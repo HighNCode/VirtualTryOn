@@ -3,14 +3,14 @@ Products API Endpoints
 Handles product sync and retrieval
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Header
+from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from datetime import datetime
 import logging
 
+from app.api.store_context import get_current_merchant_store, require_shopify_access_token
 from app.core.database import get_db
-from app.core.security import decrypt_token, verify_session_token
+from app.core.security import decrypt_token
 from app.models.database import Store, Product
 from app.models.schemas import ProductSyncResponse, ProductResponse
 from app.services.shopify_service import ShopifyService
@@ -19,24 +19,9 @@ router = APIRouter(prefix="/products", tags=["Products"])
 logger = logging.getLogger(__name__)
 
 
-async def get_store_from_header(
-    payload: dict = Depends(verify_session_token),
-    db: Session = Depends(get_db)
-) -> Store:
-    """
-    Dependency to get store from App Bridge session token (JWT).
-    Extracts shop domain from token payload["dest"].
-    """
-    shop = payload["dest"].replace("https://", "")
-    store = db.query(Store).filter_by(shopify_domain=shop).first()
-    if not store:
-        raise HTTPException(404, f"Store not found for shop: {shop}")
-    return store
-
-
 @router.post("/sync", response_model=ProductSyncResponse)
 async def sync_products(
-    store: Store = Depends(get_store_from_header),
+    store: Store = Depends(get_current_merchant_store),
     db: Session = Depends(get_db)
 ):
     """
@@ -44,15 +29,12 @@ async def sync_products(
 
     Syncs all products from Shopify to database
 
-    Headers:
-        X-Store-ID: Store UUID
-
     Returns:
         Sync statistics
     """
     try:
         # Decrypt access token
-        access_token = decrypt_token(store.shopify_access_token)
+        access_token = decrypt_token(require_shopify_access_token(store))
 
         # Initialize Shopify service
         shopify_service = ShopifyService(store.shopify_domain, access_token)
@@ -77,7 +59,7 @@ async def sync_products(
 
 @router.get("/", response_model=List[ProductResponse])
 async def list_products(
-    store: Store = Depends(get_store_from_header),
+    store: Store = Depends(get_current_merchant_store),
     category: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
@@ -85,9 +67,6 @@ async def list_products(
 ):
     """
     List products for a store
-
-    Headers:
-        X-Store-ID: Store UUID
 
     Query Params:
         category: Filter by category (tops, bottoms, dresses, outerwear)
@@ -110,14 +89,11 @@ async def list_products(
 @router.get("/{product_id}", response_model=ProductResponse)
 async def get_product(
     product_id: str,
-    store: Store = Depends(get_store_from_header),
+    store: Store = Depends(get_current_merchant_store),
     db: Session = Depends(get_db)
 ):
     """
     Get a specific product
-
-    Headers:
-        X-Store-ID: Store UUID
 
     Args:
         product_id: Product UUID

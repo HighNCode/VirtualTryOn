@@ -221,6 +221,24 @@ def decrypt_token(encrypted_token: str) -> str:
 _bearer_scheme = HTTPBearer(auto_error=False)
 
 
+def _decode_session_token(token: str) -> dict:
+    """Decode and validate a Shopify App Bridge session token."""
+    try:
+        payload = jwt.decode(
+            token,
+            settings.SHOPIFY_API_SECRET,
+            algorithms=["HS256"],
+            audience=settings.SHOPIFY_API_KEY,
+        )
+        dest = payload.get("dest")
+        iss = payload.get("iss")
+        if not dest or not iss or dest not in iss:
+            raise HTTPException(status_code=401, detail="Invalid token claims")
+        return payload
+    except JWTError as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
+
+
 def verify_session_token(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
 ) -> dict:
@@ -242,19 +260,19 @@ def verify_session_token(
     if not credentials:
         raise HTTPException(status_code=401, detail="Missing session token")
 
-    token = credentials.credentials
+    return _decode_session_token(credentials.credentials)
 
-    try:
-        payload = jwt.decode(
-            token,
-            settings.SHOPIFY_API_SECRET,
-            algorithms=["HS256"],
-            audience=settings.SHOPIFY_API_KEY,
-        )
-        dest = payload.get("dest")
-        iss = payload.get("iss")
-        if not dest or not iss or dest not in iss:
-            raise HTTPException(status_code=401, detail="Invalid token claims")
-        return payload
-    except JWTError as e:
-        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
+
+def maybe_verify_session_token(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
+) -> Optional[dict]:
+    """
+    Best-effort session token validation for routes that support a header fallback.
+
+    Returns:
+        Decoded JWT payload when Authorization is present, otherwise None.
+    """
+    if not credentials:
+        return None
+
+    return _decode_session_token(credentials.credentials)

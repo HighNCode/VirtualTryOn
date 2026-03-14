@@ -2,7 +2,8 @@
 AI Photoshoot API Endpoints (Merchant-Facing)
 Three features: ghost mannequin, try-on for model, model swap.
 
-All generation endpoints require the X-Store-ID header (same pattern as merchant.py).
+Merchant routes resolve the active store from Shopify App Bridge auth when present,
+with header fallbacks for the current embedded-app migration state.
 Image-serving endpoints are public (no auth) so Shopify CDN can fetch them.
 """
 
@@ -14,14 +15,14 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import (
-    APIRouter, Depends, Header, HTTPException,
+    APIRouter, Depends, HTTPException,
     BackgroundTasks, UploadFile, File, Form, Query
 )
 from fastapi.responses import Response
 from sqlalchemy.orm import Session as DBSession
 
+from app.api.store_context import get_current_merchant_store, require_shopify_access_token
 from app.core.database import get_db
-from app.core.security import verify_session_token
 from app.config import get_settings
 from app.models.database import Store, PhotoshootJob, PhotoshootModel, PhotoshootModelFace, GhostMannequinRef
 from app.models.schemas import (
@@ -39,21 +40,6 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/merchant/photoshoot", tags=["AI Photoshoot"])
-
-
-# ─────────────────────────────────────────────────────────────
-# Auth dependency — App Bridge JWT (merchant dashboard)
-# ─────────────────────────────────────────────────────────────
-
-def get_store(
-    payload: dict = Depends(verify_session_token),
-    db: DBSession = Depends(get_db),
-) -> Store:
-    shop = payload["dest"].replace("https://", "")
-    store = db.query(Store).filter_by(shopify_domain=shop).first()
-    if not store:
-        raise HTTPException(404, "Store not found")
-    return store
 
 
 # ─────────────────────────────────────────────────────────────
@@ -192,7 +178,7 @@ async def list_photoshoot_models(
     age: Optional[str] = Query(None, description="Filter by age: 18-25 | 26-35 | 36-45 | 45+"),
     body_type: Optional[str] = Query(None, description="Filter by body type: slim | athletic | regular | plus"),
     db: DBSession = Depends(get_db),
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_current_merchant_store),
 ):
     """
     List available full-body model photos from the library.
@@ -247,7 +233,7 @@ async def list_model_faces(
     age: Optional[str] = Query(None, description="Filter by age: 18-25 | 26-35 | 36-45 | 45+"),
     skin_tone: Optional[str] = Query(None, description="Filter by skin tone: fair | light | medium | tan | dark"),
     db: DBSession = Depends(get_db),
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_current_merchant_store),
 ):
     """
     List available face/headshot photos from the face library.
@@ -299,7 +285,7 @@ async def get_model_face_image(
 async def list_ghost_mannequin_refs(
     clothing_type: str = Query(..., description="Clothing type: tops | bottoms | dresses | outerwear"),
     db: DBSession = Depends(get_db),
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_current_merchant_store),
 ):
     """
     List the 3 reference pose images (front/side/back) for a clothing type.
@@ -344,7 +330,7 @@ async def get_ghost_mannequin_ref_image(
 async def start_ghost_mannequin(
     request: GhostMannequinRequest,
     background_tasks: BackgroundTasks,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_current_merchant_store),
     db: DBSession = Depends(get_db),
 ):
     """
@@ -411,7 +397,7 @@ async def start_try_on_model(
     product_image_url: str = Form(..., description="Product garment image URL (Shopify CDN)"),
     library_id: Optional[str] = Form(None, description="ID of a built-in model photo"),
     photo_upload: Optional[UploadFile] = File(None, description="Uploaded model photo"),
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_current_merchant_store),
     db: DBSession = Depends(get_db),
 ):
     """
@@ -486,7 +472,7 @@ async def start_model_swap(
     original_image_url: str = Form(..., description="Image of original model wearing the product (Shopify CDN)"),
     face_library_id: Optional[str] = Form(None, description="ID of a face photo from the face library"),
     face_image: Optional[UploadFile] = File(None, description="Uploaded face/headshot photo"),
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_current_merchant_store),
     db: DBSession = Depends(get_db),
 ):
     """
@@ -564,7 +550,7 @@ async def start_model_swap(
 @router.get("/jobs/{job_id}/status", response_model=PhotoshootJobResponse)
 async def get_job_status(
     job_id: str,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_current_merchant_store),
     db: DBSession = Depends(get_db),
 ):
     """Poll the status of a photoshoot generation job."""
@@ -606,7 +592,7 @@ async def get_job_result(
 async def approve_job(
     job_id: str,
     request: PhotoshootApproveRequest,
-    store: Store = Depends(get_store),
+    store: Store = Depends(get_current_merchant_store),
     db: DBSession = Depends(get_db),
 ):
     """
@@ -644,7 +630,7 @@ async def approve_job(
     alt_text = request.alt_text or f"AI generated {job.job_type.replace('_', ' ')} image"
 
     try:
-        svc = ShopifyService(store.shopify_domain, store.shopify_access_token)
+        svc = ShopifyService(store.shopify_domain, require_shopify_access_token(store))
         media_result = await svc.add_product_image(
             shopify_product_gid=job.shopify_product_gid,
             image_url=result_url,
