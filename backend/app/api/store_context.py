@@ -9,13 +9,11 @@ from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DBSession
 
-from app.config import get_settings
 from app.core.database import get_db
 from app.core.security import maybe_verify_session_token
 from app.models.database import Store
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
 
 def _normalize_shop_domain(value: Optional[str]) -> Optional[str]:
@@ -66,7 +64,7 @@ def get_current_merchant_store(
 
     Preference order:
     1. Verified Shopify session token (embedded app)
-    2. Non-production fallback headers (`X-Shopify-Shop-Domain`, `X-Shop-Domain`, `X-Store-ID`)
+    2. Header fallback (`X-Shopify-Shop-Domain`, `X-Shop-Domain`, `X-Store-ID`)
 
     If a verified session token is present but the store row does not exist yet, create a
     placeholder store record so onboarding can start before the full backend OAuth flow exists.
@@ -81,13 +79,12 @@ def get_current_merchant_store(
         )
 
     normalized_store_id = (x_store_id or "").strip()
-    allow_dev_header_fallback = settings.APP_ENV != "production"
 
     if authenticated_shop_domain:
         store = _get_store_by_shop_domain(authenticated_shop_domain, db)
         if store:
             return store
-    elif allow_dev_header_fallback:
+    else:
         if header_shop_domain:
             store = _get_store_by_shop_domain(header_shop_domain, db)
             if store:
@@ -127,13 +124,13 @@ def get_current_merchant_store(
         )
         return provisional_store
 
-    if header_shop_domain and allow_dev_header_fallback:
+    if header_shop_domain:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Store not found for shop: {header_shop_domain}",
         )
 
-    if normalized_store_id and allow_dev_header_fallback:
+    if normalized_store_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Store not found: {normalized_store_id}",
