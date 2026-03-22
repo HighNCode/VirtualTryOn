@@ -1,3 +1,0 @@
-[submodule "backend/libs/smpl_anthropometry"]
-	path = backend/libs/smpl_anthropometry
-	url = https://github.com/DavidBoja/SMPL-Anthropometry.git

@@ -1,0 +1,28 @@
+{
+  "name": "optimo-virtual-try-on",
+  "version": "1.0.0",
+  "license": "UNLICENSED",
+  "scripts": {
+    "shopify": "shopify",
+    "build": "npm run build --workspace web",
+    "build:shopify": "shopify app build",
+    "dev": "shopify app dev",
+    "dev:web": "npm run dev --workspace web",
+    "build:web": "npm run build --workspace web",
+    "start:web": "npm run start --workspace web",
+    "lint:web": "npm run lint --workspace web",
+    "info": "shopify app info",
+    "generate": "shopify app generate",
+    "deploy": "shopify app deploy"
+  },
+  "dependencies": {},
+  "trustedDependencies": [
+    "@shopify/plugin-cloudflare"
+  ],
+  "author": "Mubashir",
+  "private": true,
+  "workspaces": [
+    "extensions/*",
+    "web"
+  ]
+}
