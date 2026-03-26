@@ -5,7 +5,8 @@
       "WebFetch(domain:shopify.dev)",
       "Bash(.venv/Scripts/python -c \":*)",
       "Bash(git rm -r backend/static/studio/)",
-      "Bash(.venv/Scripts/python -c \"from app.main import app; print\\(''OK''\\)\")"
+      "Bash(.venv/Scripts/python -c \"from app.main import app; print\\(''OK''\\)\")",
+      "WebSearch"
     ]
   }
 }
