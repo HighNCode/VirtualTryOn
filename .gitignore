@@ -49,3 +49,30 @@ test_*.py
 
 # Claude Code — local machine overrides (not shared)
 .claude/settings.local.json
+
+# Dependency directory
+frontend/node_modules
+frontend/web/.next
+frontend/web/.turbo
+frontend/web/tsconfig.tsbuildinfo
+
+# Test coverage directory
+frontend/coverage
+
+# Ignore Apple macOS Desktop Services Store
+.DS_Store
+
+# Logs
+logs
+*.log
+
+# extensions build output
+frontend/extensions/*/build
+frontend/extensions/*/dist
+
+# Ignore shopify files created during app dev
+frontend/.shopify/*
+frontend/.shopify.lock
+
+# Deployment
+frontend/.vercel
