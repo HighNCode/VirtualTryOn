@@ -1,4 +1,8 @@
-import { EmbeddedLink } from "./_components/EmbeddedNavigation";
+"use client";
+
+import { useEffect, useMemo } from "react";
+import { EmbeddedLink, useEmbeddedRouter } from "./_components/EmbeddedNavigation";
+import { getDefaultStoreId, getOnboardingStatus } from "../lib/photoshootApi";
 
 const features = [
   {
@@ -19,7 +23,32 @@ const features = [
   }
 ];
 
+const STEP_ROUTES: Record<string, string> = {
+  goals: "/step-2",
+  referral: "/step-3",
+  widget_scope: "/step-4",
+  theme_setup: "/step-5/not-detected",
+  plan: "/step-7",
+  complete: "/dashboard"
+};
+
 export default function Home() {
+  const router = useEmbeddedRouter();
+  const storeId = useMemo(() => getDefaultStoreId(), []);
+
+  useEffect(() => {
+    if (!storeId) return;
+
+    getOnboardingStatus({ storeId })
+      .then((status) => {
+        const route = STEP_ROUTES[status.onboarding_step];
+        if (route) router.replace(route);
+      })
+      .catch(() => {
+        // If status check fails, stay on step 1 — user will continue normally
+      });
+  }, [router, storeId]);
+
   return (
     <main className="shell">
       <section className="welcome-card">

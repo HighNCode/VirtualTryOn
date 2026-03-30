@@ -41,7 +41,10 @@ async def shopify_oauth_init(shop: str, request: Request):
 
     shopify.Session.setup(api_key=settings.SHOPIFY_API_KEY, secret=settings.SHOPIFY_API_SECRET)
     session = shopify.Session(shop, settings.SHOPIFY_API_VERSION)
-    redirect_uri = str(request.url_for('shopify_oauth_callback'))
+    if settings.APP_URL:
+        redirect_uri = settings.APP_URL.rstrip("/") + "/api/auth/callback"
+    else:
+        redirect_uri = str(request.url_for('shopify_oauth_callback'))
     auth_url = session.create_permission_url(settings.SHOPIFY_SCOPES.split(","), redirect_uri)
 
     logger.info(f"OAuth initiated for shop: {shop}")

@@ -1,4 +1,8 @@
-import { EmbeddedLink } from "../_components/EmbeddedNavigation";
+"use client";
+
+import { useMemo, useState } from "react";
+import { EmbeddedLink, useEmbeddedRouter } from "../_components/EmbeddedNavigation";
+import { getDefaultStoreId, saveWidgetScope } from "../../lib/photoshootApi";
 
 const placementChoices = [
   {
@@ -18,6 +22,31 @@ const placementChoices = [
 ];
 
 export default function StepFourPage() {
+  const router = useEmbeddedRouter();
+  const storeId = useMemo(() => getDefaultStoreId(), []);
+  const [isSaving, setIsSaving] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  const handleContinue = async () => {
+    if (!storeId) {
+      router.push("/step-4/configured");
+      return;
+    }
+
+    setIsSaving(true);
+    setErrorMessage("");
+
+    try {
+      await saveWidgetScope({ storeId, scopeType: "all" });
+      router.push("/step-4/configured");
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Failed to save widget scope.";
+      setErrorMessage(message);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   return (
     <main className="shell">
       <section className="welcome-card">
@@ -31,7 +60,7 @@ export default function StepFourPage() {
         </div>
 
         <div className="step4-heading-row">
-          <EmbeddedLink href="/step-2" className="back-button" aria-label="Go to previous step">
+          <EmbeddedLink href="/step-3" className="back-button" aria-label="Go to previous step">
             <svg viewBox="0 0 24 24" role="img">
               <path
                 d="M14.6 5.5L8.2 12L14.6 18.5"
@@ -49,6 +78,8 @@ export default function StepFourPage() {
           </div>
         </div>
 
+        {errorMessage ? <p className="ai-error-note">{errorMessage}</p> : null}
+
         <ul className="placement-grid">
           {placementChoices.map((choice) => (
             <li key={choice.id} className="placement-card">
@@ -64,9 +95,9 @@ export default function StepFourPage() {
           <EmbeddedLink href="/step-7" className="secondary-action">
             Skip for now
           </EmbeddedLink>
-          <EmbeddedLink href="/step-4/configured" className="primary-action">
-            Continue
-          </EmbeddedLink>
+          <button type="button" className="primary-action" onClick={handleContinue} disabled={isSaving}>
+            {isSaving ? "Saving..." : "Continue"}
+          </button>
         </div>
 
         <p className="support-link">

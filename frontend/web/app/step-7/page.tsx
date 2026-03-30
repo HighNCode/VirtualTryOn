@@ -4,12 +4,16 @@ import { useEffect, useMemo, useState } from "react";
 import { EmbeddedLink, useEmbeddedRouter } from "../_components/EmbeddedNavigation";
 import {
   createRecurringSubscription,
-  getBillingCatalog,
   getBillingStatus,
   getShopifyBillingContext,
   type ShopifyBillingContext
 } from "../../lib/shopify/billing";
-import type { BillingCatalogResponse, BillingCycle, BillingPlanResponse } from "../../lib/shopify/billing-config";
+import {
+  activateBillingPlan,
+  getBillingPlans,
+  getDefaultStoreId,
+  type PlanConfigResponse
+} from "../../lib/photoshootApi";
 
 function formatPrice(value: number, currencyCode: string): string {
   return new Intl.NumberFormat(undefined, {
@@ -19,94 +23,117 @@ function formatPrice(value: number, currencyCode: string): string {
   }).format(value);
 }
 
-function isCurrentPlan(plan: BillingPlanResponse, billingContext: ShopifyBillingContext | null): boolean {
-  const activeName = billingContext?.activeSubscriptions[0]?.name?.trim().toLowerCase() ?? "";
-  return activeName === plan.name.toLowerCase() || activeName === plan.display_name.toLowerCase();
-}
+type BillingCycle = "monthly" | "annual";
 
 export default function StepSevenPage() {
   const router = useEmbeddedRouter();
+  const storeId = useMemo(() => getDefaultStoreId(), []);
 
   const [billingCycle, setBillingCycle] = useState<BillingCycle>("monthly");
   const [billingContext, setBillingContext] = useState<ShopifyBillingContext | null>(null);
-  const [catalog, setCatalog] = useState<BillingCatalogResponse | null>(null);
+  const [plans, setPlans] = useState<PlanConfigResponse[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [pendingPlanId, setPendingPlanId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
 
   const isAnnual = billingCycle === "annual";
 
+  // Detect billing return from Shopify and activate the plan in the backend
   useEffect(() => {
-    let active = true;
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has("billing_return")) return;
 
-    setIsLoading(true);
-    setErrorMessage("");
+    const planName = params.get("plan");
+    const interval = params.get("interval") as BillingCycle | null;
+    const chargeId = params.get("charge_id");
 
-    getShopifyBillingContext()
-      .then(async (context) => {
-        const planCatalog = await getBillingCatalog(context.billingCurrency);
-        if (!active) {
-          return;
-        }
-
-        setBillingContext(context);
-        setCatalog(planCatalog);
-      })
-      .catch((error: unknown) => {
-        if (!active) {
-          return;
-        }
-
-        const message = error instanceof Error ? error.message : "Failed to load Shopify billing.";
-        setErrorMessage(message);
-      })
-      .finally(() => {
-        if (active) {
-          setIsLoading(false);
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  const billingStatus = useMemo(() => {
-    if (!billingContext) {
-      return null;
-    }
-
-    return getBillingStatus(billingContext);
-  }, [billingContext]);
-
-  const developmentStoreBypass = Boolean(billingContext?.shopIsDevelopment && catalog && !catalog.test_mode);
-
-  const renderedPlans = useMemo(
-    () =>
-      (catalog?.plans ?? [])
-        .filter((plan) => plan.is_active)
-        .map((plan) => {
-          const currentPlan = isCurrentPlan(plan, billingContext);
-
-          return {
-            ...plan,
-            displayedPrice: isAnnual ? plan.price_annual_per_month : plan.price_monthly,
-            displayedCredits: isAnnual ? plan.credits_annual : plan.credits_monthly,
-            isCurrentSelection: currentPlan && billingStatus?.billingInterval === billingCycle,
-            isCurrentPlan: currentPlan
-          };
-        }),
-    [billingContext, billingCycle, billingStatus?.billingInterval, catalog?.plans, isAnnual]
-  );
-
-  const handlePlanSelect = async (plan: BillingPlanResponse) => {
-    if (developmentStoreBypass) {
+    if (!planName || !interval || !storeId) {
       router.push("/dashboard");
       return;
     }
 
-    const currentSelection = isCurrentPlan(plan, billingContext) && billingStatus?.billingInterval === billingCycle;
-    if (currentSelection) {
+    const shopifySubscriptionId = chargeId
+      ? `gid://shopify/AppSubscription/${chargeId}`
+      : (window.localStorage.getItem("pending_subscription_id") ?? "");
+
+    if (!shopifySubscriptionId) {
+      router.push("/dashboard");
+      return;
+    }
+
+    window.localStorage.removeItem("pending_subscription_id");
+
+    setIsLoading(true);
+    setErrorMessage("");
+
+    activateBillingPlan({
+      storeId,
+      planName,
+      billingInterval: interval,
+      shopifySubscriptionId
+    })
+      .then(() => router.push("/dashboard"))
+      .catch((error: unknown) => {
+        const msg = error instanceof Error ? error.message : "Failed to activate billing.";
+        setErrorMessage(msg);
+        setIsLoading(false);
+      });
+  }, [router, storeId]);
+
+  // Load plans and Shopify billing context in parallel
+  useEffect(() => {
+    if (!storeId) return;
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.has("billing_return")) return; // handled by the other effect
+
+    let active = true;
+    setIsLoading(true);
+    setErrorMessage("");
+
+    Promise.allSettled([
+      getShopifyBillingContext(),
+      getBillingPlans({ storeId })
+    ]).then(([contextResult, plansResult]) => {
+      if (!active) return;
+
+      if (contextResult.status === "fulfilled") {
+        setBillingContext(contextResult.value);
+      }
+
+      if (plansResult.status === "fulfilled") {
+        setPlans(plansResult.value.plans.filter((p) => p.is_active));
+      } else {
+        setErrorMessage("Failed to load billing plans.");
+      }
+    }).finally(() => {
+      if (active) setIsLoading(false);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [storeId]);
+
+  const billingStatus = useMemo(() => {
+    if (!billingContext) return null;
+    return getBillingStatus(billingContext);
+  }, [billingContext]);
+
+  const renderedPlans = useMemo(
+    () =>
+      plans.map((plan) => ({
+        ...plan,
+        displayedPrice: isAnnual ? plan.price_annual_per_month : plan.price_monthly,
+        displayedCredits: isAnnual ? plan.credits_annual : plan.credits_monthly,
+        annualDiscountPct: plan.annual_discount_pct,
+        isCurrentSelection: plan.is_current && billingStatus?.billingInterval === billingCycle
+      })),
+    [plans, billingCycle, billingStatus?.billingInterval, isAnnual]
+  );
+
+  const handlePlanSelect = async (plan: PlanConfigResponse) => {
+    if (plan.is_current && billingStatus?.billingInterval === billingCycle) {
       router.push("/dashboard");
       return;
     }
@@ -117,17 +144,29 @@ export default function StepSevenPage() {
       return;
     }
 
+    if (!storeId) {
+      setErrorMessage("Open the app from Shopify Admin to start a subscription.");
+      return;
+    }
+
     setPendingPlanId(plan.id);
     setErrorMessage("");
 
     try {
-      const subscription = await createRecurringSubscription({
-        plan,
+      const shopParam = storeId ? `&shop=${encodeURIComponent(storeId)}` : "";
+      const result = await createRecurringSubscription({
+        planDisplayName: plan.display_name,
+        priceAmount: selectedPrice,
         billingCycle,
-        testMode: catalog?.test_mode ?? false
+        trialDays: plan.trial_days,
+        testMode: billingContext?.shopIsDevelopment ?? false,
+        returnPath: `/step-7?billing_return=1&plan=${encodeURIComponent(plan.name)}&interval=${billingCycle}${shopParam}`
       });
-
-      window.location.assign(subscription.confirmationUrl);
+      // Save subscription ID as fallback in case charge_id is missing from Shopify redirect
+      if (result.subscriptionId) {
+        window.localStorage.setItem("pending_subscription_id", result.subscriptionId);
+      }
+      window.open(result.confirmationUrl, "_top");
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Failed to start Shopify subscription.";
       setErrorMessage(message);
@@ -152,17 +191,6 @@ export default function StepSevenPage() {
           <p>Select a Shopify-billed plan for your store. You can switch plans later from Billing settings.</p>
         </div>
 
-        {developmentStoreBypass ? (
-          <p className="ai-status-note">
-            Partner development store detected. Live billing is skipped here unless `SHOPIFY_BILLING_TEST_MODE=true`.
-          </p>
-        ) : null}
-        {catalog ? (
-          <p className="ai-status-note">
-            Billing currency: {catalog.resolved_currency_code}
-            {billingContext?.shopPlanName ? ` · Store plan: ${billingContext.shopPlanName}` : ""}
-          </p>
-        ) : null}
         {isLoading ? <p className="ai-status-note">Loading plans...</p> : null}
         {errorMessage ? <p className="ai-error-note">{errorMessage}</p> : null}
 
@@ -188,18 +216,18 @@ export default function StepSevenPage() {
           {renderedPlans.map((plan) => (
             <article
               key={plan.id}
-              className={`plan-card plan-card-advanced${plan.is_recommended ? " plan-card-recommended" : ""}`}
+              className={`plan-card plan-card-advanced${plan.is_current ? " plan-card-recommended" : ""}`}
               aria-label={`${plan.display_name} plan`}
             >
-              {plan.is_recommended ? <p className="plan-badge">Recommended</p> : null}
+              {plan.is_current ? <p className="plan-badge">Current Plan</p> : null}
 
               <h2 className="plan-name">{plan.display_name}</h2>
               <p className="plan-price plan-price-advanced">
-                {formatPrice(plan.displayedPrice, plan.currency_code)}
+                {formatPrice(plan.displayedPrice, "USD")}
                 <small>/month</small>
               </p>
 
-              {isAnnual ? <p className="plan-billed">Billed {formatPrice(plan.price_annual_total, plan.currency_code)}/year</p> : null}
+              {isAnnual ? <p className="plan-billed">Billed {formatPrice(plan.price_annual_total, "USD")}/year</p> : null}
 
               <div className="plan-credit-box">
                 <p>{plan.displayedCredits.toLocaleString()} credits included</p>
@@ -227,33 +255,37 @@ export default function StepSevenPage() {
                 ))}
               </ul>
 
-              <p className="plan-extra-rate">
-                Annual discount: <strong>{plan.annual_discount_pct}%</strong>
-              </p>
+              {plan.annualDiscountPct > 0 ? (
+                <p className="plan-extra-rate">
+                  Annual discount: <strong>{plan.annualDiscountPct}%</strong>
+                </p>
+              ) : null}
 
               <button
                 type="button"
-                className={`plan-select-button plan-select-button-advanced${plan.is_recommended ? " plan-select-button-filled" : ""}`}
+                className={`plan-select-button plan-select-button-advanced${plan.is_current ? " plan-select-button-filled" : ""}`}
                 onClick={() => handlePlanSelect(plan)}
-                disabled={pendingPlanId === plan.id}
+                disabled={pendingPlanId === plan.id || isLoading}
               >
                 {plan.isCurrentSelection
                   ? "Current Plan"
-                  : developmentStoreBypass
-                    ? "Use on Development Store"
-                    : pendingPlanId === plan.id
-                      ? "Redirecting..."
-                      : plan.isCurrentPlan
-                        ? `Switch to ${isAnnual ? "Annual" : "Monthly"}`
-                        : `Select ${plan.display_name}`}
+                  : pendingPlanId === plan.id
+                    ? "Redirecting..."
+                    : plan.is_current
+                      ? `Switch to ${isAnnual ? "Annual" : "Monthly"}`
+                      : `Select ${plan.display_name}`}
               </button>
             </article>
           ))}
+
+          {!isLoading && plans.length === 0 ? (
+            <p className="ai-error-note">No billing plans available. Please contact support.</p>
+          ) : null}
         </div>
 
         <p className="step7-credit-note">
           <strong>1 Try-on = 4 Credits</strong>
-          <span>Billing is created through Shopify GraphQL and the merchant approves charges on Shopify’s hosted confirmation page.</span>
+          <span>Billing is created through Shopify and the merchant approves charges on Shopify&apos;s hosted confirmation page.</span>
         </p>
 
         <section className="free-plan-banner free-plan-banner-updated">

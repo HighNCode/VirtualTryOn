@@ -1,7 +1,7 @@
 const DEFAULT_PROXY_BASE_PATH = "/api/backend";
 const DEFAULT_TIMEOUT_MS = 150000;
 const DEFAULT_POLL_MS = 2500;
-const APP_BRIDGE_READY_TIMEOUT_MS = 2000;
+const APP_BRIDGE_READY_TIMEOUT_MS = 5000;
 const APP_BRIDGE_READY_POLL_MS = 50;
 
 const SUCCESS_STATUSES = new Set(["completed", "succeeded", "success", "done"]);
@@ -221,6 +221,7 @@ type ShopifyGlobal = {
   config?: {
     shop?: string;
   };
+  ready?: () => Promise<void>;
   idToken?: (() => Promise<string>) | { get?: () => Promise<string> };
 };
 
@@ -258,6 +259,23 @@ async function getShopifySessionToken(): Promise<string> {
     return "";
   }
 
+  // If not running inside an iframe (e.g. after billing redirect), App Bridge will never
+  // initialize — skip the wait entirely to avoid blocking API calls for 8 seconds.
+  if (window.self === window.top) {
+    return "";
+  }
+
+  // Wait for App Bridge 4.x to finish initializing before asking for the token.
+  // shopify.ready() resolves once the bridge is fully set up; if unavailable, continue anyway.
+  try {
+    const shopify = getShopifyGlobal();
+    if (shopify && typeof shopify.ready === "function") {
+      await shopify.ready();
+    }
+  } catch {
+    // ready() not available or failed — fall through to polling loop
+  }
+
   const startedAt = Date.now();
   while (Date.now() - startedAt < APP_BRIDGE_READY_TIMEOUT_MS) {
     const shopify = getShopifyGlobal();
@@ -278,7 +296,7 @@ async function getShopifySessionToken(): Promise<string> {
         }
       }
     } catch {
-      return "";
+      // idToken() threw — App Bridge may still be initializing; continue polling
     }
 
     await sleep(APP_BRIDGE_READY_POLL_MS);
@@ -564,6 +582,21 @@ export async function saveOnboardingGoals(options: {
   });
 }
 
+export async function saveReferral(options: {
+  storeId: string;
+  referralSource: string;
+  referralDetail?: string;
+}): Promise<OnboardingStepResponse> {
+  return requestJson<OnboardingStepResponse>("/api/v1/merchant/onboarding/referral", {
+    method: "POST",
+    storeId: options.storeId,
+    body: {
+      referral_source: options.referralSource,
+      referral_detail: options.referralDetail ?? null
+    }
+  });
+}
+
 export async function getWidgetScope(options: {
   storeId: string;
   signal?: AbortSignal;
@@ -689,6 +722,46 @@ export async function createSubscription(options: {
       billing_interval: options.billingInterval,
       return_url: options.returnUrl
     }
+  });
+}
+
+export type BillingActivateResponse = {
+  plan_name: string;
+  credits_limit: number;
+  plan_activated_at: string | null;
+  shopify_subscription_id: string | null;
+};
+
+export async function activateBillingPlan(options: {
+  storeId: string;
+  planName: string;
+  billingInterval: "monthly" | "annual";
+  shopifySubscriptionId: string;
+}): Promise<BillingActivateResponse> {
+  return requestJson<BillingActivateResponse>("/api/v1/merchant/billing/activate", {
+    method: "POST",
+    storeId: options.storeId,
+    body: {
+      plan_name: options.planName,
+      billing_interval: options.billingInterval,
+      shopify_subscription_id: options.shopifySubscriptionId,
+      status: "active"
+    }
+  });
+}
+
+export type CancelSubscriptionResponse = {
+  cancelled: boolean;
+  plan_name: string;
+  credits_limit: number;
+};
+
+export async function cancelSubscription(options: {
+  storeId: string;
+}): Promise<CancelSubscriptionResponse> {
+  return requestJson<CancelSubscriptionResponse>("/api/v1/merchant/billing/cancel-subscription", {
+    method: "POST",
+    storeId: options.storeId
   });
 }
 
