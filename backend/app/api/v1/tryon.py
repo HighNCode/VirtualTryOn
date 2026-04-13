@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Depends, Header, BackgroundTasks
 from fastapi.responses import Response
 from sqlalchemy.orm import Session as DBSession
 
+from app.api.store_context import get_public_store
 from app.core.database import get_db
 from app.models.database import Session, Product, TryOn, PhotoshootModel
 from app.models.schemas import (
@@ -26,13 +27,13 @@ logger = logging.getLogger(__name__)
 
 async def get_session_from_header(
     x_session_id: str = Header(..., alias="X-Session-ID"),
-    x_store_id: str = Header(..., alias="X-Store-ID"),
+    store = Depends(get_public_store),
     db: DBSession = Depends(get_db),
 ) -> Session:
     """Get session from X-Session-ID header"""
     session = db.query(Session).filter_by(
         session_id=x_session_id,
-        store_id=x_store_id,
+        store_id=store.store_id,
     ).first()
 
     if not session:
@@ -259,7 +260,7 @@ async def generate_studio_tryon(
             raise HTTPException(409, "Original try-on is not completed yet")
 
         # Validate studio background
-        bg = db.query(StudioBackground).filter_by(
+        bg = db.query(PhotoshootModel).filter_by(
             id=str(request.studio_background_id), is_active=True
         ).first()
         if not bg:
@@ -292,8 +293,11 @@ async def generate_studio_tryon(
             raise HTTPException(410, "Original try-on image has expired from cache")
 
         # Read studio background from static file
-        static_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "static", "studio")
-        file_path = os.path.join(static_dir, bg.image_path)
+        static_root = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+            "static",
+        )
+        file_path = os.path.join(static_root, bg.image_path)
         if not os.path.exists(file_path):
             raise HTTPException(500, "Studio background image file missing")
 

@@ -19,7 +19,7 @@ uri = "/api/webhooks"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = ""
+scopes = "write_app_proxy"
 
 [access.admin]
 direct_api_mode = "online"
@@ -27,3 +27,8 @@ embedded_app_direct_api_access = true
 
 [auth]
 redirect_urls = [ "https://optimo-virtual-try-on.vercel.app/api/auth/callback" ]
+
+[app_proxy]
+url = "/widget-proxy"
+subpath = "optimo-vts"
+prefix = "apps"

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session as DBSession
 from datetime import datetime
 import logging
 
+from app.api.store_context import get_public_store
 from app.core.database import get_db
 from app.models.database import (
     Session, Product, UserMeasurement, SizeChart, SizeRecommendation
@@ -21,13 +22,13 @@ logger = logging.getLogger(__name__)
 
 async def get_session_from_header(
     x_session_id: str = Header(..., alias="X-Session-ID"),
-    x_store_id: str = Header(..., alias="X-Store-ID"),
+    store = Depends(get_public_store),
     db: DBSession = Depends(get_db)
 ) -> Session:
     """Get session from X-Session-ID header"""
     session = db.query(Session).filter_by(
         session_id=x_session_id,
-        store_id=x_store_id
+        store_id=store.store_id
     ).first()
 
     if not session:
