@@ -32,6 +32,11 @@ import torch.nn.functional as F
 from PIL import Image
 
 from app.config import get_settings
+from app.services.shapy_client import (
+    SHAPYClient,
+    SHAPYClientError,
+    SHAPYServiceUnavailableError,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -786,10 +791,26 @@ class MeasurementService:
     """
 
     def __init__(self):
+        self.backend_mode = (settings.REGRESSOR_BACKEND or "local_smpl").strip().lower()
+        if self.backend_mode == "shapy":
+            self.backend_mode = "shapy_remote"
+        if self.backend_mode not in {"local_smpl", "shapy_remote"}:
+            logger.warning(
+                f"Unknown REGRESSOR_BACKEND='{self.backend_mode}', using local_smpl"
+            )
+            self.backend_mode = "local_smpl"
+        self.shapy_client = SHAPYClient(
+            base_url=settings.SHAPY_SERVICE_URL,
+            timeout=settings.SHAPY_TIMEOUT,
+            api_key=settings.SHAPY_API_KEY,
+        )
         self.pose_detector = PoseDetector()
         self.shape_fitter = SMPLShapeFitter()
         self.measurer = SMPLMeasurer()
-        logger.info(f"MeasurementService initialized (device={DEVICE})")
+        logger.info(
+            "MeasurementService initialized "
+            f"(device={DEVICE}, backend_mode={self.backend_mode})"
+        )
 
     async def extract_measurements(
         self,
@@ -818,6 +839,46 @@ class MeasurementService:
                 "missing_reason": None or str
             }
         """
+        if self.backend_mode == "shapy_remote":
+            try:
+                shapy_result = await self.shapy_client.measure(
+                    front_image=front_image,
+                    side_image=side_image,
+                    height_cm=height_cm,
+                    weight_kg=weight_kg,
+                    gender=gender,
+                )
+                logger.info("Measurements extracted via SHAPY remote service")
+                return shapy_result
+            except SHAPYServiceUnavailableError as exc:
+                logger.warning(
+                    f"SHAPY unavailable, falling back to local SMPL pipeline: {exc}"
+                )
+            except SHAPYClientError as exc:
+                logger.warning(
+                    f"SHAPY response/client error, falling back to local SMPL pipeline: {exc}"
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"Unexpected SHAPY error, falling back to local SMPL pipeline: {exc}"
+                )
+
+        return self._extract_local_smpl(
+            front_image=front_image,
+            side_image=side_image,
+            height_cm=height_cm,
+            weight_kg=weight_kg,
+            gender=gender,
+        )
+
+    def _extract_local_smpl(
+        self,
+        front_image: bytes,
+        side_image: bytes,
+        height_cm: float,
+        weight_kg: float,
+        gender: str,
+    ) -> Dict:
         smpl_gender = "neutral" if gender == "unisex" else gender
 
         # ----- Stage 1: Detect pose from front image -----
