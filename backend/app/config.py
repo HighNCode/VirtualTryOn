@@ -72,7 +72,10 @@ class Settings(BaseSettings):
     # SMPL Body Measurement Pipeline
     SMPL_MODEL_DIR: str = "data/body_models"
     HMR_CHECKPOINT_DIR: str = "data/checkpoints"
-    REGRESSOR_BACKEND: str = "shapy"  # "hmr2" or "shapy"
+    REGRESSOR_BACKEND: str = "local_smpl"  # "local_smpl" or "shapy_remote"
+    SHAPY_SERVICE_URL: str = ""
+    SHAPY_API_KEY: Optional[str] = None
+    SHAPY_TIMEOUT: int = 60
 
     class Config:
         env_file = ".env"

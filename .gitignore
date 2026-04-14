@@ -11,6 +11,7 @@ build/
 .eggs/
 .venv/
 venv/
+.modal-venv/
 env/
 .env
 .env.*
@@ -76,3 +77,11 @@ frontend/.shopify.lock
 
 # Deployment
 frontend/.vercel
+
+# SHAPY service local artifacts
+shapy_service/.venv/
+shapy_service/shapy/
+shapy_service/__pycache__/
+
+# SHAPY / SMPL model assets and checkpoints (local, large, licensed)
+backend/data/
