@@ -17,7 +17,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import func
 from sqlalchemy.orm import Session as DBSession
 
-from app.api.store_context import get_current_merchant_store, require_shopify_access_token
+from app.api.store_context import get_current_merchant_store, get_public_store, require_shopify_access_token
 from app.core.database import get_db
 from app.core.security import _bearer_scheme
 from app.config import get_settings
@@ -43,7 +43,10 @@ from app.models.schemas import (
     CreateSubscriptionResponse,
     BillingStatusResponse,
     CancelSubscriptionResponse,
+    SessionResponse,
+    WidgetSessionCreateRequest,
 )
+from app.api.v1.sessions import create_or_resume_session_for_product
 from app.services.shopify_service import ShopifyService
 
 logger = logging.getLogger(__name__)
@@ -53,18 +56,18 @@ widget_router = APIRouter(prefix="/widget", tags=["Widget"])
 
 
 # ─────────────────────────────────────────────────────────────
-# Shared dependencies
+# Shared helpers
 # ─────────────────────────────────────────────────────────────
 
-def _get_store_by_id(
-    x_store_id: str = Header(..., alias="X-Store-ID"),
-    db: DBSession = Depends(get_db),
-) -> Store:
-    """Widget (storefront) dependency — identified by X-Store-ID header."""
-    store = db.query(Store).filter_by(store_id=x_store_id).first()
-    if not store:
-        raise HTTPException(404, "Store not found")
-    return store
+def _normalize_shopify_product_gid(value: str) -> str:
+    normalized = (value or "").strip()
+    if not normalized:
+        raise HTTPException(422, "shopify_product_gid is required")
+    if normalized.startswith("gid://shopify/Product/"):
+        return normalized
+    if normalized.isdigit():
+        return f"gid://shopify/Product/{normalized}"
+    return normalized
 
 
 # ─────────────────────────────────────────────────────────────
@@ -727,7 +730,7 @@ def update_widget_config(
 @widget_router.get("/check-enabled", response_model=WidgetCheckResponse)
 def check_widget_enabled(
     shopify_product_gid: str = Query(..., description="Shopify product GID, e.g. gid://shopify/Product/123"),
-    store: Store = Depends(_get_store_by_id),
+    store: Store = Depends(get_public_store),
 ):
     """
     Called by the storefront widget to decide whether to render the try-on button.
@@ -750,20 +753,60 @@ def check_widget_enabled(
         return WidgetCheckResponse(enabled=False)
     # ─────────────────────────────────────────────────────────────────────────
 
+    normalized_gid = _normalize_shopify_product_gid(shopify_product_gid)
     wc = store.widget_config
     if wc is None or wc.scope_type == "all":
         return WidgetCheckResponse(enabled=True)
 
     if wc.scope_type == "selected_products":
         ids = wc.enabled_product_ids
-        enabled = bool(ids) and shopify_product_gid in ids
+        enabled = bool(ids) and normalized_gid in ids
         return WidgetCheckResponse(enabled=enabled)
 
     if wc.scope_type == "mixed":
         product_ids = wc.enabled_product_ids or []
-        enabled = (not product_ids) or (shopify_product_gid in product_ids)
+        enabled = (not product_ids) or (normalized_gid in product_ids)
         return WidgetCheckResponse(enabled=enabled)
 
     # 'selected_collections' — collection membership requires Shopify Admin API
     # (only available in Remix). Return true and let the Remix layer filter further.
     return WidgetCheckResponse(enabled=True)
+
+
+@widget_router.post("/sessions", response_model=SessionResponse)
+def create_widget_session(
+    body: WidgetSessionCreateRequest,
+    store: Store = Depends(get_public_store),
+    db: DBSession = Depends(get_db),
+):
+    """
+    Storefront widget entrypoint that accepts a Shopify product GID and returns
+    a normal session payload without exposing the internal store identifier.
+    """
+    normalized_gid = _normalize_shopify_product_gid(body.shopify_product_gid)
+    shopify_product_id = normalized_gid.split("/")[-1]
+
+    product = db.query(Product).filter_by(
+        store_id=store.store_id,
+        shopify_product_id=shopify_product_id,
+    ).first()
+
+    if not product:
+        raise HTTPException(
+            404,
+            f"Product not found for Shopify product: {body.shopify_product_gid}",
+        )
+
+    try:
+        return create_or_resume_session_for_product(
+            product=product,
+            store=store,
+            user_identifier=body.user_identifier,
+            db=db,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Widget session creation failed: %s", exc, exc_info=True)
+        db.rollback()
+        raise HTTPException(500, f"Failed to create widget session: {exc}")

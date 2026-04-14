@@ -35,6 +35,46 @@ def _get_store_by_id(store_id: str, db: DBSession) -> Optional[Store]:
     return db.query(Store).filter_by(store_id=store_id).first()
 
 
+def get_public_store(
+    x_shopify_shop_domain: Optional[str] = Header(None, alias="X-Shopify-Shop-Domain"),
+    x_shop_domain: Optional[str] = Header(None, alias="X-Shop-Domain"),
+    x_store_id: Optional[str] = Header(None, alias="X-Store-ID"),
+    db: DBSession = Depends(get_db),
+) -> Store:
+    """
+    Resolve a storefront/public store identifier without requiring merchant auth.
+
+    Public widget routes should prefer the shop domain so the browser never needs
+    the internal store UUID, but `X-Store-ID` remains supported for backwards
+    compatibility.
+    """
+    header_shop_domain = _normalize_shop_domain(x_shopify_shop_domain) or _normalize_shop_domain(x_shop_domain)
+    normalized_store_id = (x_store_id or "").strip()
+
+    if header_shop_domain:
+        store = _get_store_by_shop_domain(header_shop_domain, db)
+        if store:
+            return store
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Store not found for shop: {header_shop_domain}",
+        )
+
+    if normalized_store_id:
+        store = _get_store_by_id(normalized_store_id, db)
+        if store:
+            return store
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Store not found: {normalized_store_id}",
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Missing store identifier",
+    )
+
+
 def require_shopify_access_token(store: Store) -> str:
     """
     Ensure the store finished the backend install/auth flow before calling Shopify Admin APIs.

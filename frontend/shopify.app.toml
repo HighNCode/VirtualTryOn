@@ -12,18 +12,23 @@ automatically_update_urls_on_dev = true
 [webhooks]
 api_version = "2026-01"
 
-  [[webhooks.subscriptions]]
-  topics = [ "shop/update", "app/uninstalled", "app_subscriptions/update" ]
-  uri = "/api/webhooks"
-  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+[[webhooks.subscriptions]]
+topics = [ "app/uninstalled", "app_subscriptions/update", "shop/update" ]
+compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+uri = "/api/webhooks"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "write_app_proxy"
 
 [access.admin]
 direct_api_mode = "online"
 embedded_app_direct_api_access = true
 
-[access_scopes]
-# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = ""
-
 [auth]
 redirect_urls = [ "https://optimo-virtual-try-on.vercel.app/api/auth/callback" ]
+
+[app_proxy]
+url = "/widget-proxy"
+subpath = "optimo-vts"
+prefix = "apps"

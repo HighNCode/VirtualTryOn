@@ -1,0 +1,77 @@
+{% liquid
+  assign proxy_base = routes.root_url | append: 'apps/optimo-vts'
+  assign selected_variant = product.selected_or_first_available_variant
+%}
+
+{{ 'optimo-vts-widget.css' | asset_url | stylesheet_tag }}
+<script src="{{ 'optimo-vts-widget.js' | asset_url }}" defer></script>
+
+{% if product != blank %}
+  <div
+    id="optimo-vts-widget-{{ block.id }}"
+    class="optimo-vts-host"
+    data-optimo-vts-host
+    {{ block.shopify_attributes }}
+  ></div>
+
+  <script type="application/json" data-optimo-vts-config="{{ block.id }}">
+    {
+      "blockId": {{ block.id | json }},
+      "proxyBase": {{ proxy_base | json }},
+      "shopDomain": {{ shop.permanent_domain | json }},
+      "buttonLabel": {{ block.settings.button_label | json }},
+      "product": {
+        "id": {{ product.id | json }},
+        "gid": {{ product.id | prepend: 'gid://shopify/Product/' | json }},
+        "title": {{ product.title | json }},
+        "handle": {{ product.handle | json }},
+        "vendor": {{ product.vendor | json }},
+        "price": {{ product.price | money_without_currency | json }},
+        "featuredImage": {{ product.featured_image | image_url: width: 900 | json }},
+        "selectedVariantId": {{ selected_variant.id | json }},
+        "options": [
+          {% for option in product.options_with_values %}
+            {
+              "name": {{ option.name | json }},
+              "position": {{ option.position | json }},
+              "values": {{ option.values | json }}
+            }{% unless forloop.last %},{% endunless %}
+          {% endfor %}
+        ],
+        "variants": [
+          {% for variant in product.variants %}
+            {
+              "id": {{ variant.id | json }},
+              "gid": {{ variant.id | prepend: 'gid://shopify/ProductVariant/' | json }},
+              "title": {{ variant.title | json }},
+              "available": {{ variant.available | json }},
+              "price": {{ variant.price | money_without_currency | json }},
+              "image": {{ variant.image | image_url: width: 600 | json }},
+              "options": {{ variant.options | json }}
+            }{% unless forloop.last %},{% endunless %}
+          {% endfor %}
+        ]
+      }
+    }
+  </script>
+{% elsif request.design_mode %}
+  <div class="optimo-vts-editor-placeholder" {{ block.shopify_attributes }}>
+    <strong>Optimo VTS Widget</strong>
+    <span>Add this block to a product template to show the virtual try-on flow.</span>
+  </div>
+{% endif %}
+
+{% schema %}
+{
+  "name": "Optimo VTS Widget",
+  "target": "section",
+  "settings": [
+    {
+      "type": "text",
+      "id": "button_label",
+      "label": "Button label",
+      "default": "Try it on virtually"
+    }
+  ]
+}
+{% endschema %}

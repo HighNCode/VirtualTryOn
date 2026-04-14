@@ -12,11 +12,11 @@ import logging
 from datetime import datetime, timedelta
 from typing import List, Optional, Set
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, cast, Date as SADate
 from sqlalchemy.orm import Session as DBSession
 
-from app.api.store_context import get_current_merchant_store
+from app.api.store_context import get_current_merchant_store, get_public_store
 from app.core.database import get_db
 from app.models.database import AnalyticsEvent, Store, TryOn, Product
 from app.models.schemas import (
@@ -54,17 +54,6 @@ analytics_merchant_router = APIRouter(prefix="/merchant/analytics", tags=["Analy
 
 
 # ─────────────────────────────────────────────────────────────
-def get_store_by_header(
-    x_store_id: str = Header(..., alias="X-Store-ID"),
-    db: DBSession = Depends(get_db),
-) -> Store:
-    """Widget-facing dependency — X-Store-ID header."""
-    store = db.query(Store).filter_by(store_id=x_store_id).first()
-    if not store:
-        raise HTTPException(404, "Store not found")
-    return store
-
-
 # ─────────────────────────────────────────────────────────────
 # POST /analytics/events  (public — widget-facing)
 # ─────────────────────────────────────────────────────────────
@@ -72,7 +61,7 @@ def get_store_by_header(
 @analytics_public_router.post("/events", response_model=AnalyticsEventSaved)
 def ingest_event(
     body: AnalyticsEventCreate,
-    store: Store = Depends(get_store_by_header),
+    store: Store = Depends(get_public_store),
     db: DBSession = Depends(get_db),
 ):
     """

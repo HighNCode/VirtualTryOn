@@ -388,6 +388,12 @@ class WidgetCheckResponse(BaseModel):
     enabled: bool
 
 
+class WidgetSessionCreateRequest(BaseModel):
+    """Create or resume a widget session from a Shopify product GID"""
+    shopify_product_gid: str
+    user_identifier: Optional[str] = None
+
+
 class DashboardOverviewResponse(BaseModel):
     """All data needed to render the merchant dashboard overview screen"""
     # Section 1 — theme button status
