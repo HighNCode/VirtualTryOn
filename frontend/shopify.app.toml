@@ -1,10 +1,10 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "b04a4ca34b41318b2c1a92fb5f427563"
+web_directories = [ "web" ]
 name = "Optimo-Virtual Try-On"
 application_url = "https://optimo-virtual-try-on.vercel.app"
 embedded = true
-web_directories = [ "web" ]
 
 [build]
 automatically_update_urls_on_dev = true

@@ -6,7 +6,27 @@
       "Bash(.venv/Scripts/python -c \":*)",
       "Bash(git rm -r backend/static/studio/)",
       "Bash(.venv/Scripts/python -c \"from app.main import app; print\\(''OK''\\)\")",
-      "WebSearch"
+      "WebSearch",
+      "Bash(xargs grep:*)",
+      "Bash(find d:/Work/OptimoSolutions/VirtualTryOn/frontend/web -path *install* -o -path *auth*)",
+      "Bash(grep -r \"redirect\\\\|install\\\\|/auth\" d:/Work/OptimoSolutions/VirtualTryOn/frontend/web/app --include=*.tsx --include=*.ts)",
+      "Bash(grep -r \"shopify_oauth_init\\\\|/auth/shopify\\\\|shopify app\" d:/Work/OptimoSolutions/VirtualTryOn/frontend/web --include=*.tsx --include=*.ts)",
+      "Read(//c/Users/walee/.claude/plans/**)",
+      "Bash(find /d/Work/OptimoSolutions/VirtualTryOn -type f -name .env*)",
+      "Bash(find /d/Work/OptimoSolutions/VirtualTryOn/frontend -type f -path */api/* -name *.ts -o -name *.js)",
+      "Bash(xargs head:*)",
+      "Bash(grep -r \"embedded_app_direct_api_access\\\\|direct_api_mode\\\\|API_VERSION\" /d/Work/OptimoSolutions/VirtualTryOn --include=*.ts --include=*.tsx --include=*.toml --include=*.py)",
+      "Bash(find /d/Work/OptimoSolutions/VirtualTryOn/backend -type f -name database.py ! -path */.venv/*)",
+      "Bash(find /d/Work/OptimoSolutions/VirtualTryOn/backend -type f \\\\\\(-name main.py -o -name app.py \\\\\\) ! -path */.venv/*)",
+      "Bash(grep -r \"app_subscriptions\\\\|subscription\\\\|billing\" /d/Work/OptimoSolutions/VirtualTryOn/backend/app/api/v1 --include=*.py)",
+      "Bash(grep -r \"app_subscriptions\\\\|subscription\\\\|billing\" /d/Work/OptimoSolutions/VirtualTryOn/frontend --include=*.ts --include=*.tsx)",
+      "Bash(grep -r shopify.app.toml /d/Work/OptimoSolutions/VirtualTryOn --include=*.md --include=*.txt)",
+      "Bash(xargs ls:*)",
+      "Bash(grep -E \"\\\\.\\(ts|tsx\\)$\")",
+      "Bash(grep -E \"\\\\.py$\")",
+      "Bash(grep -r onboarding_step /d/Work/OptimoSolutions/VirtualTryOn/frontend/web --include=*.tsx --include=*.ts)",
+      "Bash(grep -r onboarding /d/Work/OptimoSolutions/VirtualTryOn/frontend/web/app --include=*.tsx --include=*.ts -n)",
+      "Bash(find /d/Work/OptimoSolutions/VirtualTryOn/frontend/web/app/settings -type f -name *.tsx)"
     ]
   }
 }

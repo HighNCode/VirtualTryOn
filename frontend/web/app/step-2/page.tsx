@@ -132,7 +132,7 @@ export default function StepTwoPage() {
 
   const handleContinue = async () => {
     if (!storeId) {
-      router.push("/step-4");
+      router.push("/step-3");
       return;
     }
 
@@ -141,7 +141,7 @@ export default function StepTwoPage() {
 
     try {
       await saveOnboardingGoals({ storeId, goals: selectedGoals });
-      router.push("/step-4");
+      router.push("/step-3");
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Failed to save goals.";
       setErrorMessage(message);

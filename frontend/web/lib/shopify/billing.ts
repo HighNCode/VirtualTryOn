@@ -1,10 +1,9 @@
 "use client";
 
-import { SHOPIFY_ADMIN_API_VERSION, type BillingCatalogResponse, type BillingCycle, type BillingPlanResponse } from "./billing-config";
-
-const SHOPIFY_ADMIN_GRAPHQL_URL = `shopify:admin/api/${SHOPIFY_ADMIN_API_VERSION}/graphql.json`;
+const SHOPIFY_ADMIN_GRAPHQL_URL = "shopify:admin/api/2026-01/graphql.json";
 const ACTIVE_SUBSCRIPTION_STATUSES = new Set(["ACTIVE", "FROZEN"]);
-const EMBEDDED_QUERY_KEYS = ["embedded", "host", "locale", "shop"] as const;
+
+type BillingCycle = "monthly" | "annual";
 
 type GraphQLErrorResponse = {
   message?: string;
@@ -74,20 +73,6 @@ type BillingContextResponse = {
   } | null;
 };
 
-type CreateSubscriptionResponse = {
-  appSubscriptionCreate: {
-    confirmationUrl: string | null;
-    appSubscription: {
-      id: string;
-      name: string;
-    } | null;
-    userErrors: Array<{
-      field: string[] | null;
-      message: string;
-    }>;
-  };
-};
-
 export type ShopifyBillingContext = {
   shopName: string;
   shopPlanName: string | null;
@@ -113,14 +98,10 @@ export type ShopifyBillingStatus = {
 };
 
 function buildGraphQLErrorMessage(errors: GraphQLErrorResponse[] | undefined): string {
-  if (!errors || errors.length === 0) {
-    return "Shopify GraphQL request failed.";
-  }
-
+  if (!errors || errors.length === 0) return "Shopify GraphQL request failed.";
   const messages = errors
     .map((entry) => entry.message?.trim())
     .filter((message): message is string => Boolean(message));
-
   return messages.length > 0 ? messages.join(" ") : "Shopify GraphQL request failed.";
 }
 
@@ -131,36 +112,40 @@ function formatNetworkError(error: unknown): Error {
         "Shopify Admin API is only available when this app is opened inside Shopify Admin with Direct API access enabled."
       );
     }
-
     return error;
   }
-
   return new Error("Shopify Admin API request failed.");
 }
 
+async function waitForAppBridge(): Promise<void> {
+  const deadline = Date.now() + 8000;
+  while (Date.now() < deadline) {
+    const shopify = (globalThis as { shopify?: { ready?: unknown } }).shopify;
+    if (shopify?.ready) {
+      if (shopify.ready instanceof Promise) {
+        await shopify.ready;
+      } else if (typeof shopify.ready === "function") {
+        await (shopify.ready as () => Promise<void>)();
+      }
+      return;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+  }
+}
+
 async function shopifyAdminRequest<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
+  await waitForAppBridge();
   try {
     const response = await fetch(SHOPIFY_ADMIN_GRAPHQL_URL, {
       method: "POST",
-      body: JSON.stringify({
-        query,
-        variables
-      })
+      body: JSON.stringify({ query, variables })
     });
 
     const payload = (await response.json()) as GraphQLResponse<T>;
 
-    if (!response.ok) {
-      throw new Error(buildGraphQLErrorMessage(payload.errors));
-    }
-
-    if (payload.errors && payload.errors.length > 0) {
-      throw new Error(buildGraphQLErrorMessage(payload.errors));
-    }
-
-    if (!payload.data) {
-      throw new Error("Shopify GraphQL response did not include data.");
-    }
+    if (!response.ok) throw new Error(buildGraphQLErrorMessage(payload.errors));
+    if (payload.errors && payload.errors.length > 0) throw new Error(buildGraphQLErrorMessage(payload.errors));
+    if (!payload.data) throw new Error("Shopify GraphQL response did not include data.");
 
     return payload.data;
   } catch (error) {
@@ -173,49 +158,13 @@ function convertGraphQLInterval(interval: RecurringPricingDetails["interval"]): 
 }
 
 function getRecurringPricing(subscription: BillingSubscription | null): RecurringPricingDetails | null {
-  if (!subscription) {
-    return null;
-  }
-
+  if (!subscription) return null;
   for (const lineItem of subscription.lineItems) {
     if (lineItem.plan.pricingDetails.__typename === "AppRecurringPricing") {
       return lineItem.plan.pricingDetails;
     }
   }
-
   return null;
-}
-
-function getReturnUrl(pathname: string): string {
-  const url = new URL(pathname, window.location.origin);
-  const currentUrl = new URL(window.location.href);
-
-  EMBEDDED_QUERY_KEYS.forEach((key) => {
-    const value = currentUrl.searchParams.get(key);
-    if (value) {
-      url.searchParams.set(key, value);
-    }
-  });
-
-  return url.toString();
-}
-
-export function getPreferredReturnPath(): string {
-  return "/settings/billing";
-}
-
-export async function getBillingCatalog(currencyCode: string): Promise<BillingCatalogResponse> {
-  const response = await fetch(`/api/shopify/billing/plans?currency=${encodeURIComponent(currencyCode)}`, {
-    method: "GET",
-    cache: "no-store"
-  });
-
-  const payload = (await response.json()) as BillingCatalogResponse | { error?: string };
-  if (!response.ok) {
-    throw new Error("error" in payload && payload.error ? payload.error : "Failed to load billing plans.");
-  }
-
-  return payload as BillingCatalogResponse;
 }
 
 export async function getShopifyBillingContext(): Promise<ShopifyBillingContext> {
@@ -284,9 +233,7 @@ export async function getShopifyBillingContext(): Promise<ShopifyBillingContext>
     }
   `;
 
-  const response = await shopifyAdminRequest<BillingContextResponse>(query, {
-    historyLimit: 20
-  });
+  const response = await shopifyAdminRequest<BillingContextResponse>(query, { historyLimit: 20 });
 
   const subscriptions = response.currentAppInstallation?.allSubscriptions.edges.map((edge) => edge.node) ?? [];
 
@@ -294,7 +241,10 @@ export async function getShopifyBillingContext(): Promise<ShopifyBillingContext>
     shopName: response.shop.name,
     shopPlanName: response.shop.plan?.publicDisplayName ?? null,
     shopIsPlus: Boolean(response.shop.plan?.shopifyPlus),
-    shopIsDevelopment: Boolean(response.shop.plan?.partnerDevelopment),
+    shopIsDevelopment:
+      response.shop.plan == null ||
+      Boolean(response.shop.plan.partnerDevelopment) ||
+      response.shop.plan.publicDisplayName?.toLowerCase().includes("development") === true,
     billingCurrency: response.shopBillingPreferences.currency,
     activeSubscriptions: response.currentAppInstallation?.activeSubscriptions ?? [],
     allSubscriptions: subscriptions
@@ -323,15 +273,26 @@ export function getBillingStatus(context: ShopifyBillingContext): ShopifyBilling
   };
 }
 
+type CreateSubscriptionResponse = {
+  appSubscriptionCreate: {
+    confirmationUrl: string | null;
+    appSubscription: { id: string; name: string; test: boolean } | null;
+    userErrors: Array<{ field: string[] | null; message: string }>;
+  };
+};
+
+function getReturnUrl(returnPath: string): string {
+  return new URL(returnPath, window.location.origin).toString();
+}
+
 export async function createRecurringSubscription(options: {
-  plan: BillingPlanResponse;
+  planDisplayName: string;
+  priceAmount: number;
   billingCycle: BillingCycle;
+  trialDays: number | null;
   testMode: boolean;
-  returnPath?: string;
+  returnPath: string;
 }): Promise<{ confirmationUrl: string; subscriptionId: string | null }> {
-  const recurringPrice =
-    options.billingCycle === "annual" ? options.plan.price_annual_total : options.plan.price_monthly;
-  const trialDays = options.plan.trial_days;
   const query = `
     mutation CreateAppSubscription(
       $name: String!
@@ -348,32 +309,23 @@ export async function createRecurringSubscription(options: {
         trialDays: $trialDays
       ) {
         confirmationUrl
-        appSubscription {
-          id
-          name
-        }
-        userErrors {
-          field
-          message
-        }
+        appSubscription { id name test }
+        userErrors { field message }
       }
     }
   `;
 
   const response = await shopifyAdminRequest<CreateSubscriptionResponse>(query, {
-    name: options.plan.display_name,
-    returnUrl: getReturnUrl(options.returnPath ?? getPreferredReturnPath()),
+    name: options.planDisplayName,
+    returnUrl: getReturnUrl(options.returnPath),
     test: options.testMode,
-    trialDays,
+    trialDays: options.trialDays,
     lineItems: [
       {
         plan: {
           appRecurringPricingDetails: {
             interval: options.billingCycle === "annual" ? "ANNUAL" : "EVERY_30_DAYS",
-            price: {
-              amount: recurringPrice,
-              currencyCode: options.plan.currency_code
-            }
+            price: { amount: options.priceAmount, currencyCode: "USD" }
           }
         }
       }
@@ -382,7 +334,7 @@ export async function createRecurringSubscription(options: {
 
   const userErrors = response.appSubscriptionCreate.userErrors;
   if (userErrors.length > 0) {
-    throw new Error(userErrors.map((entry) => entry.message).join(" "));
+    throw new Error(userErrors.map((e) => e.message).join(" "));
   }
 
   const confirmationUrl = response.appSubscriptionCreate.confirmationUrl;

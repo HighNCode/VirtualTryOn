@@ -2,34 +2,33 @@
 
 import { useEffect, useMemo, useState } from "react";
 import PortalSidebar from "../../_components/PortalSidebar";
-import { getDefaultStoreId, getStandardAnalytics, type StandardAnalyticsResponse } from "../../../lib/photoshootApi";
+import {
+  activateBillingPlan,
+  cancelSubscription,
+  getBillingPlans,
+  getDefaultStoreId,
+  getStandardAnalytics,
+  type PlanConfigResponse,
+  type StandardAnalyticsResponse
+} from "../../../lib/photoshootApi";
 import {
   createRecurringSubscription,
-  getBillingCatalog,
   getBillingStatus,
   getShopifyBillingContext,
   type ShopifyBillingContext
 } from "../../../lib/shopify/billing";
-import type { BillingCatalogResponse, BillingCycle, BillingPlanResponse } from "../../../lib/shopify/billing-config";
+
+type BillingCycle = "monthly" | "annual";
 
 function formatDateTime(value: string | null): string {
-  if (!value) {
-    return "-";
-  }
-
+  if (!value) return "-";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
+  if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleDateString();
 }
 
-function formatMoney(value: number | null, currencyCode: string | null): string {
-  if (value === null || !currencyCode) {
-    return "-";
-  }
-
+function formatMoney(value: number | null, currencyCode: string): string {
+  if (value === null) return "-";
   return new Intl.NumberFormat(undefined, {
     style: "currency",
     currency: currencyCode,
@@ -37,20 +36,16 @@ function formatMoney(value: number | null, currencyCode: string | null): string 
   }).format(value);
 }
 
-function isCurrentPlan(plan: BillingPlanResponse, billingContext: ShopifyBillingContext | null): boolean {
-  const activeName = billingContext?.activeSubscriptions[0]?.name?.trim().toLowerCase() ?? "";
-  return activeName === plan.name.toLowerCase() || activeName === plan.display_name.toLowerCase();
-}
-
 export default function SettingsBillingPage() {
   const storeId = useMemo(() => getDefaultStoreId(), []);
 
   const [billingCycle, setBillingCycle] = useState<BillingCycle>("monthly");
   const [billingContext, setBillingContext] = useState<ShopifyBillingContext | null>(null);
-  const [catalog, setCatalog] = useState<BillingCatalogResponse | null>(null);
+  const [plans, setPlans] = useState<PlanConfigResponse[]>([]);
   const [analytics, setAnalytics] = useState<StandardAnalyticsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [pendingPlanId, setPendingPlanId] = useState<string | null>(null);
+  const [isCancelling, setIsCancelling] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [hasBillingReturn, setHasBillingReturn] = useState(false);
 
@@ -60,54 +55,70 @@ export default function SettingsBillingPage() {
     setHasBillingReturn(typeof window !== "undefined" && new URLSearchParams(window.location.search).has("charge_id"));
   }, []);
 
+  // When Shopify redirects back with charge_id, activate billing in the backend
   useEffect(() => {
+    if (!hasBillingReturn || !storeId) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const planName = params.get("plan");
+    const interval = params.get("interval") as BillingCycle | null;
+    const chargeId = params.get("charge_id");
+
+    if (!planName || !interval) return;
+
+    const shopifySubscriptionId = chargeId
+      ? `gid://shopify/AppSubscription/${chargeId}`
+      : (window.localStorage.getItem("pending_subscription_id") ?? "");
+
+    if (!shopifySubscriptionId) return;
+
+    window.localStorage.removeItem("pending_subscription_id");
+
+    activateBillingPlan({
+      storeId,
+      planName,
+      billingInterval: interval,
+      shopifySubscriptionId
+    }).catch(() => {
+      // Activation failure is non-fatal — subscription is already approved by Shopify
+    });
+  }, [hasBillingReturn, storeId]);
+
+  // Load plans, Shopify billing context, and analytics in parallel
+  useEffect(() => {
+    if (!storeId) return;
+
     const controller = new AbortController();
     let active = true;
 
     setIsLoading(true);
     setErrorMessage("");
 
-    getShopifyBillingContext()
-      .then(async (context) => {
-        const tasks: [Promise<BillingCatalogResponse>, Promise<StandardAnalyticsResponse | null>] = [
-          getBillingCatalog(context.billingCurrency),
-          storeId ? getStandardAnalytics({ storeId, period: 30, signal: controller.signal }) : Promise.resolve(null)
-        ];
+    Promise.allSettled([
+      getShopifyBillingContext(),
+      getBillingPlans({ storeId, signal: controller.signal }),
+      getStandardAnalytics({ storeId, period: 30, signal: controller.signal })
+    ]).then(([contextResult, plansResult, analyticsResult]) => {
+      if (!active) return;
 
-        const [catalogResult, analyticsResult] = await Promise.allSettled(tasks);
-        if (!active) {
-          return;
-        }
+      if (contextResult.status === "fulfilled") {
+        setBillingContext(contextResult.value);
+        const interval = getBillingStatus(contextResult.value).billingInterval;
+        if (interval) setBillingCycle(interval);
+      }
 
-        setBillingContext(context);
+      if (plansResult.status === "fulfilled") {
+        setPlans(plansResult.value.plans.filter((p) => p.is_active));
+      } else if (!controller.signal.aborted) {
+        setErrorMessage("Failed to load billing plans.");
+      }
 
-        if (catalogResult.status === "fulfilled") {
-          setCatalog(catalogResult.value);
-        } else {
-          throw catalogResult.reason;
-        }
-
-        if (analyticsResult.status === "fulfilled") {
-          setAnalytics(analyticsResult.value);
-        } else if (!controller.signal.aborted) {
-          const analyticsMessage =
-            analyticsResult.reason instanceof Error ? analyticsResult.reason.message : "Failed to load usage analytics.";
-          setErrorMessage(analyticsMessage);
-        }
-      })
-      .catch((error: unknown) => {
-        if (!active || controller.signal.aborted) {
-          return;
-        }
-
-        const message = error instanceof Error ? error.message : "Failed to load Shopify billing data.";
-        setErrorMessage(message);
-      })
-      .finally(() => {
-        if (active) {
-          setIsLoading(false);
-        }
-      });
+      if (analyticsResult.status === "fulfilled") {
+        setAnalytics(analyticsResult.value);
+      }
+    }).finally(() => {
+      if (active) setIsLoading(false);
+    });
 
     return () => {
       active = false;
@@ -116,72 +127,79 @@ export default function SettingsBillingPage() {
   }, [storeId]);
 
   const billingStatus = useMemo(() => {
-    if (!billingContext) {
-      return null;
-    }
-
+    if (!billingContext) return null;
     return getBillingStatus(billingContext);
   }, [billingContext]);
 
-  useEffect(() => {
-    if (billingStatus?.billingInterval) {
-      setBillingCycle(billingStatus.billingInterval);
-    }
-  }, [billingStatus?.billingInterval]);
-
-  const currentPlan = useMemo(() => {
-    return (catalog?.plans ?? []).find((plan) => isCurrentPlan(plan, billingContext)) ?? null;
-  }, [billingContext, catalog?.plans]);
-
-  const developmentStoreBypass = Boolean(billingContext?.shopIsDevelopment && catalog && !catalog.test_mode);
+  const currentPlan = useMemo(() => plans.find((p) => p.is_current) ?? null, [plans]);
 
   const renderedPlans = useMemo(
     () =>
-      (catalog?.plans ?? [])
-        .filter((plan) => plan.is_active)
-        .map((plan) => {
-          const currentPlanMatch = isCurrentPlan(plan, billingContext);
-
-          return {
-            ...plan,
-            displayedPrice: isAnnual ? plan.price_annual_per_month : plan.price_monthly,
-            displayedCredits: isAnnual ? plan.credits_annual : plan.credits_monthly,
-            isCurrentPlan: currentPlanMatch,
-            isCurrentSelection: currentPlanMatch && billingStatus?.billingInterval === billingCycle
-          };
-        }),
-    [billingContext, billingCycle, billingStatus?.billingInterval, catalog?.plans, isAnnual]
+      plans.map((plan) => ({
+        ...plan,
+        displayedPrice: isAnnual ? plan.price_annual_per_month : plan.price_monthly,
+        displayedCredits: isAnnual ? plan.credits_annual : plan.credits_monthly,
+        isCurrentSelection: plan.is_current && billingStatus?.billingInterval === billingCycle
+      })),
+    [plans, billingCycle, billingStatus?.billingInterval, isAnnual]
   );
 
   const usageUsed = analytics?.credits_used ?? 0;
   const usageLimit = billingStatus?.billingInterval === "annual" ? currentPlan?.credits_annual ?? 0 : currentPlan?.credits_monthly ?? 0;
   const usagePercent = usageLimit > 0 ? Math.min(100, (usageUsed / usageLimit) * 100) : 0;
 
-  const handlePlanChange = async (plan: BillingPlanResponse) => {
-    if (developmentStoreBypass) {
+  const handlePlanChange = async (plan: PlanConfigResponse) => {
+    if (plan.is_current && billingStatus?.billingInterval === billingCycle) return;
+    if (!storeId) {
+      setErrorMessage("Open the app from Shopify Admin to manage billing.");
       return;
     }
 
-    const currentSelection = isCurrentPlan(plan, billingContext) && billingStatus?.billingInterval === billingCycle;
-    if (currentSelection) {
-      return;
-    }
+    const selectedPrice = isAnnual ? plan.price_annual_total : plan.price_monthly;
+    if (selectedPrice <= 0) return;
 
     setPendingPlanId(plan.id);
     setErrorMessage("");
 
-    try {
-      const subscription = await createRecurringSubscription({
-        plan,
-        billingCycle,
-        testMode: catalog?.test_mode ?? false
-      });
+    const shopParam = storeId ? `&shop=${encodeURIComponent(storeId)}` : "";
 
-      window.location.assign(subscription.confirmationUrl);
+    try {
+      const result = await createRecurringSubscription({
+        planDisplayName: plan.display_name,
+        priceAmount: selectedPrice,
+        billingCycle,
+        trialDays: plan.trial_days,
+        testMode: billingContext?.shopIsDevelopment ?? false,
+        returnPath: `/settings/billing?plan=${encodeURIComponent(plan.name)}&interval=${billingCycle}${shopParam}`
+      });
+      if (result.subscriptionId) {
+        window.localStorage.setItem("pending_subscription_id", result.subscriptionId);
+      }
+      window.open(result.confirmationUrl, "_top");
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Failed to create Shopify subscription.";
       setErrorMessage(message);
       setPendingPlanId(null);
+    }
+  };
+
+  const handleCancel = async () => {
+    if (!storeId) return;
+    if (!window.confirm("Are you sure you want to cancel your subscription? You will be moved to the free plan immediately.")) return;
+
+    setIsCancelling(true);
+    setErrorMessage("");
+
+    try {
+      await cancelSubscription({ storeId });
+      // Reload billing context after cancellation
+      const context = await getShopifyBillingContext();
+      setBillingContext(context);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Failed to cancel subscription.";
+      setErrorMessage(message);
+    } finally {
+      setIsCancelling(false);
     }
   };
 
@@ -195,20 +213,8 @@ export default function SettingsBillingPage() {
           <p>Shopify subscription status, plan switching, and credit usage</p>
         </header>
 
-        {developmentStoreBypass ? (
-          <p className="ai-status-note">
-            Partner development store detected. Live billing is bypassed until the store moves to a paid Shopify plan.
-          </p>
-        ) : null}
         {hasBillingReturn && billingStatus?.activeSubscription ? (
           <p className="ai-status-note">Shopify redirected back after charge approval. The latest subscription is shown below.</p>
-        ) : null}
-        {catalog ? (
-          <p className="ai-status-note">
-            Billing currency: {catalog.resolved_currency_code}
-            {billingContext?.shopPlanName ? ` · Store plan: ${billingContext.shopPlanName}` : ""}
-            {billingStatus?.isTestSubscription ? " · Test charge" : ""}
-          </p>
         ) : null}
         {isLoading ? <p className="ai-status-note">Loading billing...</p> : null}
         {errorMessage ? <p className="ai-error-note">{errorMessage}</p> : null}
@@ -237,7 +243,7 @@ export default function SettingsBillingPage() {
             <p className="billing-pay-label">{billingStatus?.planName ?? "No active subscription"}</p>
             <p>Billing interval: {billingStatus?.billingInterval ?? "-"}</p>
             <p>Subscription status: {billingStatus?.subscriptionStatus ?? "Not linked"}</p>
-            <p>Recurring price: {formatMoney(billingStatus?.recurringPrice ?? null, billingStatus?.recurringCurrencyCode ?? null)}</p>
+            <p>Recurring price: {formatMoney(billingStatus?.recurringPrice ?? null, billingStatus?.recurringCurrencyCode ?? "USD")}</p>
 
             <h4>Usage This Month</h4>
             <p>
@@ -250,6 +256,17 @@ export default function SettingsBillingPage() {
             <button type="button" className="billing-link-button" disabled>
               Current Plan: {currentPlan?.display_name ?? billingStatus?.planName ?? "-"}
             </button>
+
+            {billingStatus?.activeSubscription ? (
+              <button
+                type="button"
+                className="billing-cancel-button"
+                onClick={handleCancel}
+                disabled={isCancelling}
+              >
+                {isCancelling ? "Cancelling..." : "Cancel Subscription"}
+              </button>
+            ) : null}
           </article>
 
           <article className="settings-card billing-card">
@@ -259,30 +276,29 @@ export default function SettingsBillingPage() {
               <div key={plan.id} className="billing-offer">
                 <h4>
                   {plan.display_name}
-                  {plan.annual_discount_pct > 0 ? <small>(Save {plan.annual_discount_pct}% annually)</small> : null}
+                  {plan.annual_discount_pct > 0 ? <small> (Save {plan.annual_discount_pct}% annually)</small> : null}
                 </h4>
-                <p>{plan.description ?? "Shopify-billed recurring subscription"}</p>
-                <p>{plan.displayedCredits.toLocaleString()} credits included</p>
                 <p>{plan.features[0] ?? "Core features"}</p>
-                <strong>{formatMoney(plan.displayedPrice, plan.currency_code)} / month</strong>
+                <p>{plan.displayedCredits.toLocaleString()} credits included</p>
+                <strong>{formatMoney(plan.displayedPrice, "USD")} / month</strong>
                 <button
                   type="button"
                   className="billing-upgrade-button"
                   onClick={() => handlePlanChange(plan)}
-                  disabled={developmentStoreBypass || pendingPlanId === plan.id || plan.isCurrentSelection}
+                  disabled={pendingPlanId === plan.id || plan.isCurrentSelection || isCancelling}
                 >
                   {plan.isCurrentSelection
                     ? "Current Plan"
                     : pendingPlanId === plan.id
                       ? "Redirecting..."
-                      : plan.isCurrentPlan
+                      : plan.is_current
                         ? `Switch to ${isAnnual ? "Annual" : "Monthly"}`
                         : `Switch to ${plan.display_name}`}
                 </button>
               </div>
             ))}
 
-            {renderedPlans.length === 0 ? <p>No active billing plans configured.</p> : null}
+            {renderedPlans.length === 0 && !isLoading ? <p>No active billing plans configured.</p> : null}
           </article>
         </section>
 

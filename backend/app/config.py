@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     SHOPIFY_API_SECRET: Optional[str] = None
     SHOPIFY_SCOPES: str = "read_products,write_products,write_script_tags"
     SHOPIFY_API_VERSION: str = "2024-01"
+    # Public-facing URL of the frontend (used to build OAuth redirect_uri).
+    # In dev: set to the shopify app dev tunnel URL, e.g. https://abc123.trycloudflare.com
+    # In production: set to https://optimo-virtual-try-on.vercel.app
+    APP_URL: Optional[str] = None
 
     # Google Vertex AI (Gemini image generation)
     GOOGLE_CLOUD_PROJECT: Optional[str] = None

@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Manrope } from "next/font/google";
-import Script from "next/script";
 import { EmbeddedNavigationBootstrap } from "./_components/EmbeddedNavigation";
 import "./globals.css";
 
@@ -16,8 +15,8 @@ export const metadata: Metadata = {
 };
 
 const shopifyApiKey =
-  process.env.SHOPIFY_API_KEY?.trim() ??
-  process.env.NEXT_PUBLIC_SHOPIFY_API_KEY?.trim() ??
+  process.env.NEXT_PUBLIC_SHOPIFY_API_KEY?.trim() ||
+  process.env.SHOPIFY_API_KEY?.trim() ||
   "";
 
 export default function RootLayout({
@@ -28,10 +27,11 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
-        {shopifyApiKey ? <meta name="shopify-api-key" content={shopifyApiKey} /> : null}
+        <meta name="shopify-api-key" content={shopifyApiKey} />
+        {/* eslint-disable-next-line @next/next/no-sync-scripts */}
+        <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js" data-api-key={shopifyApiKey} />
       </head>
       <body className={manrope.className}>
-        {shopifyApiKey ? <Script src="https://cdn.shopify.com/shopifycloud/app-bridge.js" strategy="beforeInteractive" /> : null}
         <EmbeddedNavigationBootstrap />
         {children}
       </body>
