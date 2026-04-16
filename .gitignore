@@ -46,6 +46,7 @@ backend/static/tryon_results/
 
 # Test artefacts
 test_*.py
+!backend/tests/test_*.py
 *.tmp
 
 # Claude Code — local machine overrides (not shared)

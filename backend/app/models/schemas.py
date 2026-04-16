@@ -318,6 +318,7 @@ class OnboardingStatusResponse(BaseModel):
     plan_name: str
     goals: Optional[List[str]] = None
     referral_source: Optional[str] = None
+    referral_detail: Optional[str] = None
     scope_type: Optional[str] = None
     enabled_collection_ids: Optional[List[str]] = None
     enabled_product_ids: Optional[List[str]] = None

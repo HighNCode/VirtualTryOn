@@ -5,12 +5,15 @@ Shared store-resolution dependencies for merchant-facing routes.
 import logging
 from typing import Optional
 
+import httpx
 from fastapi import Depends, Header, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DBSession
 
+from app.config import get_settings
 from app.core.database import get_db
-from app.core.security import maybe_verify_session_token
+from app.core.security import decrypt_token, maybe_verify_session_token
 from app.models.database import Store
 
 logger = logging.getLogger(__name__)
@@ -89,6 +92,111 @@ def require_shopify_access_token(store: Store) -> str:
             "Store installation is incomplete. Finish the backend Shopify auth flow "
             "before calling this action."
         ),
+    )
+
+
+def _missing_session_token_detail(action_label: str) -> str:
+    return (
+        "Store installation is incomplete and no session token was provided. "
+        f"Open the app from Shopify Admin (embedded) before using {action_label}."
+    )
+
+
+def _token_exchange_failed_detail(action_label: str) -> str:
+    return (
+        "Store installation is incomplete and Shopify session token exchange failed. "
+        "Complete the backend Shopify auth flow for this shop before "
+        f"using {action_label}."
+    )
+
+
+async def _exchange_session_token_for_access(
+    shop_domain: str,
+    session_token: str,
+    *,
+    action_label: str,
+) -> str:
+    settings = get_settings()
+    url = f"https://{shop_domain}/admin/oauth/access_token"
+    payload = {
+        "client_id": settings.SHOPIFY_API_KEY,
+        "client_secret": settings.SHOPIFY_API_SECRET,
+        "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+        "subject_token": session_token,
+        "subject_token_type": "urn:ietf:params:oauth:token-type:id_token",
+        "requested_token_type": "urn:shopify:params:oauth:token-type:online-access-token",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(url, json=payload)
+    except httpx.HTTPError as exc:
+        logger.warning("Shopify token exchange request failed for %s: %s", shop_domain, exc)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_token_exchange_failed_detail(action_label),
+        ) from exc
+
+    if not resp.is_success:
+        logger.warning(
+            "Shopify token exchange response failed for %s: status=%s body=%s",
+            shop_domain,
+            resp.status_code,
+            resp.text,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_token_exchange_failed_detail(action_label),
+        )
+
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        logger.warning("Shopify token exchange JSON parse failed for %s", shop_domain)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_token_exchange_failed_detail(action_label),
+        ) from exc
+
+    token = (data.get("access_token") or "").strip()
+    if not token:
+        logger.warning("Shopify token exchange returned no access token for %s", shop_domain)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_token_exchange_failed_detail(action_label),
+        )
+
+    return token
+
+
+async def resolve_merchant_shopify_access_token(
+    store: Store,
+    credentials: Optional[HTTPAuthorizationCredentials],
+    *,
+    action_label: str = "this action",
+) -> str:
+    """
+    Resolve a usable Shopify Admin API token for merchant actions.
+
+    Order:
+    1) Stored OAuth token from the store row (decrypt before returning)
+    2) App Bridge session-token exchange fallback for provisional stores
+    """
+    stored_token = (store.shopify_access_token or "").strip()
+    if stored_token:
+        return decrypt_token(stored_token)
+
+    session_token = (credentials.credentials if credentials else "").strip()
+    if not session_token:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_missing_session_token_detail(action_label),
+        )
+
+    return await _exchange_session_token_for_access(
+        store.shopify_domain,
+        session_token,
+        action_label=action_label,
     )
 
 

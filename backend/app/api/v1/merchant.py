@@ -11,13 +11,17 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
-import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import func
 from sqlalchemy.orm import Session as DBSession
 
-from app.api.store_context import get_current_merchant_store, get_public_store, require_shopify_access_token
+from app.api.store_context import (
+    get_current_merchant_store,
+    get_public_store,
+    require_shopify_access_token,
+    resolve_merchant_shopify_access_token,
+)
 from app.core.database import get_db
 from app.core.security import _bearer_scheme
 from app.config import get_settings
@@ -92,6 +96,7 @@ def get_onboarding_status(
         plan_name=store.plan_name,
         goals=ob.goals if ob else None,
         referral_source=ob.referral_source if ob else None,
+        referral_detail=ob.referral_detail if ob else None,
         scope_type=wc.scope_type if wc else None,
         enabled_collection_ids=wc.enabled_collection_ids if wc else None,
         enabled_product_ids=wc.enabled_product_ids if wc else None,
@@ -447,55 +452,6 @@ async def get_billing_status(
     )
 
 
-async def _exchange_session_token_for_access(
-    shop_domain: str,
-    session_token: str,
-) -> str:
-    """Exchange an App Bridge session token for a Shopify online access token."""
-    settings = get_settings()
-    url = f"https://{shop_domain}/admin/oauth/access_token"
-    payload = {
-        "client_id": settings.SHOPIFY_API_KEY,
-        "client_secret": settings.SHOPIFY_API_SECRET,
-        "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-        "subject_token": session_token,
-        "subject_token_type": "urn:ietf:params:oauth:token-type:id_token",
-        "requested_token_type": "urn:shopify:params:oauth:token-type:online-access-token",
-    }
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(url, json=payload)
-        if not resp.is_success:
-            raise HTTPException(502, f"Shopify token exchange failed: {resp.text}")
-        data = resp.json()
-        token = data.get("access_token")
-        if not token:
-            raise HTTPException(502, "Shopify token exchange did not return an access token")
-        return token
-
-
-async def _resolve_access_token_for_billing(
-    store: Store,
-    credentials: Optional[HTTPAuthorizationCredentials],
-) -> str:
-    """Return a usable Shopify access token for billing API calls.
-
-    Tries the stored OAuth token first. If the store is provisional (no stored token),
-    falls back to Shopify session token exchange using the App Bridge session token.
-    """
-    stored_token = (store.shopify_access_token or "").strip()
-    if stored_token:
-        return stored_token
-
-    if not credentials:
-        raise HTTPException(
-            409,
-            "Store installation is incomplete and no session token was provided. "
-            "Open the app from Shopify Admin to manage billing.",
-        )
-
-    return await _exchange_session_token_for_access(store.shopify_domain, credentials.credentials)
-
-
 @merchant_router.post("/billing/create-subscription", response_model=CreateSubscriptionResponse)
 async def create_subscription(
     body: CreateSubscriptionRequest,
@@ -531,7 +487,11 @@ async def create_subscription(
     is_upgrade = store.plan_name not in {"free", body.plan_name}
 
     try:
-        access_token = await _resolve_access_token_for_billing(store, credentials)
+        access_token = await resolve_merchant_shopify_access_token(
+            store,
+            credentials,
+            action_label="billing management",
+        )
         svc = ShopifyService(store.shopify_domain, access_token)
         result = await svc.billing_create_subscription(
             plan_name=plan.display_name,

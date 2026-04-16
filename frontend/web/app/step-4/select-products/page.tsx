@@ -1,11 +1,12 @@
 "use client";
 
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { EmbeddedLink, useEmbeddedRouter } from "../../_components/EmbeddedNavigation";
 import {
   getDefaultStoreId,
   getWidgetScope,
   listProducts,
+  syncProducts,
   saveWidgetScope,
   type ProductResponse
 } from "../../../lib/photoshootApi";
@@ -45,8 +46,10 @@ export default function SelectProductsPage() {
 
   const [productOptions, setProductOptions] = useState<ProductOption[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const hasAttemptedAutoSync = useRef(false);
 
   useEffect(() => {
     if (!storeId) {
@@ -57,33 +60,60 @@ export default function SelectProductsPage() {
     let active = true;
 
     setIsLoading(true);
+    setErrorMessage("");
 
-    Promise.all([
-      listProducts({ storeId, limit: 250, signal: controller.signal }),
-      getWidgetScope({ storeId, signal: controller.signal })
-    ])
-      .then(([products, scope]) => {
+    (async () => {
+      try {
+        const [initialProducts, scope] = await Promise.all([
+          listProducts({ storeId, limit: 250, signal: controller.signal }),
+          getWidgetScope({ storeId, signal: controller.signal })
+        ]);
+
         if (!active) {
           return;
         }
 
-        setProductOptions(products.map(toProductOption));
         setSelectedIds(scope.enabled_product_ids);
         setEnabledCollectionIds(scope.enabled_collection_ids);
-      })
-      .catch((error: unknown) => {
+
+        let products = initialProducts;
+        if (products.length === 0 && !hasAttemptedAutoSync.current) {
+          hasAttemptedAutoSync.current = true;
+          setIsSyncing(true);
+
+          try {
+            await syncProducts({ storeId });
+            if (!active) {
+              return;
+            }
+
+            products = await listProducts({ storeId, limit: 250, signal: controller.signal });
+          } catch (error: unknown) {
+            if (!active || controller.signal.aborted) {
+              return;
+            }
+            const message = error instanceof Error ? error.message : "Failed to sync products.";
+            setErrorMessage(message);
+          } finally {
+            if (active) {
+              setIsSyncing(false);
+            }
+          }
+        }
+
+        setProductOptions(products.map(toProductOption));
+      } catch (error: unknown) {
         if (!active || controller.signal.aborted) {
           return;
         }
-
         const message = error instanceof Error ? error.message : "Failed to load products.";
         setErrorMessage(message);
-      })
-      .finally(() => {
+      } finally {
         if (active) {
           setIsLoading(false);
         }
-      });
+      }
+    })();
 
     return () => {
       active = false;
@@ -142,7 +172,7 @@ export default function SelectProductsPage() {
     try {
       await saveWidgetScope({
         storeId,
-        scopeType: "products",
+        scopeType: "selected_products",
         enabledCollectionIds,
         enabledProductIds: selectedIds
       });
@@ -180,6 +210,7 @@ export default function SelectProductsPage() {
 
         {!storeId ? <p className="ai-error-note">Open the app from Shopify Admin to load and save products.</p> : null}
         {isLoading ? <p className="ai-status-note">Loading products...</p> : null}
+        {isSyncing ? <p className="ai-status-note">Syncing products from Shopify...</p> : null}
         {errorMessage ? <p className="ai-error-note">{errorMessage}</p> : null}
 
         <div className="picker-controls picker-controls-products">

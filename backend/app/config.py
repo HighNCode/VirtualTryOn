@@ -51,6 +51,8 @@ class Settings(BaseSettings):
 
     # Public URL (used to construct image URLs for Shopify productCreateMedia)
     PUBLIC_URL: str = "http://localhost:8000"
+    # Optional compatibility var (some envs set APP_URL instead of PUBLIC_URL)
+    APP_URL: Optional[str] = None
 
     # Admin
     ADMIN_API_KEY: str = "change-this-admin-key-in-production"

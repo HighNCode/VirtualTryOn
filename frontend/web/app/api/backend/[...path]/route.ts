@@ -50,10 +50,13 @@ async function proxyRequest(request: NextRequest, path: string[]): Promise<NextR
     }
   });
 
+  const joinedPath = path.join("/");
+  const upstreamPath = request.nextUrl.pathname.endsWith("/") ? `${joinedPath}/` : joinedPath;
+
   const init: RequestInit = {
     method: request.method,
     headers,
-    redirect: "manual"
+    redirect: "follow"
   };
 
   if (!["GET", "HEAD"].includes(request.method)) {
@@ -63,7 +66,7 @@ async function proxyRequest(request: NextRequest, path: string[]): Promise<NextR
   let upstreamResponse: Response;
 
   try {
-    upstreamResponse = await fetch(`${upstreamBaseUrl}/${path.join("/")}${request.nextUrl.search}`, init);
+    upstreamResponse = await fetch(`${upstreamBaseUrl}/${upstreamPath}${request.nextUrl.search}`, init);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown upstream fetch error";
     return NextResponse.json(

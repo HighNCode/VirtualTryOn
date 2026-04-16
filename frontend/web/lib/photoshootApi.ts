@@ -44,6 +44,7 @@ export type OnboardingStatusResponse = {
   plan_name: string;
   goals?: string[] | null;
   referral_source?: string | null;
+  referral_detail?: string | null;
   scope_type?: string | null;
   enabled_collection_ids?: string[] | null;
   enabled_product_ids?: string[] | null;
@@ -201,6 +202,14 @@ export type ProductResponse = {
   store_id: string;
   last_synced_at: string;
   created_at: string;
+};
+
+export type ProductSyncResponse = {
+  status: string;
+  products_synced: number;
+  products_with_sizes: number;
+  products_without_sizes: number;
+  timestamp: string;
 };
 
 export type CollectionResponse = {
@@ -455,6 +464,18 @@ function readErrorMessage(status: number, payload: unknown): string {
 
       if (/store not found/i.test(detail)) {
         return "Backend could not resolve the active Shopify store. Open the app from Shopify Admin so the store context can be provisioned, then retry.";
+      }
+
+      if (/no session token was provided/i.test(detail)) {
+        return "Open the app from Shopify Admin (embedded) so App Bridge can provide a session token, then retry.";
+      }
+
+      if (/session token exchange failed/i.test(detail)) {
+        return "Shopify install/auth is still incomplete for this shop. Complete the backend Shopify auth flow, then retry.";
+      }
+
+      if (/denied access to products/i.test(detail) || /access denied for products field/i.test(detail)) {
+        return "Shopify denied product access. Reinstall or reauthorize the app so read_products scope is approved, then retry sync.";
       }
 
       if (/store installation is incomplete/i.test(detail)) {
@@ -794,7 +815,7 @@ export async function listProducts(options: {
   offset?: number;
   signal?: AbortSignal;
 }): Promise<ProductResponse[]> {
-  return requestJson<ProductResponse[]>("/api/v1/products/", {
+  return requestJson<ProductResponse[]>("/api/v1/products", {
     method: "GET",
     storeId: options.storeId,
     query: {
@@ -803,6 +824,15 @@ export async function listProducts(options: {
       offset: options.offset ?? 0
     },
     signal: options.signal
+  });
+}
+
+export async function syncProducts(options: {
+  storeId: string;
+}): Promise<ProductSyncResponse> {
+  return requestJson<ProductSyncResponse>("/api/v1/products/sync", {
+    method: "POST",
+    storeId: options.storeId
   });
 }
 

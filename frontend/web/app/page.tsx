@@ -4,6 +4,8 @@ import { useEffect, useMemo } from "react";
 import { EmbeddedLink, useEmbeddedRouter } from "./_components/EmbeddedNavigation";
 import { getDefaultStoreId, getOnboardingStatus } from "../lib/photoshootApi";
 
+const ONBOARDING_AUTO_RESUME_DONE_KEY = "optimo_onboarding_autoresume_done";
+
 const features = [
   {
     title: "Virtual Try-On for Customers",
@@ -42,10 +44,24 @@ export default function Home() {
     getOnboardingStatus({ storeId })
       .then((status) => {
         const route = STEP_ROUTES[status.onboarding_step];
-        if (route) router.replace(route);
+        if (!route || route === "/step-2") {
+          return;
+        }
+
+        if (typeof window === "undefined") {
+          return;
+        }
+
+        const alreadyAutoResumed = window.sessionStorage.getItem(ONBOARDING_AUTO_RESUME_DONE_KEY) === "1";
+        if (alreadyAutoResumed) {
+          return;
+        }
+
+        window.sessionStorage.setItem(ONBOARDING_AUTO_RESUME_DONE_KEY, "1");
+        router.replace(route);
       })
       .catch(() => {
-        // If status check fails, stay on step 1 — user will continue normally
+        // If status check fails, stay on step 1 – user will continue normally
       });
   }, [router, storeId]);
 
