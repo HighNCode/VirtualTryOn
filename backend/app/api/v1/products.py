@@ -4,13 +4,17 @@ Handles product sync and retrieval
 """
 
 from fastapi import APIRouter, HTTPException, Depends
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import logging
 
-from app.api.store_context import get_current_merchant_store, require_shopify_access_token
+from app.api.store_context import (
+    get_current_merchant_store,
+    resolve_merchant_shopify_access_token,
+)
 from app.core.database import get_db
-from app.core.security import decrypt_token
+from app.core.security import _bearer_scheme
 from app.models.database import Store, Product
 from app.models.schemas import ProductSyncResponse, ProductResponse
 from app.services.shopify_service import ShopifyService
@@ -22,6 +26,7 @@ logger = logging.getLogger(__name__)
 @router.post("/sync", response_model=ProductSyncResponse)
 async def sync_products(
     store: Store = Depends(get_current_merchant_store),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
     db: Session = Depends(get_db)
 ):
     """
@@ -33,8 +38,11 @@ async def sync_products(
         Sync statistics
     """
     try:
-        # Decrypt access token
-        access_token = decrypt_token(require_shopify_access_token(store))
+        access_token = await resolve_merchant_shopify_access_token(
+            store,
+            credentials,
+            action_label="product sync",
+        )
 
         # Initialize Shopify service
         shopify_service = ShopifyService(store.shopify_domain, access_token)
@@ -52,12 +60,21 @@ async def sync_products(
             timestamp=result['timestamp']
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Product sync error: {e}", exc_info=True)
+        error_text = str(e).lower()
+        if "access_denied" in error_text or "access denied for products field" in error_text:
+            raise HTTPException(
+                409,
+                "Shopify denied access to products. Ensure the app has read_products scope and the shop has approved the latest scopes.",
+            )
         raise HTTPException(500, f"Product sync failed: {str(e)}")
 
 
-@router.get("/", response_model=List[ProductResponse])
+@router.get("", response_model=List[ProductResponse])
+@router.get("/", response_model=List[ProductResponse], include_in_schema=False)
 async def list_products(
     store: Store = Depends(get_current_merchant_store),
     category: Optional[str] = None,

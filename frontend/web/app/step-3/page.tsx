@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { EmbeddedLink, useEmbeddedRouter } from "../_components/EmbeddedNavigation";
-import { getDefaultStoreId, saveReferral } from "../../lib/photoshootApi";
+import { getDefaultStoreId, getOnboardingStatus, saveReferral } from "../../lib/photoshootApi";
 
 type ReferralOption = {
   id: string;
@@ -24,12 +24,58 @@ export default function StepThreePage() {
 
   const [selected, setSelected] = useState("");
   const [otherDetail, setOtherDetail] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
+  useEffect(() => {
+    if (!storeId) {
+      return;
+    }
+
+    const controller = new AbortController();
+    let active = true;
+
+    setIsLoading(true);
+
+    getOnboardingStatus({ storeId, signal: controller.signal })
+      .then((status) => {
+        if (!active) {
+          return;
+        }
+
+        const savedSource = status.referral_source ?? "";
+        setSelected(savedSource);
+        setOtherDetail(savedSource === "other" ? status.referral_detail ?? "" : "");
+      })
+      .catch((error: unknown) => {
+        if (!active || controller.signal.aborted) {
+          return;
+        }
+
+        const message = error instanceof Error ? error.message : "Failed to load referral selection.";
+        setErrorMessage(message);
+      })
+      .finally(() => {
+        if (active) {
+          setIsLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [storeId]);
+
   const handleContinue = async () => {
-    if (!storeId || !selected) {
+    if (!storeId) {
       router.push("/step-4");
+      return;
+    }
+
+    if (!selected) {
+      setErrorMessage("Please select how you heard about us.");
       return;
     }
 
@@ -74,19 +120,23 @@ export default function StepThreePage() {
 
         <p className="step2-subtitle">This helps us understand how merchants discover Optimo VTS.</p>
 
+        {isLoading ? <p className="ai-status-note">Loading current selection...</p> : null}
         {errorMessage ? <p className="ai-error-note">{errorMessage}</p> : null}
 
         <ul className="goal-list">
           {referralOptions.map((option) => (
             <li key={option.id}>
               <label className="goal-option">
-                <input
-                  type="radio"
-                  name="referral"
-                  value={option.id}
-                  checked={selected === option.id}
-                  onChange={() => setSelected(option.id)}
-                />
+                  <input
+                    type="radio"
+                    name="referral"
+                    value={option.id}
+                    checked={selected === option.id}
+                    onChange={() => {
+                      setSelected(option.id);
+                      setErrorMessage("");
+                    }}
+                  />
                 <span className="goal-copy">
                   <strong>{option.label}</strong>
                 </span>

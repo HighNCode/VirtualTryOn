@@ -145,7 +145,7 @@ export default function SelectCollectionsPage() {
     try {
       await saveWidgetScope({
         storeId,
-        scopeType: "collections",
+        scopeType: "selected_collections",
         enabledCollectionIds: selectedIds,
         enabledProductIds
       });
