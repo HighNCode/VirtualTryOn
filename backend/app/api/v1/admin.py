@@ -493,6 +493,8 @@ class PlanCreateRequest(BaseModel):
     annual_discount_pct: int = 17
     credits_monthly: int
     credits_annual: int
+    overage_usd_per_tryon: float = 0.14
+    usage_cap_usd: float = 500.0
     trial_days: Optional[int] = None
     trial_credits: Optional[int] = None
     features: List[str]
@@ -508,6 +510,8 @@ class PlanUpdateRequest(BaseModel):
     annual_discount_pct: Optional[int] = None
     credits_monthly: Optional[int] = None
     credits_annual: Optional[int] = None
+    overage_usd_per_tryon: Optional[float] = None
+    usage_cap_usd: Optional[float] = None
     trial_days: Optional[int] = None
     trial_credits: Optional[int] = None
     features: Optional[List[str]] = None
@@ -525,6 +529,8 @@ def _plan_to_dict(p: Plan, store_count: int = 0) -> Dict[str, Any]:
         "annual_discount_pct": p.annual_discount_pct,
         "credits_monthly": p.credits_monthly,
         "credits_annual": p.credits_annual,
+        "overage_usd_per_tryon": float(p.overage_usd_per_tryon),
+        "usage_cap_usd": float(p.usage_cap_usd),
         "trial_days": p.trial_days,
         "trial_credits": p.trial_credits,
         "features": p.features,
@@ -578,6 +584,8 @@ def create_plan(
         annual_discount_pct=body.annual_discount_pct,
         credits_monthly=body.credits_monthly,
         credits_annual=body.credits_annual,
+        overage_usd_per_tryon=Decimal(str(body.overage_usd_per_tryon)),
+        usage_cap_usd=Decimal(str(body.usage_cap_usd)),
         trial_days=body.trial_days,
         trial_credits=body.trial_credits,
         features=body.features,
@@ -608,7 +616,7 @@ def update_plan(
 
     updates = body.model_dump(exclude_none=True)
     for field, value in updates.items():
-        if field in {"price_monthly", "price_annual_total", "price_annual_per_month"}:
+        if field in {"price_monthly", "price_annual_total", "price_annual_per_month", "usage_cap_usd", "overage_usd_per_tryon"}:
             value = Decimal(str(value))
         setattr(plan, field, value)
 

@@ -49,6 +49,13 @@ class Store(Base, TimestampMixin):
     billing_interval = Column(String(10), nullable=True)   # 'monthly' | 'annual' | null for free
     trial_ends_at = Column(DateTime, nullable=True)
     is_founding_merchant = Column(Boolean, nullable=False, default=False)
+    subscription_status = Column(String(20), nullable=True)  # 'ACTIVE' | 'CANCELLED' | 'FROZEN' | ...
+    billing_cycle_start_at = Column(DateTime, nullable=True)
+    billing_cycle_end_at = Column(DateTime, nullable=True)
+    billing_status_synced_at = Column(DateTime, nullable=True)
+    store_timezone = Column(String(64), nullable=True)  # IANA TZ, e.g. "America/New_York"
+    has_usage_billing = Column(Boolean, nullable=False, default=False)
+    usage_line_item_id = Column(String(255), nullable=True)
 
     # Relationships
     products = relationship("Product", back_populates="store", cascade="all, delete-orphan")
@@ -219,8 +226,10 @@ class Plan(Base, TimestampMixin):
     annual_discount_pct = Column(Integer, nullable=False, default=17)
     credits_monthly = Column(Integer, nullable=False)               # 600
     credits_annual = Column(Integer, nullable=False)                # 7600
+    overage_usd_per_tryon = Column(Numeric(10, 4), nullable=False, default=0.14)
     trial_days = Column(Integer, nullable=True)                     # 14
     trial_credits = Column(Integer, nullable=True)                  # 80
+    usage_cap_usd = Column(Numeric(10, 2), nullable=False, default=500.00)
     features = Column(JSONB, nullable=False)                        # List[str]
     is_active = Column(Boolean, default=True, nullable=False)
     sort_order = Column(Integer, default=0, nullable=False)
@@ -485,8 +494,106 @@ class WidgetConfig(Base, TimestampMixin):
     theme_extension_detected = Column(Boolean, default=False, nullable=False)
     theme_id_checked = Column(String(255), nullable=True)
     widget_color = Column(String(7), nullable=True)  # Hex color e.g. '#FF0000'; default '#FF0000' applied in API layer
+    weekly_tryon_limit = Column(Integer, nullable=False, default=10)
 
     store = relationship("Store", back_populates="widget_config")
 
     def __repr__(self):
         return f"<WidgetConfig store={self.store_id} scope={self.scope_type}>"
+
+
+class UsageEvent(Base, TimestampMixin):
+    """
+    Usage accounting events for AI generation actions.
+    Lifecycle:
+      reserved -> consumed (success) OR refunded (failure)
+    """
+    __tablename__ = "usage_events"
+    __table_args__ = (
+        Index("idx_usage_events_store_time", "store_id", "created_at"),
+        Index("idx_usage_events_status", "status"),
+        Index("idx_usage_events_ref", "reference_type", "reference_id"),
+    )
+
+    event_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    store_id = Column(UUID(as_uuid=True), ForeignKey("stores.store_id", ondelete="CASCADE"), nullable=False)
+    customer_identifier = Column(String(255), nullable=True)
+    action_type = Column(String(50), nullable=False)
+    status = Column(String(20), nullable=False, default="reserved")  # reserved | consumed | refunded
+
+    # Credit accounting
+    reserved_credits = Column(Integer, nullable=False, default=0)
+    consumed_credits = Column(Integer, nullable=False, default=0)
+    overage_credits = Column(Integer, nullable=False, default=0)
+    overage_amount_usd = Column(Numeric(10, 4), nullable=False, default=0)
+
+    # Billing linkage
+    usage_charge_id = Column(String(255), nullable=True)
+    billing_error_code = Column(String(50), nullable=True)
+    billing_error_message = Column(Text, nullable=True)
+
+    # Object this event belongs to (try_on/job etc.)
+    reference_type = Column(String(50), nullable=False)  # try_on | photoshoot_job
+    reference_id = Column(String(255), nullable=True)
+
+    week_start_utc = Column(DateTime, nullable=True)
+    cycle_start_at = Column(DateTime, nullable=True)
+    cycle_end_at = Column(DateTime, nullable=True)
+
+    store = relationship("Store")
+
+    def __repr__(self):
+        return f"<UsageEvent {self.event_id} {self.action_type} {self.status}>"
+
+
+class UsageCustomerWeek(Base, TimestampMixin):
+    """
+    Weekly per-customer counters (Monday-Sunday in store timezone).
+    """
+    __tablename__ = "usage_customer_weeks"
+    __table_args__ = (
+        UniqueConstraint("store_id", "customer_identifier", "week_start_utc", name="uq_usage_customer_week"),
+        Index("idx_usage_customer_weeks_store_week", "store_id", "week_start_utc"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    store_id = Column(UUID(as_uuid=True), ForeignKey("stores.store_id", ondelete="CASCADE"), nullable=False)
+    customer_identifier = Column(String(255), nullable=False)
+    week_start_utc = Column(DateTime, nullable=False)
+    week_end_utc = Column(DateTime, nullable=False)
+    used_count = Column(Integer, nullable=False, default=0)
+
+    store = relationship("Store")
+
+    def __repr__(self):
+        return f"<UsageCustomerWeek store={self.store_id} customer={self.customer_identifier} used={self.used_count}>"
+
+
+class UsageStoreCycle(Base, TimestampMixin):
+    """
+    Billing cycle usage aggregates per store.
+    """
+    __tablename__ = "usage_store_cycles"
+    __table_args__ = (
+        UniqueConstraint("store_id", "cycle_start_at", "cycle_end_at", name="uq_usage_store_cycle"),
+        Index("idx_usage_store_cycles_store_end", "store_id", "cycle_end_at"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    store_id = Column(UUID(as_uuid=True), ForeignKey("stores.store_id", ondelete="CASCADE"), nullable=False)
+    cycle_start_at = Column(DateTime, nullable=False)
+    cycle_end_at = Column(DateTime, nullable=False)
+
+    included_credits = Column(Integer, nullable=False, default=0)
+    consumed_credits = Column(Integer, nullable=False, default=0)
+    overage_credits = Column(Integer, nullable=False, default=0)
+    overage_amount_usd = Column(Numeric(10, 4), nullable=False, default=0)
+
+    overage_blocked = Column(Boolean, nullable=False, default=False)
+    overage_block_reason = Column(String(80), nullable=True)
+    overage_block_message = Column(Text, nullable=True)
+
+    store = relationship("Store")
+
+    def __repr__(self):
+        return f"<UsageStoreCycle store={self.store_id} consumed={self.consumed_credits} overage={self.overage_credits}>"

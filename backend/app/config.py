@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     FOUNDING_MERCHANT_TRIAL_DAYS: int = 14   # Trial length in days
     FOUNDING_MERCHANT_CREDITS: int = 300     # Credits granted during trial
 
+    # Usage Governance
+    WEEKLY_TRYON_LIMIT_DEFAULT: int = 10
+    CREDITS_PER_GENERATION: int = 4
+    # Fallback only when a plan row has no explicit overage_usd_per_tryon configured.
+    OVERAGE_USD_PER_CREDIT: float = 0.035
+
     # Security
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:8000"
     ALLOWED_UPLOAD_EXTENSIONS: str = "jpg,jpeg,png,webp"

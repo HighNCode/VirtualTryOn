@@ -13,6 +13,13 @@ from app.models.database import (
     SizeRecommendation,
     AnalyticsEvent,
     DataDeletionQueue,
+    Plan,
+    WidgetConfig,
+    MerchantOnboarding,
+    PhotoshootJob,
+    UsageEvent,
+    UsageCustomerWeek,
+    UsageStoreCycle,
 )
 
 __all__ = [
@@ -25,4 +32,11 @@ __all__ = [
     "SizeRecommendation",
     "AnalyticsEvent",
     "DataDeletionQueue",
+    "Plan",
+    "WidgetConfig",
+    "MerchantOnboarding",
+    "PhotoshootJob",
+    "UsageEvent",
+    "UsageCustomerWeek",
+    "UsageStoreCycle",
 ]

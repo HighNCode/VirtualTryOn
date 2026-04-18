@@ -12,7 +12,7 @@ export default function SettingsPage() {
   const storeId = useMemo(() => getDefaultStoreId(), []);
 
   const [widgetColor, setWidgetColor] = useState("#FF0000");
-  const [generationLimit] = useState("6");
+  const [generationLimit, setGenerationLimit] = useState("10");
 
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -33,6 +33,7 @@ export default function SettingsPage() {
       .then((config) => {
         if (active) {
           setWidgetColor(config.widget_color || "#FF0000");
+          setGenerationLimit(String(config.weekly_tryon_limit ?? 10));
         }
       })
       .catch((error: unknown) => {
@@ -65,14 +66,22 @@ export default function SettingsPage() {
     setErrorMessage("");
     setStatusMessage("");
 
+    const parsedLimit = Number.parseInt(generationLimit, 10);
+    if (!Number.isFinite(parsedLimit) || parsedLimit < 1 || parsedLimit > 1000) {
+      setErrorMessage("Weekly generation limit must be a whole number between 1 and 1000.");
+      setIsSaving(false);
+      return;
+    }
+
     try {
       await updateWidgetConfig({
         storeId,
         payload: {
-          widget_color: widgetColor
+          widget_color: widgetColor,
+          weekly_tryon_limit: parsedLimit
         }
       });
-      setStatusMessage("Widget color saved.");
+      setStatusMessage("Widget settings saved.");
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Failed to save widget config.";
       setErrorMessage(message);
@@ -116,9 +125,18 @@ export default function SettingsPage() {
 
           <h3>Generation Limits</h3>
           <p className="settings-subtext">Max Weekly Generations Per User</p>
-          <input type="text" className="settings-limit-input" value={generationLimit} readOnly aria-label="Generation limit" />
+          <input
+            type="number"
+            className="settings-limit-input"
+            value={generationLimit}
+            min={1}
+            max={1000}
+            step={1}
+            onChange={(event) => setGenerationLimit(event.target.value)}
+            aria-label="Generation limit"
+          />
           <p className="settings-help-text settings-help-text-small">
-            Generation limits are currently managed by your active plan configuration.
+            This limit applies per logged-in customer from Monday to Sunday in the store timezone.
           </p>
 
           <button type="button" className="settings-save-button" onClick={handleSave} disabled={isSaving}>

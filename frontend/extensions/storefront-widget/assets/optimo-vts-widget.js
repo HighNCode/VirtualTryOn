@@ -211,6 +211,10 @@
         tryOnId: "",
         tryOnImageUrl: "",
         tryOnError: "",
+        limitCode: "",
+        limitResetAt: "",
+        limitTimezone: "",
+        limitMessage: "",
         activeImageUrl: "",
         studioBackgrounds: [],
         studioResults: {},
@@ -347,6 +351,10 @@
         this.state.tryOnId = "";
         this.state.tryOnImageUrl = "";
         this.state.tryOnError = "";
+        this.state.limitCode = "";
+        this.state.limitResetAt = "";
+        this.state.limitTimezone = "";
+        this.state.limitMessage = "";
         this.state.activeImageUrl = "";
         this.state.studioBackgrounds = [];
         this.state.studioResults = {};
@@ -770,8 +778,10 @@
         this.state.stage = "results";
       } catch (error) {
         this.clearAnalysisTicker();
-        this.state.error = error.message || "We couldn't generate your try-on.";
-        this.state.stage = "measurements";
+        if (!this.handleGenerationError(error, "tryon")) {
+          this.state.error = error.message || "We couldn't generate your try-on.";
+          this.state.stage = "measurements";
+        }
       }
 
       this.renderOverlay();
@@ -900,7 +910,9 @@
         this.state.selectedStudioImageUrl = imageUrl;
         this.showToast("Studio look ready.");
       } catch (error) {
-        this.state.error = error.message || "Studio generation failed.";
+        if (!this.handleGenerationError(error, "studio")) {
+          this.state.error = error.message || "Studio generation failed.";
+        }
       } finally {
         this.state.studioLoadingId = "";
         this.renderOverlay();
@@ -1353,6 +1365,83 @@
       this.state.toast = "";
     }
 
+    formatWeeklyReset(resetAt, timezone) {
+      if (!resetAt) {
+        return "";
+      }
+
+      try {
+        const date = new Date(resetAt);
+        if (Number.isNaN(date.getTime())) {
+          return resetAt;
+        }
+
+        const options = {
+          dateStyle: "full",
+          timeStyle: "short"
+        };
+        if (timezone) {
+          options.timeZone = timezone;
+        }
+
+        const label = new Intl.DateTimeFormat(undefined, options).format(date);
+        return timezone ? label + " (" + timezone + ")" : label;
+      } catch (error) {
+        return resetAt;
+      }
+    }
+
+    handleGenerationError(error, context) {
+      const code = error && typeof error.code === "string" ? error.code : "";
+      const detail = error && error.detail && typeof error.detail === "object" ? error.detail : {};
+      const message = (error && error.message) || "Request failed.";
+
+      if (code === "WEEKLY_LIMIT_REACHED") {
+        const resetAt = typeof detail.reset_at === "string" ? detail.reset_at : "";
+        const timezone = typeof detail.timezone === "string" ? detail.timezone : "";
+
+        this.state.limitCode = code;
+        this.state.limitResetAt = resetAt;
+        this.state.limitTimezone = timezone;
+        this.state.limitMessage = message;
+        this.state.notice = "";
+
+        const resetText = this.formatWeeklyReset(resetAt, timezone);
+        if (context === "studio") {
+          this.state.error = resetText
+            ? "Weekly limit reached. Resets at " + resetText + "."
+            : "Weekly limit reached. Contact the store to request more attempts.";
+          return true;
+        }
+
+        this.state.error = "";
+        this.state.stage = "weekly-limit";
+        return true;
+      }
+
+      if (code === "CUSTOMER_LOGIN_REQUIRED") {
+        this.state.error = message || "Please log in to your store account to continue virtual try-on.";
+        this.state.stage = "setup";
+        return true;
+      }
+
+      if (
+        code === "SUBSCRIPTION_INACTIVE" ||
+        code === "PLAN_REQUIRED" ||
+        code === "TRIAL_EXPIRED" ||
+        code === "LEGACY_SUBSCRIPTION_UPGRADE_REQUIRED" ||
+        code === "OVERAGE_BLOCKED"
+      ) {
+        this.state.error = message || "Store billing is unavailable. Please contact the store.";
+        if (context !== "studio") {
+          this.state.stage = "measurements";
+        }
+        return true;
+      }
+
+      return false;
+    }
+
     trackEvent(eventType, eventData) {
       if (!this.state.session) {
         return;
@@ -1410,9 +1499,23 @@
 
       if (!response.ok) {
         let message = "Request failed.";
+        let code = "";
+        let detailPayload = null;
         try {
           const payload = await response.json();
-          message = payload.detail || payload.error || payload.message || message;
+          if (payload && payload.detail && typeof payload.detail === "object") {
+            detailPayload = payload.detail;
+            if (typeof payload.detail.code === "string") {
+              code = payload.detail.code;
+            }
+            if (typeof payload.detail.message === "string" && payload.detail.message) {
+              message = payload.detail.message;
+            } else {
+              message = payload.error || payload.message || message;
+            }
+          } else {
+            message = payload.detail || payload.error || payload.message || message;
+          }
         } catch (error) {
           try {
             message = await response.text();
@@ -1420,7 +1523,15 @@
             message = "Request failed.";
           }
         }
-        throw new Error(message);
+
+        const err = new Error(message);
+        if (code) {
+          err.code = code;
+        }
+        if (detailPayload) {
+          err.detail = detailPayload;
+        }
+        throw err;
       }
 
       if (response.status === 204) {
@@ -1480,6 +1591,8 @@
           return this.renderGenerating();
         case "results":
           return this.renderResults();
+        case "weekly-limit":
+          return this.renderWeeklyLimitReached();
         case "success":
           return this.renderSuccess();
         default:
@@ -1495,6 +1608,28 @@
         "<p>Loading the Optimo VTS flow for " +
         escapeHtml(this.config.product.title) +
         ".</p></div>"
+      );
+    }
+
+    renderWeeklyLimitReached() {
+      const resetText = this.formatWeeklyReset(this.state.limitResetAt, this.state.limitTimezone);
+      const subtitle = this.state.limitMessage || "Weekly try-on limit reached.";
+
+      return (
+        '<div class="ovts-stage ovts-stage--center">' +
+        '<div class="ovts-complete-head"><span class="ovts-check">' +
+        svgIcon("plain") +
+        '</span><div><h2>Weekly Limit Reached</h2><p>' +
+        escapeHtml(subtitle) +
+        "</p></div></div>" +
+        '<div class="ovts-feature-stack">' +
+        '<div class="ovts-feature-tile"><strong>Reset time</strong><p>' +
+        escapeHtml(resetText || "At the start of next week in store timezone.") +
+        "</p></div>" +
+        '<div class="ovts-feature-tile"><strong>Need more attempts?</strong><p>Contact the store to request additional weekly try-ons.</p></div>' +
+        "</div>" +
+        '<button type="button" class="ovts-primary ovts-primary--wide" data-action="close">Close</button>' +
+        "</div>"
       );
     }
 

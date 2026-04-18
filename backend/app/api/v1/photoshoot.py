@@ -35,6 +35,7 @@ from app.models.schemas import (
     PhotoshootApproveResponse,
 )
 from app.services.cache_service import CacheService
+from app.services.usage_governance_service import UsageGovernanceService
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -105,6 +106,7 @@ def _run_photoshoot_job(
     image1_bytes: bytes,
     image2_bytes: bytes,
     clothing_type: Optional[str] = None,
+    usage_event_id: Optional[str] = None,
 ):
     """
     Background task: run the Gemini generation, cache the result, update DB.
@@ -152,6 +154,18 @@ def _run_photoshoot_job(
         job.completed_at = datetime.utcnow()
         db.commit()
 
+        if usage_event_id:
+            import asyncio
+            usage = UsageGovernanceService(db)
+            loop2 = asyncio.new_event_loop()
+            loop2.run_until_complete(
+                usage.finalize_usage(
+                    event_id=usage_event_id,
+                    reference_id=job_id,
+                )
+            )
+            loop2.close()
+
         logger.info(f"Photoshoot job {job_id} ({job_type}) completed in {elapsed:.1f}s")
 
     except Exception as e:
@@ -162,6 +176,17 @@ def _run_photoshoot_job(
                 job.processing_status = "failed"
                 job.error_message = str(e)[:500]
                 db.commit()
+            if usage_event_id:
+                import asyncio
+                usage = UsageGovernanceService(db)
+                loop2 = asyncio.new_event_loop()
+                loop2.run_until_complete(
+                    usage.refund_usage(
+                        event_id=usage_event_id,
+                        reason=f"photoshoot_failed:{str(e)[:240]}",
+                    )
+                )
+                loop2.close()
         except Exception:
             pass
     finally:
@@ -351,6 +376,7 @@ async def start_ghost_mannequin(
     """
     import requests as req_lib
 
+    usage_event_id: Optional[str] = None
     try:
         try:
             img1 = req_lib.get(request.image1_url, timeout=15)
@@ -359,6 +385,16 @@ async def start_ghost_mannequin(
             img2.raise_for_status()
         except Exception as e:
             raise HTTPException(422, f"Could not download product images: {e}")
+
+        usage = UsageGovernanceService(db)
+        reservation = await usage.reserve_generation(
+            store=store,
+            action_type="merchant_ghost_mannequin",
+            reference_type="photoshoot_job",
+            customer_identifier=None,
+            enforce_weekly_limit=False,
+        )
+        usage_event_id = reservation.event_id
 
         job_id = uuid.uuid4()
         job = PhotoshootJob(
@@ -378,15 +414,28 @@ async def start_ghost_mannequin(
             image1_bytes=img1.content,
             image2_bytes=img2.content,
             clothing_type=request.clothing_type,
+            usage_event_id=usage_event_id,
         )
 
         logger.info(f"Ghost mannequin job queued: {job_id} (clothing_type={request.clothing_type})")
         return _job_status_response(job)
 
     except HTTPException:
+        if usage_event_id:
+            usage = UsageGovernanceService(db)
+            await usage.refund_usage(
+                event_id=usage_event_id,
+                reason="ghost_mannequin_request_rejected",
+            )
         raise
     except Exception as e:
         logger.error(f"ghost-mannequin start error: {e}", exc_info=True)
+        if usage_event_id:
+            usage = UsageGovernanceService(db)
+            await usage.refund_usage(
+                event_id=usage_event_id,
+                reason=f"ghost_mannequin_request_error:{str(e)[:240]}",
+            )
         raise HTTPException(500, f"Failed to start ghost mannequin job: {e}")
 
 
@@ -416,6 +465,7 @@ async def start_try_on_model(
     if library_id and photo_upload and photo_upload.filename:
         raise HTTPException(422, "Provide only one of library_id or photo_upload, not both")
 
+    usage_event_id: Optional[str] = None
     try:
         try:
             product_resp = req_lib.get(product_image_url, timeout=15)
@@ -436,6 +486,16 @@ async def start_try_on_model(
             if not model_bytes:
                 raise HTTPException(422, "Uploaded photo is empty")
 
+        usage = UsageGovernanceService(db)
+        reservation = await usage.reserve_generation(
+            store=store,
+            action_type="merchant_try_on_model",
+            reference_type="photoshoot_job",
+            customer_identifier=None,
+            enforce_weekly_limit=False,
+        )
+        usage_event_id = reservation.event_id
+
         job_id = uuid.uuid4()
         job = PhotoshootJob(
             job_id=job_id,
@@ -453,15 +513,28 @@ async def start_try_on_model(
             job_type="try_on_model",
             image1_bytes=product_bytes,
             image2_bytes=model_bytes,
+            usage_event_id=usage_event_id,
         )
 
         logger.info(f"Try-on model job queued: {job_id}")
         return _job_status_response(job)
 
     except HTTPException:
+        if usage_event_id:
+            usage = UsageGovernanceService(db)
+            await usage.refund_usage(
+                event_id=usage_event_id,
+                reason="try_on_model_request_rejected",
+            )
         raise
     except Exception as e:
         logger.error(f"try-on-model start error: {e}", exc_info=True)
+        if usage_event_id:
+            usage = UsageGovernanceService(db)
+            await usage.refund_usage(
+                event_id=usage_event_id,
+                reason=f"try_on_model_request_error:{str(e)[:240]}",
+            )
         raise HTTPException(500, f"Failed to start try-on model job: {e}")
 
 
@@ -494,6 +567,7 @@ async def start_model_swap(
     if face_library_id and face_image and face_image.filename:
         raise HTTPException(422, "Provide only one of face_library_id or face_image, not both")
 
+    usage_event_id: Optional[str] = None
     try:
         try:
             orig_resp = req_lib.get(original_image_url, timeout=15)
@@ -514,6 +588,16 @@ async def start_model_swap(
             if not face_bytes:
                 raise HTTPException(422, "Uploaded face image is empty")
 
+        usage = UsageGovernanceService(db)
+        reservation = await usage.reserve_generation(
+            store=store,
+            action_type="merchant_model_swap",
+            reference_type="photoshoot_job",
+            customer_identifier=None,
+            enforce_weekly_limit=False,
+        )
+        usage_event_id = reservation.event_id
+
         job_id = uuid.uuid4()
         job = PhotoshootJob(
             job_id=job_id,
@@ -531,15 +615,28 @@ async def start_model_swap(
             job_type="model_swap",
             image1_bytes=original_bytes,
             image2_bytes=face_bytes,
+            usage_event_id=usage_event_id,
         )
 
         logger.info(f"Model swap job queued: {job_id}")
         return _job_status_response(job)
 
     except HTTPException:
+        if usage_event_id:
+            usage = UsageGovernanceService(db)
+            await usage.refund_usage(
+                event_id=usage_event_id,
+                reason="model_swap_request_rejected",
+            )
         raise
     except Exception as e:
         logger.error(f"model-swap start error: {e}", exc_info=True)
+        if usage_event_id:
+            usage = UsageGovernanceService(db)
+            await usage.refund_usage(
+                event_id=usage_event_id,
+                reason=f"model_swap_request_error:{str(e)[:240]}",
+            )
         raise HTTPException(500, f"Failed to start model swap job: {e}")
 
 

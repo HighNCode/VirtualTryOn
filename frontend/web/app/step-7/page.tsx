@@ -1,17 +1,14 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { EmbeddedLink, useEmbeddedRouter } from "../_components/EmbeddedNavigation";
 import {
-  createRecurringSubscription,
-  getBillingStatus,
-  getShopifyBillingContext,
-  type ShopifyBillingContext
-} from "../../lib/shopify/billing";
-import {
   activateBillingPlan,
+  createSubscription,
   getBillingPlans,
+  getBillingStatus,
   getDefaultStoreId,
+  type BillingStatusResponse,
   type PlanConfigResponse
 } from "../../lib/photoshootApi";
 
@@ -30,7 +27,7 @@ export default function StepSevenPage() {
   const storeId = useMemo(() => getDefaultStoreId(), []);
 
   const [billingCycle, setBillingCycle] = useState<BillingCycle>("monthly");
-  const [billingContext, setBillingContext] = useState<ShopifyBillingContext | null>(null);
+  const [billingStatus, setBillingStatus] = useState<BillingStatusResponse | null>(null);
   const [plans, setPlans] = useState<PlanConfigResponse[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [pendingPlanId, setPendingPlanId] = useState<string | null>(null);
@@ -38,7 +35,6 @@ export default function StepSevenPage() {
 
   const isAnnual = billingCycle === "annual";
 
-  // Detect billing return from Shopify and activate the plan in the backend
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (!params.has("billing_return")) return;
@@ -80,45 +76,52 @@ export default function StepSevenPage() {
       });
   }, [router, storeId]);
 
-  // Load plans and Shopify billing context in parallel
   useEffect(() => {
     if (!storeId) return;
 
     const params = new URLSearchParams(window.location.search);
-    if (params.has("billing_return")) return; // handled by the other effect
+    if (params.has("billing_return")) return;
 
+    const controller = new AbortController();
     let active = true;
+
     setIsLoading(true);
     setErrorMessage("");
 
-    Promise.allSettled([
-      getShopifyBillingContext(),
-      getBillingPlans({ storeId })
-    ]).then(([contextResult, plansResult]) => {
-      if (!active) return;
+    Promise.all([
+      getBillingPlans({ storeId, signal: controller.signal }),
+      getBillingStatus({ storeId, signal: controller.signal })
+    ])
+      .then(([plansResult, statusResult]) => {
+        if (!active) {
+          return;
+        }
 
-      if (contextResult.status === "fulfilled") {
-        setBillingContext(contextResult.value);
-      }
+        setPlans(plansResult.plans.filter((p) => p.is_active));
+        setBillingStatus(statusResult);
+        if (statusResult.billing_interval === "monthly" || statusResult.billing_interval === "annual") {
+          setBillingCycle(statusResult.billing_interval);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!active || controller.signal.aborted) {
+          return;
+        }
 
-      if (plansResult.status === "fulfilled") {
-        setPlans(plansResult.value.plans.filter((p) => p.is_active));
-      } else {
-        setErrorMessage("Failed to load billing plans.");
-      }
-    }).finally(() => {
-      if (active) setIsLoading(false);
-    });
+        const message = error instanceof Error ? error.message : "Failed to load billing plans.";
+        setErrorMessage(message);
+      })
+      .finally(() => {
+        if (active) {
+          setIsLoading(false);
+        }
+      });
 
     return () => {
       active = false;
+      controller.abort();
     };
   }, [storeId]);
-
-  const billingStatus = useMemo(() => {
-    if (!billingContext) return null;
-    return getBillingStatus(billingContext);
-  }, [billingContext]);
 
   const renderedPlans = useMemo(
     () =>
@@ -127,19 +130,13 @@ export default function StepSevenPage() {
         displayedPrice: isAnnual ? plan.price_annual_per_month : plan.price_monthly,
         displayedCredits: isAnnual ? plan.credits_annual : plan.credits_monthly,
         annualDiscountPct: plan.annual_discount_pct,
-        isCurrentSelection: plan.is_current && billingStatus?.billingInterval === billingCycle
+        isCurrentSelection: plan.name === billingStatus?.plan_name && billingStatus?.billing_interval === billingCycle
       })),
-    [plans, billingCycle, billingStatus?.billingInterval, isAnnual]
+    [billingCycle, billingStatus?.billing_interval, billingStatus?.plan_name, isAnnual, plans]
   );
 
   const handlePlanSelect = async (plan: PlanConfigResponse) => {
-    if (plan.is_current && billingStatus?.billingInterval === billingCycle) {
-      router.push("/dashboard");
-      return;
-    }
-
-    const selectedPrice = isAnnual ? plan.price_annual_total : plan.price_monthly;
-    if (selectedPrice <= 0) {
+    if (plan.name === billingStatus?.plan_name && billingStatus?.billing_interval === billingCycle) {
       router.push("/dashboard");
       return;
     }
@@ -153,20 +150,24 @@ export default function StepSevenPage() {
     setErrorMessage("");
 
     try {
-      const shopParam = storeId ? `&shop=${encodeURIComponent(storeId)}` : "";
-      const result = await createRecurringSubscription({
-        planDisplayName: plan.display_name,
-        priceAmount: selectedPrice,
-        billingCycle,
-        trialDays: plan.trial_days,
-        testMode: billingContext?.shopIsDevelopment ?? false,
-        returnPath: `/step-7?billing_return=1&plan=${encodeURIComponent(plan.name)}&interval=${billingCycle}${shopParam}`
+      const returnUrl = new URL("/step-7", window.location.origin);
+      returnUrl.searchParams.set("billing_return", "1");
+      returnUrl.searchParams.set("plan", plan.name);
+      returnUrl.searchParams.set("interval", billingCycle);
+      returnUrl.searchParams.set("shop", storeId);
+
+      const result = await createSubscription({
+        storeId,
+        planName: plan.name,
+        billingInterval: billingCycle,
+        returnUrl: returnUrl.toString()
       });
-      // Save subscription ID as fallback in case charge_id is missing from Shopify redirect
-      if (result.subscriptionId) {
-        window.localStorage.setItem("pending_subscription_id", result.subscriptionId);
+
+      if (result.shopify_subscription_id) {
+        window.localStorage.setItem("pending_subscription_id", result.shopify_subscription_id);
       }
-      window.open(result.confirmationUrl, "_top");
+
+      window.open(result.confirmation_url, "_top");
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Failed to start Shopify subscription.";
       setErrorMessage(message);
@@ -216,10 +217,10 @@ export default function StepSevenPage() {
           {renderedPlans.map((plan) => (
             <article
               key={plan.id}
-              className={`plan-card plan-card-advanced${plan.is_current ? " plan-card-recommended" : ""}`}
+              className={`plan-card plan-card-advanced${plan.isCurrentSelection ? " plan-card-recommended" : ""}`}
               aria-label={`${plan.display_name} plan`}
             >
-              {plan.is_current ? <p className="plan-badge">Current Plan</p> : null}
+              {plan.isCurrentSelection ? <p className="plan-badge">Current Plan</p> : null}
 
               <h2 className="plan-name">{plan.display_name}</h2>
               <p className="plan-price plan-price-advanced">
@@ -263,7 +264,7 @@ export default function StepSevenPage() {
 
               <button
                 type="button"
-                className={`plan-select-button plan-select-button-advanced${plan.is_current ? " plan-select-button-filled" : ""}`}
+                className={`plan-select-button plan-select-button-advanced${plan.isCurrentSelection ? " plan-select-button-filled" : ""}`}
                 onClick={() => handlePlanSelect(plan)}
                 disabled={pendingPlanId === plan.id || isLoading}
               >
@@ -271,7 +272,7 @@ export default function StepSevenPage() {
                   ? "Current Plan"
                   : pendingPlanId === plan.id
                     ? "Redirecting..."
-                    : plan.is_current
+                    : plan.name === billingStatus?.plan_name
                       ? `Switch to ${isAnnual ? "Annual" : "Monthly"}`
                       : `Select ${plan.display_name}`}
               </button>
@@ -285,13 +286,13 @@ export default function StepSevenPage() {
 
         <p className="step7-credit-note">
           <strong>1 Try-on = 4 Credits</strong>
-          <span>Billing is created through Shopify and the merchant approves charges on Shopify&apos;s hosted confirmation page.</span>
+          <span>Billing is created through Shopify and approved on Shopify&apos;s hosted confirmation page.</span>
         </p>
 
         <section className="free-plan-banner free-plan-banner-updated">
           <div>
             <h2>Continue with current setup</h2>
-            <p>{billingStatus?.activeSubscription ? "A Shopify subscription is already active for this store." : "Skip plan selection for now and finish onboarding."}</p>
+            <p>{billingStatus?.shopify_subscription_id ? "A Shopify subscription is already active for this store." : "Skip plan selection for now and finish onboarding."}</p>
           </div>
 
           <EmbeddedLink href="/dashboard" className="primary-action free-plan-cta">

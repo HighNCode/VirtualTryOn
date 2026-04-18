@@ -1,4 +1,4 @@
-"""
+﻿"""
 Merchant Admin Endpoints
 Covers the 6-step onboarding wizard, billing plan management, and the
 widget check-enabled endpoint consumed by the storefront widget.
@@ -8,7 +8,7 @@ with header fallbacks for the current embedded-app migration state.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -46,12 +46,14 @@ from app.models.schemas import (
     CreateSubscriptionRequest,
     CreateSubscriptionResponse,
     BillingStatusResponse,
+    BillingUsageSummaryResponse,
     CancelSubscriptionResponse,
     SessionResponse,
     WidgetSessionCreateRequest,
 )
 from app.api.v1.sessions import create_or_resume_session_for_product
 from app.services.shopify_service import ShopifyService
+from app.services.usage_governance_service import UsageGovernanceService
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +61,9 @@ merchant_router = APIRouter(prefix="/merchant", tags=["Merchant"])
 widget_router = APIRouter(prefix="/widget", tags=["Widget"])
 
 
-# ─────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Shared helpers
-# ─────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _normalize_shopify_product_gid(value: str) -> str:
     normalized = (value or "").strip()
@@ -74,9 +76,9 @@ def _normalize_shopify_product_gid(value: str) -> str:
     return normalized
 
 
-# ─────────────────────────────────────────────────────────────
-# Onboarding — Status
-# ─────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Onboarding â€” Status
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @merchant_router.get("/onboarding/status", response_model=OnboardingStatusResponse)
 def get_onboarding_status(
@@ -104,9 +106,9 @@ def get_onboarding_status(
     )
 
 
-# ─────────────────────────────────────────────────────────────
-# Onboarding — Step 2: Goals
-# ─────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Onboarding â€” Step 2: Goals
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @merchant_router.post("/onboarding/goals", response_model=OnboardingStepResponse)
 def save_goals(
@@ -134,9 +136,9 @@ def save_goals(
     return OnboardingStepResponse(saved=True, next_step="referral")
 
 
-# ─────────────────────────────────────────────────────────────
-# Onboarding — Step 3: Referral
-# ─────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Onboarding â€” Step 3: Referral
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @merchant_router.post("/onboarding/referral", response_model=OnboardingStepResponse)
 def save_referral(
@@ -165,9 +167,9 @@ def save_referral(
     return OnboardingStepResponse(saved=True, next_step="widget_scope")
 
 
-# ─────────────────────────────────────────────────────────────
-# Onboarding — Step 4: Widget Scope
-# ─────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Onboarding â€” Step 4: Widget Scope
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 VALID_SCOPE_TYPES = {"all", "selected_collections", "selected_products", "mixed"}
 
@@ -221,9 +223,9 @@ def save_widget_scope(
     )
 
 
-# ─────────────────────────────────────────────────────────────
-# Onboarding — Step 5: Theme Status
-# ─────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Onboarding â€” Step 5: Theme Status
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @merchant_router.get("/onboarding/theme-status", response_model=ThemeStatusResponse)
 def get_theme_status(store: Store = Depends(get_current_merchant_store)):
@@ -258,7 +260,7 @@ def update_theme_status(
 
     settings = get_settings()
 
-    # ── Founding merchant slot check ──────────────────────────────────────────
+    # â”€â”€ Founding merchant slot check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if not store.is_founding_merchant:
         founding_used = (
             db.query(func.count(Store.store_id))
@@ -267,7 +269,7 @@ def update_theme_status(
         ) or 0
         qualifies = founding_used < settings.FOUNDING_MERCHANT_LIMIT
     else:
-        # Already a founding merchant re-entering this step → send to billing to pick a plan
+        # Already a founding merchant re-entering this step â†’ send to billing to pick a plan
         qualifies = False
 
     if qualifies:
@@ -283,7 +285,7 @@ def update_theme_status(
             f"(slot {founding_used + 1}/{settings.FOUNDING_MERCHANT_LIMIT})"
         )
         return OnboardingStepResponse(saved=True, next_step="complete")
-    # ─────────────────────────────────────────────────────────────────────────
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     store.onboarding_step = "plan"
     db.commit()
@@ -291,9 +293,9 @@ def update_theme_status(
     return OnboardingStepResponse(saved=True, next_step="plan")
 
 
-# ─────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Billing
-# ─────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _get_plan_or_404(plan_name: str, db: DBSession) -> Plan:
     """Fetch a Plan row by name, raising 422 if not found or inactive."""
@@ -324,6 +326,12 @@ def activate_billing(
     store.plan_shopify_subscription_id = body.shopify_subscription_id
     store.plan_activated_at = datetime.utcnow()
     store.billing_interval = body.billing_interval
+    store.subscription_status = "ACTIVE"
+    store.billing_status_synced_at = None
+    store.has_usage_billing = False
+    store.usage_line_item_id = None
+    store.billing_cycle_start_at = None
+    store.billing_cycle_end_at = None
     if plan.trial_days:
         # Trial is always applied. During trial, grant trial_credits (80); full credits after.
         store.credits_limit = plan.trial_credits if plan.trial_credits else full_credits
@@ -383,6 +391,8 @@ def get_billing_plans(
             annual_discount_pct=p.annual_discount_pct,
             credits_monthly=p.credits_monthly,
             credits_annual=p.credits_annual,
+            overage_usd_per_tryon=float(p.overage_usd_per_tryon),
+            usage_cap_usd=float(p.usage_cap_usd),
             trial_days=p.trial_days,
             trial_credits=p.trial_credits,
             features=p.features,
@@ -416,7 +426,30 @@ async def get_billing_status(
         except Exception as exc:
             logger.warning(f"Shopify billing status call failed for store {store.store_id}: {exc}")
 
-    # ── Auto-upgrade: trial ended + Shopify is actively billing ──────────────
+    if shopify_status:
+        store.subscription_status = shopify_status.get("status")
+        store.has_usage_billing = bool(shopify_status.get("has_usage_billing"))
+        store.usage_line_item_id = shopify_status.get("usage_line_item_id")
+        store.billing_status_synced_at = datetime.utcnow()
+        if shopify_status.get("shop_timezone"):
+            store.store_timezone = shopify_status.get("shop_timezone")
+
+        current_end_raw = shopify_status.get("current_period_end")
+        if current_end_raw:
+            try:
+                current_end = datetime.fromisoformat(str(current_end_raw).replace("Z", "+00:00"))
+                if current_end.tzinfo:
+                    current_end = current_end.astimezone(timezone.utc).replace(tzinfo=None)
+                if store.billing_cycle_end_at and abs((store.billing_cycle_end_at - current_end).total_seconds()) > 60:
+                    store.billing_cycle_start_at = store.billing_cycle_end_at
+                elif store.billing_cycle_start_at is None:
+                    cycle_days = 365 if store.billing_interval == "annual" else 30
+                    store.billing_cycle_start_at = current_end - timedelta(days=cycle_days)
+                store.billing_cycle_end_at = current_end
+            except Exception:
+                pass
+
+    # Auto-upgrade: trial ended + Shopify is actively billing
     if (
         store.trial_ends_at
         and store.trial_ends_at < datetime.utcnow()
@@ -432,12 +465,8 @@ async def get_billing_status(
             )
             store.credits_limit = full_credits
             store.trial_ends_at = None
-            db.commit()
-            logger.info(
-                f"Trial expired for store {store.store_id}: "
-                f"credits upgraded to {full_credits} ({store.billing_interval})"
-            )
-    # ─────────────────────────────────────────────────────────────────────────
+
+    db.commit()
 
     return BillingStatusResponse(
         plan_name=store.plan_name,
@@ -446,10 +475,25 @@ async def get_billing_status(
         trial_ends_at=store.trial_ends_at,
         plan_activated_at=store.plan_activated_at,
         shopify_subscription_id=store.plan_shopify_subscription_id,
-        subscription_status=shopify_status["status"] if shopify_status else None,
-        current_period_end=shopify_status["current_period_end"] if shopify_status else None,
-        is_test_subscription=shopify_status["test"] if shopify_status else None,
+        subscription_status=(shopify_status or {}).get("status") or store.subscription_status,
+        current_period_end=(shopify_status or {}).get("current_period_end") or store.billing_cycle_end_at,
+        is_test_subscription=(shopify_status or {}).get("test"),
+        has_usage_billing=store.has_usage_billing,
+        store_timezone=store.store_timezone,
     )
+
+
+@merchant_router.get("/billing/usage-summary", response_model=BillingUsageSummaryResponse)
+async def get_billing_usage_summary(
+    store: Store = Depends(get_current_merchant_store),
+    db: DBSession = Depends(get_db),
+):
+    """
+    Cycle-based included+overage credit usage for billing UI and diagnostics.
+    """
+    usage_service = UsageGovernanceService(db)
+    summary = await usage_service.get_usage_summary(store=store)
+    return BillingUsageSummaryResponse(**summary)
 
 
 @merchant_router.post("/billing/create-subscription", response_model=CreateSubscriptionResponse)
@@ -463,13 +507,13 @@ async def create_subscription(
     Create a Shopify recurring subscription for a paid plan.
 
     Flow:
-    1. FastAPI calls Shopify appSubscriptionCreate → gets confirmationUrl
+    1. FastAPI calls Shopify appSubscriptionCreate â†’ gets confirmationUrl
     2. Returns confirmationUrl to Remix
     3. Remix redirects merchant to confirmationUrl (Shopify's approval page)
     4. After merchant approves, Shopify calls returnUrl (Remix route)
     5. Remix callback calls POST /billing/activate to update the DB
 
-    Does NOT update the DB — that happens after merchant approves on Shopify's page.
+    Does NOT update the DB â€” that happens after merchant approves on Shopify's page.
     """
     if body.billing_interval not in {"monthly", "annual"}:
         raise HTTPException(422, "billing_interval must be 'monthly' or 'annual'")
@@ -501,6 +545,11 @@ async def create_subscription(
             trial_days=trial_days,
             test=is_test,
             is_upgrade=is_upgrade,
+            usage_cap_usd=float(plan.usage_cap_usd),
+            overage_terms=(
+                f"${float(plan.overage_usd_per_tryon):.3f} per AI generation "
+                f"({settings.CREDITS_PER_GENERATION} credits per generation)."
+            ),
         )
     except Exception as exc:
         logger.error(f"Shopify subscription create failed for store {store.store_id}: {exc}")
@@ -544,6 +593,12 @@ async def cancel_subscription(
     store.trial_ends_at = None
     store.plan_shopify_subscription_id = None
     store.plan_activated_at = None
+    store.subscription_status = "CANCELLED"
+    store.billing_cycle_start_at = None
+    store.billing_cycle_end_at = None
+    store.billing_status_synced_at = datetime.utcnow()
+    store.has_usage_billing = False
+    store.usage_line_item_id = None
     db.commit()
 
     logger.info(f"Subscription cancelled for store {store.store_id}, reverted to free plan")
@@ -554,9 +609,9 @@ async def cancel_subscription(
     )
 
 
-# ─────────────────────────────────────────────────────────────
-# Dashboard — Overview
-# ─────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Dashboard â€” Overview
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @merchant_router.get("/dashboard/overview", response_model=DashboardOverviewResponse)
 def get_dashboard_overview(
@@ -566,17 +621,17 @@ def get_dashboard_overview(
     """
     Single call that feeds all three sections of the merchant dashboard overview screen.
 
-    Section 1 — theme button status (mirrors onboarding step 5 data)
-    Section 2 — try-on usage: count of completed try-ons in last 30 rolling days
-    Section 3 — widget scope summary: scope type + counts of enabled IDs
+    Section 1 â€” theme button status (mirrors onboarding step 5 data)
+    Section 2 â€” try-on usage: count of completed try-ons in last 30 rolling days
+    Section 3 â€” widget scope summary: scope type + counts of enabled IDs
     """
     wc = store.widget_config
 
-    # ── Section 1: theme detection ────────────────────────────
+    # â”€â”€ Section 1: theme detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     theme_detected = wc.theme_extension_detected if wc else False
     themes_url = f"https://{store.shopify_domain}/admin/online-store/themes"
 
-    # ── Section 2: try-on usage (rolling 30 days) ─────────────
+    # â”€â”€ Section 2: try-on usage (rolling 30 days) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     thirty_days_ago = datetime.utcnow() - timedelta(days=30)
     tryon_used = (
         db.query(func.count(TryOn.try_on_id))
@@ -589,7 +644,7 @@ def get_dashboard_overview(
         .scalar()
     ) or 0
 
-    # ── Section 3: widget scope summary ───────────────────────
+    # â”€â”€ Section 3: widget scope summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     scope_type = wc.scope_type if wc else "all"
     enabled_products_count = len(wc.enabled_product_ids or []) if wc else 0
     enabled_collections_count = len(wc.enabled_collection_ids or []) if wc else 0
@@ -606,9 +661,9 @@ def get_dashboard_overview(
     )
 
 
-# ─────────────────────────────────────────────────────────────
-# Dashboard — Widget Config (GET + PATCH, post-onboarding)
-# ─────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Dashboard â€” Widget Config (GET + PATCH, post-onboarding)
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 _DEFAULT_WIDGET_COLOR = "#FF0000"
 
@@ -622,6 +677,7 @@ def _widget_config_response(wc: Optional[WidgetConfig]) -> WidgetConfigResponse:
             enabled_product_ids=[],
             theme_extension_detected=False,
             widget_color=_DEFAULT_WIDGET_COLOR,
+            weekly_tryon_limit=get_settings().WEEKLY_TRYON_LIMIT_DEFAULT,
         )
     return WidgetConfigResponse(
         scope_type=wc.scope_type,
@@ -629,13 +685,14 @@ def _widget_config_response(wc: Optional[WidgetConfig]) -> WidgetConfigResponse:
         enabled_product_ids=wc.enabled_product_ids or [],
         theme_extension_detected=wc.theme_extension_detected,
         widget_color=wc.widget_color or _DEFAULT_WIDGET_COLOR,
+        weekly_tryon_limit=wc.weekly_tryon_limit,
     )
 
 
 @merchant_router.get("/widget-config", response_model=WidgetConfigResponse)
 def get_widget_config(store: Store = Depends(get_current_merchant_store)):
     """
-    Return the full widget configuration for the Settings → Custom screen.
+    Return the full widget configuration for the Settings â†’ Custom screen.
     If no config has been saved yet, returns defaults (scope_type='all', widget_color='#FF0000').
     """
     return _widget_config_response(store.widget_config)
@@ -649,16 +706,18 @@ def update_widget_config(
 ):
     """
     Partial update of WidgetConfig from the dashboard.
-    Unlike POST /onboarding/widget-scope, this does NOT advance onboarding_step —
+    Unlike POST /onboarding/widget-scope, this does NOT advance onboarding_step â€”
     safe to call for merchants who have already completed onboarding.
 
     Used by:
-    - Settings → Custom screen Save action (widget_color)
+    - Settings â†’ Custom screen Save action (widget_color)
     - "Manage Products and Collections" save action (scope_type + ID lists)
     - "Mark as added" theme detection button (theme_extension_detected)
     """
     if body.scope_type is not None and body.scope_type not in VALID_SCOPE_TYPES:
         raise HTTPException(422, f"scope_type must be one of: {', '.join(sorted(VALID_SCOPE_TYPES))}")
+    if body.weekly_tryon_limit is not None and not (1 <= body.weekly_tryon_limit <= 1000):
+        raise HTTPException(422, "weekly_tryon_limit must be between 1 and 1000")
 
     wc = store.widget_config
     if wc is None:
@@ -675,6 +734,8 @@ def update_widget_config(
         wc.theme_extension_detected = body.theme_extension_detected
     if body.widget_color is not None:
         wc.widget_color = body.widget_color
+    if body.weekly_tryon_limit is not None:
+        wc.weekly_tryon_limit = body.weekly_tryon_limit
 
     db.commit()
     db.refresh(wc)
@@ -683,9 +744,9 @@ def update_widget_config(
     return _widget_config_response(wc)
 
 
-# ─────────────────────────────────────────────────────────────
-# Widget — check-enabled
-# ─────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Widget â€” check-enabled
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @widget_router.get("/check-enabled", response_model=WidgetCheckResponse)
 def check_widget_enabled(
@@ -696,22 +757,22 @@ def check_widget_enabled(
     Called by the storefront widget to decide whether to render the try-on button.
 
     Scope rules:
-    - 'all'                   → always enabled
-    - 'selected_products'     → enabled only if GID is in enabled_product_ids
-    - 'mixed'                 → enabled if GID is in enabled_product_ids (default true if list is empty)
-    - 'selected_collections'  → enabled=true (collection membership check deferred to Remix layer)
-    - no config yet           → enabled=true (default open)
+    - 'all'                   â†’ always enabled
+    - 'selected_products'     â†’ enabled only if GID is in enabled_product_ids
+    - 'mixed'                 â†’ enabled if GID is in enabled_product_ids (default true if list is empty)
+    - 'selected_collections'  â†’ enabled=true (collection membership check deferred to Remix layer)
+    - no config yet           â†’ enabled=true (default open)
 
     Billing gate: widget is disabled for founding merchants whose trial has expired.
     """
-    # ── Billing gate: founding trial expired → widget disabled ────────────────
+    # â”€â”€ Billing gate: founding trial expired â†’ widget disabled â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (
         store.plan_name == "founding_trial"
         and store.trial_ends_at
         and store.trial_ends_at < datetime.utcnow()
     ):
         return WidgetCheckResponse(enabled=False)
-    # ─────────────────────────────────────────────────────────────────────────
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     normalized_gid = _normalize_shopify_product_gid(shopify_product_gid)
     wc = store.widget_config
@@ -728,7 +789,7 @@ def check_widget_enabled(
         enabled = (not product_ids) or (normalized_gid in product_ids)
         return WidgetCheckResponse(enabled=enabled)
 
-    # 'selected_collections' — collection membership requires Shopify Admin API
+    # 'selected_collections' â€” collection membership requires Shopify Admin API
     # (only available in Remix). Return true and let the Remix layer filter further.
     return WidgetCheckResponse(enabled=True)
 
@@ -770,3 +831,4 @@ def create_widget_session(
         logger.error("Widget session creation failed: %s", exc, exc_info=True)
         db.rollback()
         raise HTTPException(500, f"Failed to create widget session: {exc}")
+

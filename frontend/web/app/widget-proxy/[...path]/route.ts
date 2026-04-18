@@ -6,7 +6,8 @@ const FORWARDED_REQUEST_HEADERS = [
   "x-session-id",
   "x-store-id",
   "x-shop-domain",
-  "x-shopify-shop-domain"
+  "x-shopify-shop-domain",
+  "x-logged-in-customer-id"
 ] as const;
 
 const FORWARDED_RESPONSE_HEADERS = [
@@ -74,6 +75,7 @@ async function proxyRequest(request: NextRequest, path: string[]): Promise<NextR
 
   const proxyShop = normalizeShopDomain(request.nextUrl.searchParams.get("shop"));
   const proxySessionId = request.nextUrl.searchParams.get("session_id")?.trim() ?? "";
+  const loggedInCustomerId = request.nextUrl.searchParams.get("logged_in_customer_id")?.trim() ?? "";
   const requestHeaders = new Headers();
 
   FORWARDED_REQUEST_HEADERS.forEach((headerName) => {
@@ -90,6 +92,10 @@ async function proxyRequest(request: NextRequest, path: string[]): Promise<NextR
 
   if (proxySessionId && !requestHeaders.has("X-Session-ID")) {
     requestHeaders.set("X-Session-ID", proxySessionId);
+  }
+
+  if (loggedInCustomerId) {
+    requestHeaders.set("X-Logged-In-Customer-Id", loggedInCustomerId);
   }
 
   const init: RequestInit = {
