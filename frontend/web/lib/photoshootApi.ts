@@ -118,6 +118,22 @@ export type BillingStatusResponse = {
   subscription_status: string | null;
   current_period_end: string | null;
   is_test_subscription: boolean | null;
+  has_usage_billing: boolean;
+  store_timezone: string | null;
+};
+
+export type BillingUsageSummaryResponse = {
+  cycle_start_at: string | null;
+  cycle_end_at: string | null;
+  included_credits: number;
+  consumed_credits: number;
+  remaining_included_credits: number;
+  overage_credits: number;
+  overage_amount_usd: number;
+  overage_blocked: boolean;
+  overage_block_reason: string | null;
+  overage_block_message: string | null;
+  can_auto_charge_overage: boolean;
 };
 
 export type PlanConfigResponse = {
@@ -130,6 +146,8 @@ export type PlanConfigResponse = {
   annual_discount_pct: number;
   credits_monthly: number;
   credits_annual: number;
+  overage_usd_per_tryon: number;
+  usage_cap_usd: number;
   trial_days: number | null;
   trial_credits: number | null;
   features: string[];
@@ -165,6 +183,7 @@ export type WidgetConfigResponse = {
   enabled_product_ids: string[];
   theme_extension_detected: boolean;
   widget_color: string;
+  weekly_tryon_limit: number;
 };
 
 export type WidgetConfigUpdateRequest = {
@@ -173,6 +192,7 @@ export type WidgetConfigUpdateRequest = {
   enabled_product_ids?: string[] | null;
   theme_extension_detected?: boolean | null;
   widget_color?: string | null;
+  weekly_tryon_limit?: number | null;
 };
 
 export type ProductImage = {
@@ -701,6 +721,17 @@ export async function getBillingStatus(options: {
   signal?: AbortSignal;
 }): Promise<BillingStatusResponse> {
   return requestJson<BillingStatusResponse>("/api/v1/merchant/billing/status", {
+    method: "GET",
+    storeId: options.storeId,
+    signal: options.signal
+  });
+}
+
+export async function getBillingUsageSummary(options: {
+  storeId: string;
+  signal?: AbortSignal;
+}): Promise<BillingUsageSummaryResponse> {
+  return requestJson<BillingUsageSummaryResponse>("/api/v1/merchant/billing/usage-summary", {
     method: "GET",
     storeId: options.storeId,
     signal: options.signal

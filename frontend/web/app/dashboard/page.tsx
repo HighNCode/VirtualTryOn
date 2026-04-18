@@ -3,7 +3,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { EmbeddedLink } from "../_components/EmbeddedNavigation";
 import PortalSidebar from "../_components/PortalSidebar";
-import { getDashboardOverview, getDefaultStoreId, type DashboardOverviewResponse } from "../../lib/photoshootApi";
+import {
+  getBillingStatus,
+  getBillingUsageSummary,
+  getDashboardOverview,
+  getDefaultStoreId,
+  type BillingStatusResponse,
+  type BillingUsageSummaryResponse,
+  type DashboardOverviewResponse
+} from "../../lib/photoshootApi";
 
 function clampPercent(value: number): number {
   if (!Number.isFinite(value)) {
@@ -15,6 +23,8 @@ function clampPercent(value: number): number {
 export default function DashboardPage() {
   const storeId = useMemo(() => getDefaultStoreId(), []);
   const [overview, setOverview] = useState<DashboardOverviewResponse | null>(null);
+  const [billingStatus, setBillingStatus] = useState<BillingStatusResponse | null>(null);
+  const [usageSummary, setUsageSummary] = useState<BillingUsageSummaryResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
@@ -28,10 +38,16 @@ export default function DashboardPage() {
 
     setIsLoading(true);
 
-    getDashboardOverview({ storeId, signal: controller.signal })
-      .then((data) => {
+    Promise.all([
+      getDashboardOverview({ storeId, signal: controller.signal }),
+      getBillingStatus({ storeId, signal: controller.signal }),
+      getBillingUsageSummary({ storeId, signal: controller.signal })
+    ])
+      .then(([overviewData, billingData, usageData]) => {
         if (active) {
-          setOverview(data);
+          setOverview(overviewData);
+          setBillingStatus(billingData);
+          setUsageSummary(usageData);
         }
       })
       .catch((error: unknown) => {
@@ -54,8 +70,11 @@ export default function DashboardPage() {
     };
   }, [storeId]);
 
-  const usagePercent = overview
-    ? clampPercent((overview.tryon_used_30d / Math.max(overview.credits_limit, 1)) * 100)
+  const includedUsed = usageSummary?.consumed_credits ?? 0;
+  const includedLimit = usageSummary?.included_credits ?? 0;
+  const totalUsed = includedUsed + (usageSummary?.overage_credits ?? 0);
+  const usagePercent = usageSummary
+    ? clampPercent((includedUsed / Math.max(includedLimit, 1)) * 100)
     : 0;
   const themeEditorUrl = overview?.themes_url?.trim() ?? "";
 
@@ -102,13 +121,14 @@ export default function DashboardPage() {
             </div>
             <div className="portal-usage-row">
               <p>
-                {overview?.tryon_used_30d ?? 0} / {overview?.credits_limit ?? 0} try-ons
+                {includedUsed} / {includedLimit} included credits
               </p>
               <p>{usagePercent.toFixed(0)}%</p>
             </div>
             <div className="portal-usage-progress" aria-hidden>
               <span style={{ width: `${usagePercent}%` }} />
             </div>
+            <p>{totalUsed} total credits consumed this cycle</p>
           </article>
 
           <article className="portal-section">
@@ -116,10 +136,10 @@ export default function DashboardPage() {
               <h3>Current Plan</h3>
               <EmbeddedLink href="/settings/billing">Manage billing</EmbeddedLink>
             </div>
-            <p>{overview?.plan_name ?? "Not available"}</p>
+            <p>{billingStatus?.plan_name ?? overview?.plan_name ?? "Not available"}</p>
             <p>
-              {overview
-                ? `${Math.max(overview.credits_limit - overview.tryon_used_30d, 0).toLocaleString()} credits remain in the current cycle.`
+              {usageSummary
+                ? `${Math.max(usageSummary.remaining_included_credits, 0).toLocaleString()} included credits remain in the current cycle.`
                 : "Billing details are shown once store usage data has loaded."}
             </p>
           </article>

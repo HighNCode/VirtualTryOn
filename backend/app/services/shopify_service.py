@@ -359,6 +359,8 @@ class ShopifyService:
         trial_days: int = 0,
         test: bool = False,
         is_upgrade: bool = False,
+        usage_cap_usd: float = 500.0,
+        overage_terms: str = "Usage-based overage charges apply",
     ) -> dict:
         """
         Create a recurring app subscription via Shopify Billing API.
@@ -398,7 +400,18 @@ class ShopifyService:
             replacementBehavior: $replacementBehavior
           ) {
             confirmationUrl
-            appSubscription { id status }
+            appSubscription {
+              id
+              status
+              lineItems {
+                id
+                plan {
+                  pricingDetails {
+                    __typename
+                  }
+                }
+              }
+            }
             userErrors { field message }
           }
         }"""
@@ -408,15 +421,28 @@ class ShopifyService:
             "returnUrl": return_url,
             "test": test,
             "trialDays": trial_days if trial_days > 0 else None,
-            "lineItems": [{
-                "plan": {
-                    "appRecurringPricingDetails": {
-                        "amount": price_usd,
-                        "currencyCode": "USD",
-                        "interval": shopify_interval,
+            "lineItems": [
+                {
+                    "plan": {
+                        "appRecurringPricingDetails": {
+                            "amount": price_usd,
+                            "currencyCode": "USD",
+                            "interval": shopify_interval,
+                        }
                     }
-                }
-            }],
+                },
+                {
+                    "plan": {
+                        "appUsagePricingDetails": {
+                            "terms": overage_terms,
+                            "cappedAmount": {
+                                "amount": usage_cap_usd,
+                                "currencyCode": "USD",
+                            },
+                        }
+                    }
+                },
+            ],
         }
         if is_upgrade:
             variables["replacementBehavior"] = "APPLY_IMMEDIATELY"
@@ -428,9 +454,18 @@ class ShopifyService:
             errors = payload["userErrors"]
             raise Exception(f"Shopify billing error: {errors}")
 
+        usage_line_item_id = None
+        for line_item in payload.get("appSubscription", {}).get("lineItems", []):
+            plan = line_item.get("plan", {})
+            details = plan.get("pricingDetails", {})
+            if details.get("__typename") == "AppUsagePricing":
+                usage_line_item_id = line_item.get("id")
+                break
+
         return {
             "confirmation_url": payload["confirmationUrl"],
             "subscription_id": payload["appSubscription"]["id"],
+            "usage_line_item_id": usage_line_item_id,
         }
 
     async def billing_cancel_subscription(self, subscription_gid: str) -> bool:
@@ -472,15 +507,26 @@ class ShopifyService:
         """
         query = """
         query {
+          shop {
+            ianaTimezone
+            timezoneOffset
+          }
           currentAppInstallation {
             activeSubscriptions {
               id name status currentPeriodEnd test trialDays
+              createdAt
               lineItems {
+                id
                 plan {
                   pricingDetails {
                     ... on AppRecurringPricing {
                       price { amount currencyCode }
                       interval
+                    }
+                    ... on AppUsagePricing {
+                      terms
+                      cappedAmount { amount currencyCode }
+                      balanceUsed { amount currencyCode }
                     }
                   }
                 }
@@ -500,13 +546,79 @@ class ShopifyService:
             return None
 
         sub = subscriptions[0]
+        usage_line_item_id = None
+        has_usage_billing = False
+        for line_item in sub.get("lineItems", []):
+            details = line_item.get("plan", {}).get("pricingDetails", {})
+            if details.get("__typename") == "AppUsagePricing":
+                has_usage_billing = True
+                usage_line_item_id = line_item.get("id")
+                break
+
         return {
             "id": sub["id"],
             "name": sub["name"],
             "status": sub["status"],
             "current_period_end": sub.get("currentPeriodEnd"),
+            "created_at": sub.get("createdAt"),
             "test": sub.get("test", False),
             "trial_days": sub.get("trialDays", 0),
+            "has_usage_billing": has_usage_billing,
+            "usage_line_item_id": usage_line_item_id,
+            "shop_timezone": result.get("data", {}).get("shop", {}).get("ianaTimezone"),
+        }
+
+    async def billing_create_usage_charge(
+        self,
+        *,
+        usage_line_item_id: str,
+        amount_usd: float,
+        description: str,
+    ) -> dict:
+        """
+        Create a usage charge record tied to an AppSubscription usage line item.
+        """
+        mutation = """
+        mutation appUsageRecordCreate(
+          $subscriptionLineItemId: ID!,
+          $description: String!,
+          $price: MoneyInput!
+        ) {
+          appUsageRecordCreate(
+            subscriptionLineItemId: $subscriptionLineItemId,
+            description: $description,
+            price: $price
+          ) {
+            appUsageRecord {
+              id
+            }
+            userErrors {
+              field
+              message
+            }
+          }
+        }
+        """
+        variables = {
+            "subscriptionLineItemId": usage_line_item_id,
+            "description": description,
+            "price": {
+                "amount": amount_usd,
+                "currencyCode": "USD",
+            },
+        }
+        result = await self._graphql_request(mutation, variables)
+        payload = result.get("data", {}).get("appUsageRecordCreate", {})
+        errors = payload.get("userErrors", [])
+        if errors:
+            raise Exception(f"Shopify usage billing error: {errors}")
+
+        app_usage_record = payload.get("appUsageRecord")
+        if not app_usage_record:
+            raise Exception("Shopify usage billing error: appUsageRecord missing in response")
+
+        return {
+            "usage_record_id": app_usage_record.get("id"),
         }
 
     # ──────────────────────────────────────────────────────────

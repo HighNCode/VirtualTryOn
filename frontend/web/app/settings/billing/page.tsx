@@ -1,22 +1,19 @@
-"use client";
+﻿"use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import PortalSidebar from "../../_components/PortalSidebar";
 import {
   activateBillingPlan,
   cancelSubscription,
+  createSubscription,
   getBillingPlans,
-  getDefaultStoreId,
-  getStandardAnalytics,
-  type PlanConfigResponse,
-  type StandardAnalyticsResponse
-} from "../../../lib/photoshootApi";
-import {
-  createRecurringSubscription,
   getBillingStatus,
-  getShopifyBillingContext,
-  type ShopifyBillingContext
-} from "../../../lib/shopify/billing";
+  getBillingUsageSummary,
+  getDefaultStoreId,
+  type BillingStatusResponse,
+  type BillingUsageSummaryResponse,
+  type PlanConfigResponse
+} from "../../../lib/photoshootApi";
 
 type BillingCycle = "monthly" | "annual";
 
@@ -24,7 +21,7 @@ function formatDateTime(value: string | null): string {
   if (!value) return "-";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString();
+  return date.toLocaleString();
 }
 
 function formatMoney(value: number | null, currencyCode: string): string {
@@ -40,9 +37,9 @@ export default function SettingsBillingPage() {
   const storeId = useMemo(() => getDefaultStoreId(), []);
 
   const [billingCycle, setBillingCycle] = useState<BillingCycle>("monthly");
-  const [billingContext, setBillingContext] = useState<ShopifyBillingContext | null>(null);
   const [plans, setPlans] = useState<PlanConfigResponse[]>([]);
-  const [analytics, setAnalytics] = useState<StandardAnalyticsResponse | null>(null);
+  const [billingStatus, setBillingStatus] = useState<BillingStatusResponse | null>(null);
+  const [usageSummary, setUsageSummary] = useState<BillingUsageSummaryResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [pendingPlanId, setPendingPlanId] = useState<string | null>(null);
   const [isCancelling, setIsCancelling] = useState(false);
@@ -51,11 +48,31 @@ export default function SettingsBillingPage() {
 
   const isAnnual = billingCycle === "annual";
 
+  const loadBillingData = useCallback(async (signal?: AbortSignal) => {
+    if (!storeId) {
+      return;
+    }
+
+    const [plansResult, statusResult, usageResult] = await Promise.all([
+      getBillingPlans({ storeId, signal }),
+      getBillingStatus({ storeId, signal }),
+      getBillingUsageSummary({ storeId, signal })
+    ]);
+
+    setPlans(plansResult.plans.filter((p) => p.is_active));
+    setBillingStatus(statusResult);
+    setUsageSummary(usageResult);
+
+    if (statusResult.billing_interval === "monthly" || statusResult.billing_interval === "annual") {
+      setBillingCycle(statusResult.billing_interval);
+    }
+  }, [storeId]);
+
   useEffect(() => {
     setHasBillingReturn(typeof window !== "undefined" && new URLSearchParams(window.location.search).has("charge_id"));
   }, []);
 
-  // When Shopify redirects back with charge_id, activate billing in the backend
+  // When Shopify redirects back with charge_id, activate billing in backend.
   useEffect(() => {
     if (!hasBillingReturn || !storeId) return;
 
@@ -79,12 +96,13 @@ export default function SettingsBillingPage() {
       planName,
       billingInterval: interval,
       shopifySubscriptionId
-    }).catch(() => {
-      // Activation failure is non-fatal — subscription is already approved by Shopify
-    });
-  }, [hasBillingReturn, storeId]);
+    })
+      .then(() => loadBillingData())
+      .catch(() => {
+        // Non-fatal: subscription may already be active on Shopify side.
+      });
+  }, [hasBillingReturn, loadBillingData, storeId]);
 
-  // Load plans, Shopify billing context, and analytics in parallel
   useEffect(() => {
     if (!storeId) return;
 
@@ -94,44 +112,32 @@ export default function SettingsBillingPage() {
     setIsLoading(true);
     setErrorMessage("");
 
-    Promise.allSettled([
-      getShopifyBillingContext(),
-      getBillingPlans({ storeId, signal: controller.signal }),
-      getStandardAnalytics({ storeId, period: 30, signal: controller.signal })
-    ]).then(([contextResult, plansResult, analyticsResult]) => {
-      if (!active) return;
+    loadBillingData(controller.signal)
+      .catch((error: unknown) => {
+        if (!active || controller.signal.aborted) {
+          return;
+        }
 
-      if (contextResult.status === "fulfilled") {
-        setBillingContext(contextResult.value);
-        const interval = getBillingStatus(contextResult.value).billingInterval;
-        if (interval) setBillingCycle(interval);
-      }
-
-      if (plansResult.status === "fulfilled") {
-        setPlans(plansResult.value.plans.filter((p) => p.is_active));
-      } else if (!controller.signal.aborted) {
-        setErrorMessage("Failed to load billing plans.");
-      }
-
-      if (analyticsResult.status === "fulfilled") {
-        setAnalytics(analyticsResult.value);
-      }
-    }).finally(() => {
-      if (active) setIsLoading(false);
-    });
+        const message = error instanceof Error ? error.message : "Failed to load billing data.";
+        setErrorMessage(message);
+      })
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
 
     return () => {
       active = false;
       controller.abort();
     };
-  }, [storeId]);
+  }, [loadBillingData, storeId]);
 
-  const billingStatus = useMemo(() => {
-    if (!billingContext) return null;
-    return getBillingStatus(billingContext);
-  }, [billingContext]);
+  const currentPlan = useMemo(() => {
+    if (!billingStatus) {
+      return plans.find((p) => p.is_current) ?? null;
+    }
 
-  const currentPlan = useMemo(() => plans.find((p) => p.is_current) ?? null, [plans]);
+    return plans.find((p) => p.name === billingStatus.plan_name) ?? plans.find((p) => p.is_current) ?? null;
+  }, [billingStatus, plans]);
 
   const renderedPlans = useMemo(
     () =>
@@ -139,43 +145,61 @@ export default function SettingsBillingPage() {
         ...plan,
         displayedPrice: isAnnual ? plan.price_annual_per_month : plan.price_monthly,
         displayedCredits: isAnnual ? plan.credits_annual : plan.credits_monthly,
-        isCurrentSelection: plan.is_current && billingStatus?.billingInterval === billingCycle
+        isCurrentSelection: plan.name === billingStatus?.plan_name && billingStatus?.billing_interval === billingCycle
       })),
-    [plans, billingCycle, billingStatus?.billingInterval, isAnnual]
+    [billingCycle, billingStatus?.billing_interval, billingStatus?.plan_name, isAnnual, plans]
   );
 
-  const usageUsed = analytics?.credits_used ?? 0;
-  const usageLimit = billingStatus?.billingInterval === "annual" ? currentPlan?.credits_annual ?? 0 : currentPlan?.credits_monthly ?? 0;
-  const usagePercent = usageLimit > 0 ? Math.min(100, (usageUsed / usageLimit) * 100) : 0;
+  const usageUsedIncluded = usageSummary?.consumed_credits ?? 0;
+  const usageUsedTotal = (usageSummary?.consumed_credits ?? 0) + (usageSummary?.overage_credits ?? 0);
+  const usageLimit = usageSummary?.included_credits ?? 0;
+  const usagePercent = usageLimit > 0 ? Math.min(100, (usageUsedIncluded / usageLimit) * 100) : 0;
+
+  const recurringPrice = currentPlan
+    ? billingStatus?.billing_interval === "annual"
+      ? currentPlan.price_annual_total
+      : currentPlan.price_monthly
+    : null;
+
+  const isLegacySubscription = Boolean(
+    billingStatus?.shopify_subscription_id &&
+    (billingStatus?.subscription_status || "").toUpperCase() === "ACTIVE" &&
+    !billingStatus?.has_usage_billing
+  );
 
   const handlePlanChange = async (plan: PlanConfigResponse) => {
-    if (plan.is_current && billingStatus?.billingInterval === billingCycle) return;
     if (!storeId) {
       setErrorMessage("Open the app from Shopify Admin to manage billing.");
       return;
     }
 
-    const selectedPrice = isAnnual ? plan.price_annual_total : plan.price_monthly;
-    if (selectedPrice <= 0) return;
+    if (plan.name === billingStatus?.plan_name && billingStatus?.billing_interval === billingCycle) {
+      return;
+    }
 
     setPendingPlanId(plan.id);
     setErrorMessage("");
 
-    const shopParam = storeId ? `&shop=${encodeURIComponent(storeId)}` : "";
-
     try {
-      const result = await createRecurringSubscription({
-        planDisplayName: plan.display_name,
-        priceAmount: selectedPrice,
-        billingCycle,
-        trialDays: plan.trial_days,
-        testMode: billingContext?.shopIsDevelopment ?? false,
-        returnPath: `/settings/billing?plan=${encodeURIComponent(plan.name)}&interval=${billingCycle}${shopParam}`
-      });
-      if (result.subscriptionId) {
-        window.localStorage.setItem("pending_subscription_id", result.subscriptionId);
+      const returnUrl = new URL("/settings/billing", window.location.origin);
+      returnUrl.searchParams.set("plan", plan.name);
+      returnUrl.searchParams.set("interval", billingCycle);
+      if (storeId) {
+        returnUrl.searchParams.set("shop", storeId);
       }
-      window.open(result.confirmationUrl, "_top");
+
+      const result = await createSubscription({
+        storeId,
+        planName: plan.name,
+        billingInterval: billingCycle,
+        returnUrl: returnUrl.toString()
+      });
+
+      if (result.shopify_subscription_id) {
+        window.localStorage.setItem("pending_subscription_id", result.shopify_subscription_id);
+      }
+
+      window.open(result.confirmation_url, "_top");
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Failed to create Shopify subscription.";
       setErrorMessage(message);
@@ -192,9 +216,7 @@ export default function SettingsBillingPage() {
 
     try {
       await cancelSubscription({ storeId });
-      // Reload billing context after cancellation
-      const context = await getShopifyBillingContext();
-      setBillingContext(context);
+      await loadBillingData();
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Failed to cancel subscription.";
       setErrorMessage(message);
@@ -210,14 +232,20 @@ export default function SettingsBillingPage() {
       <section className="portal-main">
         <header className="portal-main-header">
           <h2>Billing</h2>
-          <p>Shopify subscription status, plan switching, and credit usage</p>
+          <p>Shopify subscription status, cycle usage, and plan switching</p>
         </header>
 
-        {hasBillingReturn && billingStatus?.activeSubscription ? (
+        {hasBillingReturn && billingStatus?.shopify_subscription_id ? (
           <p className="ai-status-note">Shopify redirected back after charge approval. The latest subscription is shown below.</p>
         ) : null}
         {isLoading ? <p className="ai-status-note">Loading billing...</p> : null}
         {errorMessage ? <p className="ai-error-note">{errorMessage}</p> : null}
+
+        {isLegacySubscription ? (
+          <p className="ai-error-note">
+            This subscription does not include usage-based overage billing. Re-approve your current plan to enable auto-charged overage after included credits are exhausted.
+          </p>
+        ) : null}
 
         <div className="step7-billing-toggle" role="group" aria-label="Billing cycle">
           <button type="button" className={`step7-toggle-label${!isAnnual ? " is-active" : ""}`} onClick={() => setBillingCycle("monthly")}>
@@ -240,24 +268,30 @@ export default function SettingsBillingPage() {
         <section className="billing-grid billing-grid-top">
           <article className="settings-card billing-card">
             <h3>Your Plan</h3>
-            <p className="billing-pay-label">{billingStatus?.planName ?? "No active subscription"}</p>
-            <p>Billing interval: {billingStatus?.billingInterval ?? "-"}</p>
-            <p>Subscription status: {billingStatus?.subscriptionStatus ?? "Not linked"}</p>
-            <p>Recurring price: {formatMoney(billingStatus?.recurringPrice ?? null, billingStatus?.recurringCurrencyCode ?? "USD")}</p>
+            <p className="billing-pay-label">{billingStatus?.plan_name ?? "No active subscription"}</p>
+            <p>Billing interval: {billingStatus?.billing_interval ?? "-"}</p>
+            <p>Subscription status: {billingStatus?.subscription_status ?? "Not linked"}</p>
+            <p>Plan price: {formatMoney(recurringPrice, "USD")}</p>
 
-            <h4>Usage This Month</h4>
+            <h4>Usage This Cycle</h4>
             <p>
-              {usageUsed.toLocaleString()} / {usageLimit.toLocaleString()} Credits
+              {usageUsedIncluded.toLocaleString()} / {usageLimit.toLocaleString()} Included Credits
+            </p>
+            <p>
+              Total consumed: {usageUsedTotal.toLocaleString()} credits
+              {usageSummary?.overage_credits ? ` (including ${usageSummary.overage_credits.toLocaleString()} overage)` : ""}
             </p>
             <div className="billing-progress" aria-hidden>
               <span style={{ width: `${usagePercent}%` }} />
             </div>
 
-            <button type="button" className="billing-link-button" disabled>
-              Current Plan: {currentPlan?.display_name ?? billingStatus?.planName ?? "-"}
-            </button>
+            <p>Overage amount so far: {formatMoney(usageSummary?.overage_amount_usd ?? 0, "USD")}</p>
 
-            {billingStatus?.activeSubscription ? (
+            {usageSummary?.overage_blocked ? (
+              <p className="ai-error-note">{usageSummary.overage_block_message || "Overage usage is blocked until billing is resolved."}</p>
+            ) : null}
+
+            {billingStatus?.shopify_subscription_id ? (
               <button
                 type="button"
                 className="billing-cancel-button"
@@ -280,6 +314,8 @@ export default function SettingsBillingPage() {
                 </h4>
                 <p>{plan.features[0] ?? "Core features"}</p>
                 <p>{plan.displayedCredits.toLocaleString()} credits included</p>
+                <p>Overage rate: {formatMoney(plan.overage_usd_per_tryon, "USD")} per generation</p>
+                <p>Usage cap: {formatMoney(plan.usage_cap_usd, "USD")}</p>
                 <strong>{formatMoney(plan.displayedPrice, "USD")} / month</strong>
                 <button
                   type="button"
@@ -291,7 +327,7 @@ export default function SettingsBillingPage() {
                     ? "Current Plan"
                     : pendingPlanId === plan.id
                       ? "Redirecting..."
-                      : plan.is_current
+                      : billingStatus?.plan_name === plan.name
                         ? `Switch to ${isAnnual ? "Annual" : "Monthly"}`
                         : `Switch to ${plan.display_name}`}
                 </button>
@@ -308,18 +344,18 @@ export default function SettingsBillingPage() {
             <ul className="billing-history-list">
               <li>
                 <span>Plan activated</span>
-                <span>{formatDateTime(billingStatus?.activeSubscription?.createdAt ?? null)}</span>
-                <span>{billingStatus?.planName ?? "-"}</span>
+                <span>{formatDateTime(billingStatus?.plan_activated_at ?? null)}</span>
+                <span>{billingStatus?.plan_name ?? "-"}</span>
               </li>
               <li>
-                <span>Trial duration</span>
-                <span>{billingStatus?.trialDays ? `${billingStatus.trialDays} days` : "-"}</span>
-                <span>{billingStatus?.billingInterval ?? "-"}</span>
+                <span>Cycle start</span>
+                <span>{formatDateTime(usageSummary?.cycle_start_at ?? null)}</span>
+                <span>{billingStatus?.store_timezone ?? "UTC"}</span>
               </li>
               <li>
                 <span>Current period end</span>
-                <span>{formatDateTime(billingStatus?.currentPeriodEnd ?? null)}</span>
-                <span>{billingStatus?.subscriptionStatus ?? "-"}</span>
+                <span>{formatDateTime(billingStatus?.current_period_end ?? null)}</span>
+                <span>{billingStatus?.subscription_status ?? "-"}</span>
               </li>
             </ul>
           </article>
@@ -332,7 +368,7 @@ export default function SettingsBillingPage() {
                   Shopify
                 </button>
               </div>
-              <p className="billing-payment-text">{billingStatus?.shopifySubscriptionId ?? "Not connected"}</p>
+              <p className="billing-payment-text">{billingStatus?.shopify_subscription_id ?? "Not connected"}</p>
             </article>
 
             <article className="settings-card billing-card billing-card-compact">
@@ -342,7 +378,7 @@ export default function SettingsBillingPage() {
                   Read-only
                 </button>
               </div>
-              <p>{formatDateTime(billingStatus?.currentPeriodEnd ?? null)}</p>
+              <p>{formatDateTime(billingStatus?.current_period_end ?? null)}</p>
             </article>
           </div>
         </section>

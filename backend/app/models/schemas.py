@@ -417,6 +417,7 @@ class WidgetConfigResponse(BaseModel):
     enabled_product_ids: List[str]
     theme_extension_detected: bool
     widget_color: str  # Hex e.g. '#FF0000'; default applied in API layer when DB value is null
+    weekly_tryon_limit: int
 
 
 class WidgetConfigUpdateRequest(BaseModel):
@@ -426,6 +427,7 @@ class WidgetConfigUpdateRequest(BaseModel):
     enabled_product_ids: Optional[List[str]] = None
     theme_extension_detected: Optional[bool] = None
     widget_color: Optional[str] = None  # Hex color e.g. '#FF0000'
+    weekly_tryon_limit: Optional[int] = None
 
 
 # ============================================================================
@@ -443,8 +445,10 @@ class PlanConfigResponse(BaseModel):
     annual_discount_pct: int        # 17
     credits_monthly: int            # 600
     credits_annual: int             # 7600
+    overage_usd_per_tryon: float
     trial_days: Optional[int] = None
     trial_credits: Optional[int] = None
+    usage_cap_usd: float
     features: List[str]
     is_current: bool                # True if this is the store's active plan
     is_active: bool
@@ -481,6 +485,23 @@ class BillingStatusResponse(BaseModel):
     subscription_status: Optional[str] = None      # 'ACTIVE' | 'PENDING' | 'CANCELLED'
     current_period_end: Optional[datetime] = None  # Next billing date
     is_test_subscription: Optional[bool] = None
+    has_usage_billing: bool = False
+    store_timezone: Optional[str] = None
+
+
+class BillingUsageSummaryResponse(BaseModel):
+    """Cycle-based credit usage summary for billing UI and enforcement diagnostics."""
+    cycle_start_at: Optional[datetime] = None
+    cycle_end_at: Optional[datetime] = None
+    included_credits: int = 0
+    consumed_credits: int = 0
+    remaining_included_credits: int = 0
+    overage_credits: int = 0
+    overage_amount_usd: float = 0.0
+    overage_blocked: bool = False
+    overage_block_reason: Optional[str] = None
+    overage_block_message: Optional[str] = None
+    can_auto_charge_overage: bool = False
 
 
 class CancelSubscriptionResponse(BaseModel):

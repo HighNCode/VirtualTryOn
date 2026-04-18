@@ -7,22 +7,31 @@ import uuid
 import time
 import logging
 from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Depends, Header, BackgroundTasks
 from fastapi.responses import Response
 from sqlalchemy.orm import Session as DBSession
 
 from app.api.store_context import get_public_store
+from app.config import get_settings
 from app.core.database import get_db
-from app.models.database import Session, Product, TryOn, PhotoshootModel
+from app.models.database import Session, Product, TryOn, PhotoshootModel, Store, WidgetConfig
 from app.models.schemas import (
     TryOnGenerateRequest, TryOnStatusResponse,
     StudioBackgroundResponse, StudioTryOnRequest,
 )
 from app.services.cache_service import CacheService
+from app.services.usage_governance_service import UsageGovernanceService
 
 router = APIRouter(prefix="/tryon", tags=["Virtual Try-On"])
 logger = logging.getLogger(__name__)
+settings = get_settings()
+
+
+def _normalize_customer_id(value: Optional[str]) -> Optional[str]:
+    candidate = (value or "").strip()
+    return candidate or None
 
 
 async def get_session_from_header(
@@ -51,6 +60,7 @@ def _run_tryon_generation(
     product_image_url: str,
     product_title: str,
     category: str,
+    usage_event_id: Optional[str] = None,
 ):
     """
     Background task: generate the try-on image, cache it, update DB record.
@@ -98,6 +108,18 @@ def _run_tryon_generation(
         record.completed_at = datetime.utcnow()
         db.commit()
 
+        if usage_event_id:
+            import asyncio
+            usage = UsageGovernanceService(db)
+            loop2 = asyncio.new_event_loop()
+            loop2.run_until_complete(
+                usage.finalize_usage(
+                    event_id=usage_event_id,
+                    reference_id=str(try_on_id),
+                )
+            )
+            loop2.close()
+
         logger.info(f"Try-on {try_on_id} completed in {elapsed:.1f}s")
 
     except Exception as e:
@@ -108,6 +130,17 @@ def _run_tryon_generation(
                 record.processing_status = "failed"
                 record.error_message = str(e)[:500]
                 db.commit()
+            if usage_event_id:
+                import asyncio
+                usage = UsageGovernanceService(db)
+                loop2 = asyncio.new_event_loop()
+                loop2.run_until_complete(
+                    usage.refund_usage(
+                        event_id=usage_event_id,
+                        reason=f"tryon_failed:{str(e)[:240]}",
+                    )
+                )
+                loop2.close()
         except Exception:
             pass
     finally:
@@ -120,6 +153,7 @@ def _run_studio_generation(
     studio_image: bytes,
     parent_try_on_id: str,
     studio_background_id: str,
+    usage_event_id: Optional[str] = None,
 ):
     """Background task: generate studio-styled try-on image."""
     from app.core.database import SessionLocal
@@ -161,6 +195,18 @@ def _run_studio_generation(
         record.completed_at = datetime.utcnow()
         db.commit()
 
+        if usage_event_id:
+            import asyncio
+            usage = UsageGovernanceService(db)
+            loop2 = asyncio.new_event_loop()
+            loop2.run_until_complete(
+                usage.finalize_usage(
+                    event_id=usage_event_id,
+                    reference_id=str(try_on_id),
+                )
+            )
+            loop2.close()
+
         logger.info(f"Studio try-on {try_on_id} completed in {elapsed:.1f}s")
 
     except Exception as e:
@@ -171,6 +217,17 @@ def _run_studio_generation(
                 record.processing_status = "failed"
                 record.error_message = str(e)[:500]
                 db.commit()
+            if usage_event_id:
+                import asyncio
+                usage = UsageGovernanceService(db)
+                loop2 = asyncio.new_event_loop()
+                loop2.run_until_complete(
+                    usage.refund_usage(
+                        event_id=usage_event_id,
+                        reason=f"studio_failed:{str(e)[:240]}",
+                    )
+                )
+                loop2.close()
         except Exception:
             pass
     finally:
@@ -238,6 +295,7 @@ async def get_studio_background_image(
 async def generate_studio_tryon(
     request: StudioTryOnRequest,
     background_tasks: BackgroundTasks,
+    x_logged_in_customer_id: Optional[str] = Header(None, alias="X-Logged-In-Customer-Id"),
     db: DBSession = Depends(get_db),
 ):
     """
@@ -251,6 +309,7 @@ async def generate_studio_tryon(
     """
     import os
 
+    usage_event_id: Optional[str] = None
     try:
         # Validate original try-on exists and is completed
         original = db.query(TryOn).filter_by(try_on_id=str(request.try_on_id)).first()
@@ -304,6 +363,28 @@ async def generate_studio_tryon(
         with open(file_path, "rb") as f:
             studio_image = f.read()
 
+        product = db.query(Product).filter_by(product_id=original.product_id).first()
+        if not product:
+            raise HTTPException(404, "Product not found for original try-on")
+        store = db.query(Store).filter_by(store_id=product.store_id).first()
+        if not store:
+            raise HTTPException(404, "Store not found")
+
+        widget_cfg = db.query(WidgetConfig).filter_by(store_id=store.store_id).first()
+        weekly_limit = widget_cfg.weekly_tryon_limit if widget_cfg else settings.WEEKLY_TRYON_LIMIT_DEFAULT
+        customer_identifier = _normalize_customer_id(x_logged_in_customer_id)
+
+        usage = UsageGovernanceService(db)
+        reservation = await usage.reserve_generation(
+            store=store,
+            action_type="customer_tryon_studio",
+            reference_type="try_on",
+            customer_identifier=customer_identifier,
+            enforce_weekly_limit=True,
+            weekly_tryon_limit=weekly_limit,
+        )
+        usage_event_id = reservation.event_id
+
         # Create new TryOn record linked to parent
         new_try_on_id = uuid.uuid4()
         tryon_record = TryOn(
@@ -324,6 +405,7 @@ async def generate_studio_tryon(
             studio_image=studio_image,
             parent_try_on_id=str(request.try_on_id),
             studio_background_id=str(request.studio_background_id),
+            usage_event_id=usage_event_id,
         )
 
         logger.info(f"Studio try-on queued: {new_try_on_id} (parent={request.try_on_id}, bg={bg.image_path})")
@@ -335,9 +417,21 @@ async def generate_studio_tryon(
         }
 
     except HTTPException:
+        if usage_event_id:
+            usage = UsageGovernanceService(db)
+            await usage.refund_usage(
+                event_id=usage_event_id,
+                reason="studio_request_rejected",
+            )
         raise
     except Exception as e:
         logger.error(f"Studio try-on error: {e}", exc_info=True)
+        if usage_event_id:
+            usage = UsageGovernanceService(db)
+            await usage.refund_usage(
+                event_id=usage_event_id,
+                reason=f"studio_request_error:{str(e)[:240]}",
+            )
         raise HTTPException(500, f"Studio try-on generation failed: {str(e)}")
 
 
@@ -349,6 +443,7 @@ async def generate_studio_tryon(
 async def generate_tryon(
     request: TryOnGenerateRequest,
     background_tasks: BackgroundTasks,
+    x_logged_in_customer_id: Optional[str] = Header(None, alias="X-Logged-In-Customer-Id"),
     session: Session = Depends(get_session_from_header),
     db: DBSession = Depends(get_db),
 ):
@@ -368,6 +463,7 @@ async def generate_tryon(
     Body:
         {"product_id": "uuid"}
     """
+    usage_event_id: Optional[str] = None
     try:
         # Validate product
         product = db.query(Product).filter_by(
@@ -396,6 +492,24 @@ async def generate_tryon(
         first = product_images[0]
         product_image_url = first.get("src") if isinstance(first, dict) else first.src
 
+        store = db.query(Store).filter_by(store_id=session.store_id).first()
+        if not store:
+            raise HTTPException(404, "Store not found")
+        widget_cfg = db.query(WidgetConfig).filter_by(store_id=store.store_id).first()
+        weekly_limit = widget_cfg.weekly_tryon_limit if widget_cfg else settings.WEEKLY_TRYON_LIMIT_DEFAULT
+        customer_identifier = _normalize_customer_id(x_logged_in_customer_id)
+
+        usage = UsageGovernanceService(db)
+        reservation = await usage.reserve_generation(
+            store=store,
+            action_type="customer_tryon_generate",
+            reference_type="try_on",
+            customer_identifier=customer_identifier,
+            enforce_weekly_limit=True,
+            weekly_tryon_limit=weekly_limit,
+        )
+        usage_event_id = reservation.event_id
+
         # Create TryOn DB record (measurement_id is nullable for this flow)
         try_on_id = uuid.uuid4()
         tryon_record = TryOn(
@@ -414,6 +528,7 @@ async def generate_tryon(
             product_image_url=product_image_url,
             product_title=product.title or "garment",
             category=product.category or "tops",
+            usage_event_id=usage_event_id,
         )
 
         logger.info(f"Try-on queued: {try_on_id} for product={product.title}")
@@ -425,9 +540,21 @@ async def generate_tryon(
         }
 
     except HTTPException:
+        if usage_event_id:
+            usage = UsageGovernanceService(db)
+            await usage.refund_usage(
+                event_id=usage_event_id,
+                reason="tryon_request_rejected",
+            )
         raise
     except Exception as e:
         logger.error(f"Try-on generation error: {e}", exc_info=True)
+        if usage_event_id:
+            usage = UsageGovernanceService(db)
+            await usage.refund_usage(
+                event_id=usage_event_id,
+                reason=f"tryon_request_error:{str(e)[:240]}",
+            )
         raise HTTPException(500, f"Try-on generation failed: {str(e)}")
 
 
