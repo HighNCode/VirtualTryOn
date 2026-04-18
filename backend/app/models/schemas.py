@@ -210,12 +210,14 @@ class HeatmapGenerateRequest(BaseModel):
     size: str
 
 
-class HeatmapRegion(BaseModel):
-    """Individual body region fit data for heatmap"""
-    fit_status: str
+class HeatmapZone(BaseModel):
+    """Individual body zone fit data for heatmap"""
+    delta_cm: float
+    user_cm: float
+    product_cm: float
+    fit_label: str
+    fit_score: int
     color: str
-    score: int
-    polygon_coords: List[List[List[float]]]
 
 
 class HeatmapResponse(BaseModel):
@@ -223,10 +225,8 @@ class HeatmapResponse(BaseModel):
     heatmap_id: UUID
     size: str
     overall_fit_score: int
-    regions: Dict[str, HeatmapRegion]
-    svg_overlay: str
+    zones: Dict[str, HeatmapZone]
     legend: Dict[str, str]
-    image_dimensions: Optional[List[int]] = None  # [width, height] if overlay mode, null for template
 
 
 # ============================================================================
