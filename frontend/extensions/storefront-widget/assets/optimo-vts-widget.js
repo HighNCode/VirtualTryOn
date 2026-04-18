@@ -2,6 +2,7 @@
   const STORAGE_KEY = "optimo-vts-user-id";
   const ACTIVE_PROGRESS_COLOR = "linear-gradient(90deg, #a4006e 0%, #f3001f 100%)";
   const IDLE_PROGRESS_COLOR = "#d7d5d8";
+  const HEATMAP_VIEWBOX = "0 0 200 500";
   const MEASUREMENT_ROWS = [
     ["height", "Height"],
     ["chest", "Chest circumference"],
@@ -13,14 +14,55 @@
     ["thigh", "Thigh circumference"],
     ["inseam", "Inseam"]
   ];
-  const FALLBACK_HEATMAP =
-    '<svg viewBox="0 0 200 500" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
-    '<rect x="58" y="48" width="84" height="40" rx="20" fill="rgba(255,255,255,0.18)"></rect>' +
-    '<rect x="44" y="104" width="112" height="108" rx="52" fill="rgba(255,181,45,0.68)"></rect>' +
-    '<rect x="56" y="216" width="88" height="72" rx="26" fill="rgba(255,181,45,0.72)"></rect>' +
-    '<rect x="62" y="292" width="32" height="142" rx="16" fill="rgba(45,196,170,0.78)"></rect>' +
-    '<rect x="106" y="292" width="32" height="142" rx="16" fill="rgba(45,196,170,0.78)"></rect>' +
-    "</svg>";
+
+  const FIT_LABEL_ORDER = ["tight", "snug", "perfect", "loose", "very_loose"];
+  const FIT_LABEL_TITLES = {
+    tight: "Tight",
+    snug: "Snug",
+    perfect: "Perfect",
+    loose: "Loose",
+    very_loose: "Very loose"
+  };
+
+  const SILHOUETTE_BODY_D =
+    "M76 98 " +
+    "Q100 82 124 98 " +
+    "Q152 118 154 150 " +
+    "Q158 210 150 258 " +
+    "Q146 286 140 306 " +
+    "Q136 320 132 338 " +
+    "Q128 360 132 390 " +
+    "L136 448 " +
+    "Q138 476 122 490 " +
+    "Q110 498 100 498 " +
+    "Q90 498 78 490 " +
+    "Q62 476 64 448 " +
+    "L68 390 " +
+    "Q72 360 68 338 " +
+    "Q64 320 60 306 " +
+    "Q54 286 50 258 " +
+    "Q42 210 46 150 " +
+    "Q48 118 76 98 Z";
+
+  const ZONE_PATHS = [
+    { zone: "neck", label: "Neck", d: "M86 86 Q100 78 114 86 L120 104 Q100 114 80 104 Z" },
+    { zone: "shoulders", label: "Shoulders", d: "M54 106 Q100 90 146 106 L162 140 Q100 160 38 140 Z" },
+    { zone: "chest", label: "Chest", d: "M56 140 Q100 126 144 140 L152 206 Q100 226 48 206 Z" },
+    { zone: "waist", label: "Waist", d: "M64 206 Q100 194 136 206 L142 260 Q100 278 58 260 Z" },
+    { zone: "hips", label: "Hips", d: "M56 262 Q100 244 144 262 L152 322 Q100 350 48 322 Z" },
+
+    { zone: "sleeves", label: "Sleeves", d: "M34 146 Q18 192 30 244 Q40 280 62 304 L74 292 Q54 262 48 232 Q38 188 60 152 Z" },
+    { zone: "sleeves", label: "Sleeves", d: "M166 146 Q182 192 170 244 Q160 280 138 304 L126 292 Q146 262 152 232 Q162 188 140 152 Z" },
+
+    { zone: "thigh", label: "Thigh", d: "M72 326 Q84 316 96 326 L96 396 Q84 406 72 396 Z" },
+    { zone: "thigh", label: "Thigh", d: "M104 326 Q116 316 128 326 L128 396 Q116 406 104 396 Z" },
+
+    { zone: "calf", label: "Calf", d: "M74 398 Q84 392 94 398 L92 452 Q84 460 76 452 Z" },
+    { zone: "calf", label: "Calf", d: "M106 398 Q116 392 126 398 L124 452 Q116 460 108 452 Z" },
+
+    { zone: "ankle", label: "Ankle", d: "M78 456 Q84 452 90 456 L88 486 Q84 490 80 486 Z" },
+    { zone: "ankle", label: "Ankle", d: "M110 456 Q116 452 122 456 L120 486 Q116 490 112 486 Z" }
+  ];
 
   function escapeHtml(value) {
     return String(value ?? "")
@@ -182,7 +224,8 @@
         generatingStep: 0,
         isHeatmapLoading: false,
         selectedStudioImageUrl: "",
-        returningUser: false
+        returningUser: false,
+        activeHeatmapZone: ""
       };
 
       this.handleHostClick = this.handleHostClick.bind(this);
@@ -190,6 +233,8 @@
       this.handleOverlayChange = this.handleOverlayChange.bind(this);
       this.handleOverlaySubmit = this.handleOverlaySubmit.bind(this);
       this.handleOverlayInput = this.handleOverlayInput.bind(this);
+      this.handleOverlayMouseOver = this.handleOverlayMouseOver.bind(this);
+      this.handleOverlayMouseOut = this.handleOverlayMouseOut.bind(this);
     }
 
     async init() {
@@ -247,6 +292,8 @@
       this.overlay.addEventListener("change", this.handleOverlayChange);
       this.overlay.addEventListener("submit", this.handleOverlaySubmit);
       this.overlay.addEventListener("input", this.handleOverlayInput);
+      this.overlay.addEventListener("mouseover", this.handleOverlayMouseOver);
+      this.overlay.addEventListener("mouseout", this.handleOverlayMouseOut);
       document.body.appendChild(this.overlay);
     }
 
@@ -278,6 +325,7 @@
 
     async startSession() {
       this.state.returningUser = false;
+      this.state.activeHeatmapZone = "";
       this.renderOverlay();
 
       try {
@@ -305,6 +353,7 @@
         this.state.currentStudioBackgroundId = "";
         this.state.studioLoadingId = "";
         this.state.selectedStudioImageUrl = "";
+        this.state.activeHeatmapZone = "";
 
         if (session.has_existing_measurements && session.measurement_id && session.photos_available) {
           this.state.returningUser = true;
@@ -353,6 +402,13 @@
     handleOverlayClick(event) {
       if (event.target === this.overlay) {
         this.close();
+        return;
+      }
+
+      const zoneTarget = event.target && event.target.closest ? event.target.closest("path[data-zone]") : null;
+      if (zoneTarget) {
+        event.preventDefault();
+        this.setActiveHeatmapZone(zoneTarget.getAttribute("data-zone") || "");
         return;
       }
 
@@ -416,6 +472,37 @@
       } else if (action === "share-look") {
         this.shareLook(actionTarget.getAttribute("data-network") || "share");
       }
+    }
+
+    handleOverlayMouseOver(event) {
+      if (!this.overlay || this.state.stage !== "results") {
+        return;
+      }
+
+      const zoneTarget = event.target && event.target.closest ? event.target.closest("path[data-zone]") : null;
+      if (!zoneTarget) {
+        return;
+      }
+
+      this.setActiveHeatmapZone(zoneTarget.getAttribute("data-zone") || "");
+    }
+
+    handleOverlayMouseOut(event) {
+      if (!this.overlay || this.state.stage !== "results") {
+        return;
+      }
+
+      const fromZone = event.target && event.target.closest ? event.target.closest("path[data-zone]") : null;
+      if (!fromZone) {
+        return;
+      }
+
+      const toZone = event.relatedTarget && event.relatedTarget.closest ? event.relatedTarget.closest("path[data-zone]") : null;
+      if (toZone) {
+        return;
+      }
+
+      this.setActiveHeatmapZone("");
     }
 
     handleOverlayChange(event) {
@@ -826,6 +913,7 @@
       }
 
       this.state.selectedSize = size;
+      this.state.activeHeatmapZone = "";
       this.trackEvent("size_selected", { size: size });
       this.renderOverlay();
 
@@ -1013,6 +1101,166 @@
         return [];
       }
       return this.state.recommendation.all_sizes.slice(0, 5);
+    }
+
+    setActiveHeatmapZone(zone) {
+      const next = String(zone || "");
+      if (next === String(this.state.activeHeatmapZone || "")) {
+        return;
+      }
+      this.state.activeHeatmapZone = next;
+      if (!this.updateHeatmapTooltip()) {
+        this.renderOverlay();
+      }
+    }
+
+    updateHeatmapTooltip() {
+      if (!this.overlay || this.state.stage !== "results") {
+        return false;
+      }
+
+      const tooltipNode = this.overlay.querySelector(".ovts-heatmap-tooltip");
+      if (!tooltipNode) {
+        return false;
+      }
+
+      const heatmap = this.getSelectedHeatmap();
+      tooltipNode.outerHTML = this.renderHeatmapTooltip(heatmap);
+      return true;
+    }
+
+    getHeatmapLegend(heatmap) {
+      const legend = heatmap && heatmap.legend && typeof heatmap.legend === "object" ? heatmap.legend : null;
+      if (!legend) {
+        return {};
+      }
+      return legend;
+    }
+
+    getZonePayload(heatmap, zone) {
+      if (!heatmap || !heatmap.zones || typeof heatmap.zones !== "object") {
+        return null;
+      }
+      return heatmap.zones[zone] || null;
+    }
+
+    resolveZoneFill(heatmap, zone) {
+      const payload = this.getZonePayload(heatmap, zone);
+      if (payload && payload.color) {
+        return String(payload.color);
+      }
+
+      const legend = this.getHeatmapLegend(heatmap);
+      if (payload && payload.fit_label && legend[payload.fit_label]) {
+        return String(legend[payload.fit_label]);
+      }
+
+      return "rgba(255,255,255,0.08)";
+    }
+
+    renderHeatmapSvg(heatmap) {
+      const parts = [
+        '<svg viewBox="' + HEATMAP_VIEWBOX + '" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Fit heatmap">',
+        '<g fill="none" stroke="none">',
+        '<circle cx="100" cy="56" r="26" fill="rgba(255,255,255,0.16)" stroke="rgba(255,255,255,0.32)" stroke-width="2"></circle>',
+        '<path d="' +
+          escapeHtml(SILHOUETTE_BODY_D) +
+          '" fill="rgba(255,255,255,0.12)" stroke="rgba(255,255,255,0.28)" stroke-width="2"></path>',
+        "</g>",
+        '<g class="ovts-heatmap-zones">'
+      ];
+
+      for (let i = 0; i < ZONE_PATHS.length; i += 1) {
+        const entry = ZONE_PATHS[i];
+        const zone = entry.zone;
+        const payload = this.getZonePayload(heatmap, zone);
+        const fill = this.resolveZoneFill(heatmap, zone);
+        const fillOpacity = payload ? "0.72" : "0.10";
+        const stroke = payload ? fill : "rgba(255,255,255,0)";
+        const strokeOpacity = payload ? "0.88" : "0";
+
+        const title = payload
+          ? entry.label +
+            ": " +
+            (FIT_LABEL_TITLES[payload.fit_label] || payload.fit_label) +
+            " (" +
+            String(payload.delta_cm) +
+            " cm)"
+          : entry.label + ": no data";
+
+        parts.push(
+          '<path d="' +
+            escapeHtml(entry.d) +
+            '" data-zone="' +
+            escapeHtml(zone) +
+            '" fill="' +
+            escapeHtml(fill) +
+            '" fill-opacity="' +
+            fillOpacity +
+            '" stroke="' +
+            escapeHtml(stroke) +
+            '" stroke-opacity="' +
+            strokeOpacity +
+            '" stroke-width="1.6" vector-effect="non-scaling-stroke">' +
+            "<title>" +
+            escapeHtml(title) +
+            "</title></path>"
+        );
+      }
+
+      parts.push("</g></svg>");
+      return parts.join("");
+    }
+
+    renderHeatmapLegend(heatmap) {
+      const legend = this.getHeatmapLegend(heatmap);
+      return FIT_LABEL_ORDER.map((key) => {
+        const color = legend[key] || "";
+        const title = FIT_LABEL_TITLES[key] || key;
+        const style = color ? ' style="background:' + escapeHtml(color) + '"' : "";
+        return '<span><i' + style + '></i>' + escapeHtml(title) + "</span>";
+      }).join("");
+    }
+
+    renderHeatmapTooltip(heatmap) {
+      const zone = String(this.state.activeHeatmapZone || "");
+      const payload = zone ? this.getZonePayload(heatmap, zone) : null;
+      if (!zone) {
+        return '<div class="ovts-heatmap-tooltip" aria-hidden="true"></div>';
+      }
+
+      if (!payload) {
+        return (
+          '<div class="ovts-heatmap-tooltip is-visible" role="status" aria-live="polite">' +
+          '<div class="ovts-heatmap-tooltip__row"><strong>' +
+          escapeHtml(zone.replace(/_/g, " ")) +
+          "</strong><span>No data</span></div>" +
+          '<div class="ovts-heatmap-tooltip__meta"><span>This zone is not available for this garment.</span></div>' +
+          "</div>"
+        );
+      }
+
+      const label = FIT_LABEL_TITLES[payload.fit_label] || payload.fit_label || "Fit";
+      const delta = typeof payload.delta_cm === "number" ? payload.delta_cm : Number(payload.delta_cm);
+      const deltaText = Number.isFinite(delta) ? (delta > 0 ? "+" + delta : String(delta)) + " cm" : "";
+      const userText = formatNumber(payload.user_cm);
+      const productText = formatNumber(payload.product_cm);
+
+      return (
+        '<div class="ovts-heatmap-tooltip is-visible" role="status" aria-live="polite">' +
+        '<div class="ovts-heatmap-tooltip__row"><strong>' +
+        escapeHtml(zone.replace(/_/g, " ")) +
+        "</strong><span>" +
+        escapeHtml(label) +
+        "</span></div>" +
+        '<div class="ovts-heatmap-tooltip__meta">' +
+        '<span>Delta: <strong>' +
+        escapeHtml(deltaText) +
+        "</strong></span>" +
+        (userText != null ? '<span>You: <strong>' + escapeHtml(userText) + " cm</strong></span>" : "") +
+        (productText != null ? '<span>Garment: <strong>' + escapeHtml(productText) + " cm</strong></span>" : "") +
+        "</div></div>"
+      );
     }
 
     getMeasurementMarkup() {
@@ -1417,6 +1665,10 @@
       const mainImage = this.state.activeImageUrl || this.state.tryOnImageUrl || this.config.product.featuredImage;
       const selectedVariant = this.resolveVariantForSize(this.state.selectedSize) || this.getCurrentVariant();
       const price = selectedVariant && selectedVariant.price ? selectedVariant.price : this.config.product.price;
+      const heatmapSvg = this.renderHeatmapSvg(heatmap);
+      const heatmapLegend = this.renderHeatmapLegend(heatmap);
+      const heatmapTooltip = this.renderHeatmapTooltip(heatmap);
+      const shimmerClass = this.state.isHeatmapLoading ? " is-active" : "";
 
       return (
         '<div class="ovts-stage ovts-stage--results"><button type="button" class="ovts-inline-back is-top" data-action="back-to-measurements">' +
@@ -1437,8 +1689,15 @@
         this.renderShareButton("Snapchat", "#ffdd00") +
         this.renderShareButton("Facebook", "#4267B2") +
         '</div></div></div></section><section class="ovts-heatmap-panel"><div class="ovts-panel-head"><div><h3>Heat Map</h3><span class="ovts-powered">Powered by Optimo 4o</span></div></div><div class="ovts-heatmap-visual"><div class="ovts-heatmap-body"><span class="ovts-heatmap-silhouette"></span><div class="ovts-heatmap-overlay">' +
-        (heatmap && heatmap.svg_overlay ? heatmap.svg_overlay : FALLBACK_HEATMAP) +
-        '</div></div><div class="ovts-heatmap-legend"><span><i class="is-loose"></i>Loose</span><span><i class="is-snug"></i>Snug</span><span><i class="is-tight"></i>Tight</span></div><p>Interactive heat map showing fit on your body.</p></div></section><section class="ovts-fit-panel"><div class="ovts-panel-head"><h3>Select Your Size</h3></div><div class="ovts-size-grid">' +
+        heatmapSvg +
+        "</div>" +
+        heatmapTooltip +
+        '<span class="ovts-heatmap-shimmer' +
+        shimmerClass +
+        '" aria-hidden="true"></span>' +
+        '</div><div class="ovts-heatmap-legend">' +
+        heatmapLegend +
+        '</div><p>Tap a zone to see details.</p></div></section><section class="ovts-fit-panel"><div class="ovts-panel-head"><h3>Select Your Size</h3></div><div class="ovts-size-grid">' +
         visibleSizes
           .map(
             (size) =>

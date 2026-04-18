@@ -1,6 +1,6 @@
 """
 Heatmap Generation API Endpoints
-Generates color-coded fit visualization for body regions
+Generates zone-based fit visualization payloads
 """
 
 import uuid
@@ -14,7 +14,6 @@ from app.core.database import get_db
 from app.models.database import Session, Product, UserMeasurement, SizeChart
 from app.models.schemas import HeatmapGenerateRequest, HeatmapResponse
 from app.services.heatmap_service import HeatmapService
-from app.services.cache_service import CacheService
 
 router = APIRouter(prefix="/heatmap", tags=["Heatmap"])
 logger = logging.getLogger(__name__)
@@ -64,7 +63,7 @@ async def generate_heatmap(
         }
 
     Returns:
-        Heatmap with color-coded body regions, SVG overlay, and fit scores
+        Heatmap with zone deltas and fit labels for frontend SVG rendering
     """
     try:
         # Fetch measurement
@@ -94,42 +93,14 @@ async def generate_heatmap(
             product_id=product.product_id
         ).all()
 
-        # Try to retrieve pose landmarks from cached front image
-        pose_landmarks = None
-        image_shape = None
-
-        try:
-            cache_service = CacheService()
-            front_image = await cache_service.get_measurement_image(
-                str(measurement.measurement_id), "front"
-            )
-
-            if front_image:
-                from app.services.measurement_service import PoseDetector
-                detector = PoseDetector()
-                pose_result = detector.detect(front_image)
-
-                if pose_result:
-                    pose_landmarks = pose_result["landmarks"]
-                    image_shape = pose_result["image_shape"]
-                    logger.info("Using pose landmarks for heatmap overlay mode")
-                else:
-                    logger.info("Pose detection failed, using template mode")
-            else:
-                logger.info("Front image not in cache, using template mode")
-        except Exception as e:
-            logger.warning(f"Landmark retrieval failed ({e}), using template mode")
-
-        # Generate heatmap
+        # Generate zone-based heatmap data
         service = HeatmapService()
         result = service.generate(
-            user_measurements=measurement.measurements,
+            user_measurements=measurement.measurements or {},
             gender=measurement.gender or "unisex",
             category=product.category or "unknown",
             size_name=request.size,
             size_charts_db=size_charts,
-            pose_landmarks=pose_landmarks,
-            image_shape=image_shape,
         )
 
         heatmap_id = uuid.uuid4()
@@ -138,17 +109,15 @@ async def generate_heatmap(
             f"Heatmap generated: {heatmap_id}, "
             f"size={request.size}, "
             f"score={result['overall_fit_score']}, "
-            f"mode={'overlay' if pose_landmarks is not None else 'template'}"
+            f"zones={len(result['zones'])}"
         )
 
         return HeatmapResponse(
             heatmap_id=heatmap_id,
             size=result["size"],
             overall_fit_score=result["overall_fit_score"],
-            regions=result["regions"],
-            svg_overlay=result["svg_overlay"],
+            zones=result["zones"],
             legend=result["legend"],
-            image_dimensions=result.get("image_dimensions"),
         )
 
     except HTTPException:
