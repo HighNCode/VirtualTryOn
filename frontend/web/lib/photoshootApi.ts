@@ -42,6 +42,8 @@ export type OnboardingStatusResponse = {
   onboarding_step: string;
   onboarding_completed: boolean;
   plan_name: string;
+  billing_lock_reason?: string | null;
+  trial_mode?: string | null;
   goals?: string[] | null;
   referral_source?: string | null;
   referral_detail?: string | null;
@@ -65,6 +67,7 @@ export type WidgetScopeResponse = {
 export type ThemeStatusResponse = {
   theme_extension_detected: boolean;
   themes_url: string;
+  add_to_theme_url?: string;
 };
 
 export type DashboardOverviewResponse = {
@@ -76,6 +79,7 @@ export type DashboardOverviewResponse = {
   scope_type: string;
   enabled_collections_count: number;
   enabled_products_count: number;
+  billing_lock_reason?: string | null;
 };
 
 export type TopProductEntry = {
@@ -113,6 +117,9 @@ export type BillingStatusResponse = {
   billing_interval: string | null;
   credits_limit: number;
   trial_ends_at: string | null;
+  trial_mode?: string | null;
+  trial_end_reason?: string | null;
+  billing_lock_reason?: string | null;
   plan_activated_at: string | null;
   shopify_subscription_id: string | null;
   subscription_status: string | null;
@@ -687,6 +694,24 @@ export async function updateThemeStatus(options: {
     body: {
       detected: options.detected
     }
+  });
+}
+
+export async function startIntroFreeTrial(options: {
+  storeId: string;
+}): Promise<OnboardingStepResponse> {
+  return requestJson<OnboardingStepResponse>("/api/v1/merchant/onboarding/start-free-trial", {
+    method: "POST",
+    storeId: options.storeId
+  });
+}
+
+export async function completeOnboardingFromBilling(options: {
+  storeId: string;
+}): Promise<OnboardingStepResponse> {
+  return requestJson<OnboardingStepResponse>("/api/v1/merchant/onboarding/complete-from-billing", {
+    method: "POST",
+    storeId: options.storeId
   });
 }
 

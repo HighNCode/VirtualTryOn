@@ -6,16 +6,19 @@ Generates try-on images using Google Gemini (nano-banana) API
 import uuid
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
+from io import BytesIO
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Depends, Header, BackgroundTasks
 from fastapi.responses import Response
 from sqlalchemy.orm import Session as DBSession
+from PIL import Image
 
 from app.api.store_context import get_public_store
 from app.config import get_settings
 from app.core.database import get_db
+from app.core.redis import get_redis
 from app.models.database import Session, Product, TryOn, PhotoshootModel, Store, WidgetConfig
 from app.models.schemas import (
     TryOnGenerateRequest, TryOnStatusResponse,
@@ -32,6 +35,35 @@ settings = get_settings()
 def _normalize_customer_id(value: Optional[str]) -> Optional[str]:
     candidate = (value or "").strip()
     return candidate or None
+
+
+def _infer_image_media_type(image_bytes: bytes) -> str:
+    """Infer image mime type from magic bytes for reliable browser rendering."""
+    if not image_bytes:
+        return "application/octet-stream"
+    if image_bytes.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if image_bytes.startswith(b"GIF87a") or image_bytes.startswith(b"GIF89a"):
+        return "image/gif"
+    if image_bytes.startswith(b"RIFF") and image_bytes[8:12] == b"WEBP":
+        return "image/webp"
+    return "application/octet-stream"
+
+
+def _is_valid_image_payload(image_bytes: bytes) -> bool:
+    try:
+        img = Image.open(BytesIO(image_bytes))
+        img.verify()
+        return True
+    except Exception:
+        return False
+
+
+def _build_tryon_reuse_key(store_id: str, user_identifier: str, product_id: str, measurement_id: Optional[str]) -> str:
+    measurement_part = measurement_id or "none"
+    return f"user:{store_id}:{user_identifier}:product:{product_id}:measurement:{measurement_part}:latest_tryon"
 
 
 async def get_session_from_header(
@@ -60,6 +92,10 @@ def _run_tryon_generation(
     product_image_url: str,
     product_title: str,
     category: str,
+    store_id: Optional[str] = None,
+    user_identifier: Optional[str] = None,
+    product_id: Optional[str] = None,
+    measurement_id: Optional[str] = None,
     usage_event_id: Optional[str] = None,
 ):
     """
@@ -73,6 +109,14 @@ def _run_tryon_generation(
 
     db = SessionLocal()
     try:
+        logger.info(
+            "Try-on product image input: try_on_id=%s product_id=%s category=%s image_url=%s",
+            try_on_id,
+            product_id,
+            category,
+            product_image_url,
+        )
+
         # Mark as processing
         record = db.query(TryOn).filter_by(try_on_id=try_on_id).first()
         if not record:
@@ -96,10 +140,17 @@ def _run_tryon_generation(
         cache = CacheService()
         import asyncio
         loop = asyncio.new_event_loop()
-        cache_key = loop.run_until_complete(
-            cache.store_tryon_result(str(try_on_id), result_bytes)
-        )
-        loop.close()
+        try:
+            cache_key = loop.run_until_complete(
+                cache.store_tryon_result(str(try_on_id), result_bytes)
+            )
+            cached_bytes = loop.run_until_complete(cache.get_tryon_result(str(try_on_id)))
+            if not cached_bytes:
+                raise RuntimeError(f"Try-on cached payload missing right after write: {try_on_id}")
+            if not _is_valid_image_payload(cached_bytes):
+                raise RuntimeError(f"Try-on cached payload invalid image bytes: {try_on_id}")
+        finally:
+            loop.close()
 
         # Update DB record
         record.processing_status = "completed"
@@ -107,6 +158,19 @@ def _run_tryon_generation(
         record.processing_time_seconds = round(elapsed, 2)
         record.completed_at = datetime.utcnow()
         db.commit()
+
+        if store_id and user_identifier and product_id:
+            try:
+                redis = get_redis()
+                reuse_key = _build_tryon_reuse_key(
+                    store_id=store_id,
+                    user_identifier=user_identifier,
+                    product_id=product_id,
+                    measurement_id=measurement_id,
+                )
+                redis.set(reuse_key, str(try_on_id), settings.TRYON_RESULT_TTL_SECONDS)
+            except Exception:
+                logger.warning("Failed to write try-on reuse key for try_on_id=%s", try_on_id)
 
         if usage_event_id:
             import asyncio
@@ -180,14 +244,21 @@ def _run_studio_generation(
         cache = CacheService()
         import asyncio
         loop = asyncio.new_event_loop()
-        cache_key = loop.run_until_complete(
-            cache.store_tryon_result(str(try_on_id), result_bytes)
-        )
-        # Also cache by parent+background combo (1-hour TTL) for instant re-use
-        loop.run_until_complete(
-            cache.store_studio_result(parent_try_on_id, studio_background_id, result_bytes)
-        )
-        loop.close()
+        try:
+            cache_key = loop.run_until_complete(
+                cache.store_tryon_result(str(try_on_id), result_bytes)
+            )
+            cached_bytes = loop.run_until_complete(cache.get_tryon_result(str(try_on_id)))
+            if not cached_bytes:
+                raise RuntimeError(f"Studio try-on cached payload missing right after write: {try_on_id}")
+            if not _is_valid_image_payload(cached_bytes):
+                raise RuntimeError(f"Studio try-on cached payload invalid image bytes: {try_on_id}")
+            # Also cache by parent+background combo (1-hour TTL) for instant re-use
+            loop.run_until_complete(
+                cache.store_studio_result(parent_try_on_id, studio_background_id, result_bytes)
+            )
+        finally:
+            loop.close()
 
         record.processing_status = "completed"
         record.result_cache_key = cache_key
@@ -474,8 +545,72 @@ async def generate_tryon(
         if str(product.store_id) != str(session.store_id):
             raise HTTPException(403, "Product does not belong to this store")
 
-        # Get person's front image from session cache
         cache = CacheService()
+        redis = get_redis()
+        reuse_ttl = settings.TRYON_RESULT_TTL_SECONDS
+        reuse_cutoff = datetime.utcnow() - timedelta(seconds=reuse_ttl)
+
+        # Fast path: user+product reuse key
+        if session.user_identifier:
+            reuse_key = _build_tryon_reuse_key(
+                store_id=str(session.store_id),
+                user_identifier=session.user_identifier,
+                product_id=str(product.product_id),
+                measurement_id=str(session.measurement_id) if session.measurement_id else None,
+            )
+            existing_tryon_id = redis.get(reuse_key)
+            if isinstance(existing_tryon_id, bytes):
+                existing_tryon_id = existing_tryon_id.decode("utf-8")
+            if existing_tryon_id:
+                existing = db.query(TryOn).filter_by(try_on_id=existing_tryon_id).first()
+                if (
+                    existing
+                    and existing.processing_status == "completed"
+                    and str(existing.product_id) == str(product.product_id)
+                    and str(existing.measurement_id) == str(session.measurement_id)
+                    and existing.created_at
+                    and existing.created_at >= reuse_cutoff
+                ):
+                    cached_payload = await cache.get_tryon_result(str(existing.try_on_id))
+                    if cached_payload:
+                        return {
+                            "try_on_id": str(existing.try_on_id),
+                            "status": "completed",
+                            "result_image_url": f"/api/v1/tryon/{existing.try_on_id}/image",
+                            "reused": True,
+                        }
+
+        # Fallback: same measurement+product reuse
+        if session.measurement_id:
+            existing = (
+                db.query(TryOn)
+                .filter_by(
+                    measurement_id=session.measurement_id,
+                    product_id=product.product_id,
+                    processing_status="completed",
+                )
+                .order_by(TryOn.created_at.desc())
+                .first()
+            )
+            if existing and existing.created_at and existing.created_at >= reuse_cutoff:
+                cached_payload = await cache.get_tryon_result(str(existing.try_on_id))
+                if cached_payload:
+                    if session.user_identifier:
+                        reuse_key = _build_tryon_reuse_key(
+                            store_id=str(session.store_id),
+                            user_identifier=session.user_identifier,
+                            product_id=str(product.product_id),
+                            measurement_id=str(session.measurement_id) if session.measurement_id else None,
+                        )
+                        redis.set(reuse_key, str(existing.try_on_id), reuse_ttl)
+                    return {
+                        "try_on_id": str(existing.try_on_id),
+                        "status": "completed",
+                        "result_image_url": f"/api/v1/tryon/{existing.try_on_id}/image",
+                        "reused": True,
+                    }
+
+        # Get person's front image from session cache
         person_image = await cache.get_image(str(session.session_id), "front")
 
         if not person_image:
@@ -491,6 +626,12 @@ async def generate_tryon(
             raise HTTPException(422, "Product has no images")
         first = product_images[0]
         product_image_url = first.get("src") if isinstance(first, dict) else first.src
+        logger.info(
+            "Selected product image for try-on: product_id=%s category=%s image_url=%s",
+            product.product_id,
+            product.category or "tops",
+            product_image_url,
+        )
 
         store = db.query(Store).filter_by(store_id=session.store_id).first()
         if not store:
@@ -514,6 +655,7 @@ async def generate_tryon(
         try_on_id = uuid.uuid4()
         tryon_record = TryOn(
             try_on_id=try_on_id,
+            measurement_id=session.measurement_id,
             product_id=product.product_id,
             processing_status="queued",
         )
@@ -528,6 +670,10 @@ async def generate_tryon(
             product_image_url=product_image_url,
             product_title=product.title or "garment",
             category=product.category or "tops",
+            store_id=str(session.store_id),
+            user_identifier=session.user_identifier,
+            product_id=str(product.product_id),
+            measurement_id=str(session.measurement_id) if session.measurement_id else None,
             usage_event_id=usage_event_id,
         )
 
@@ -537,6 +683,7 @@ async def generate_tryon(
             "try_on_id": str(try_on_id),
             "status": "processing",
             "estimated_time_seconds": 45,
+            "reused": False,
         }
 
     except HTTPException:
@@ -586,12 +733,20 @@ async def get_tryon_status(
         progress = 50
         message = "Generating virtual try-on image..."
     elif status == "completed":
-        progress = 100
-        message = "Try-on image ready"
-        result_image_url = f"/api/v1/tryon/{try_on_id}/image"
-        if record.completed_at:
-            from datetime import timedelta
-            cache_expires_at = record.completed_at + timedelta(hours=24)
+        cache = CacheService()
+        cached = await cache.get_tryon_result(str(try_on_id))
+        if not cached:
+            record.processing_status = "failed"
+            record.error_message = "Generated image expired or missing from cache. Please regenerate."
+            db.commit()
+            status = "failed"
+            message = record.error_message
+        else:
+            progress = 100
+            message = "Try-on image ready"
+            result_image_url = f"/api/v1/tryon/{try_on_id}/image"
+            if record.completed_at:
+                cache_expires_at = record.completed_at + timedelta(seconds=settings.TRYON_RESULT_TTL_SECONDS)
     elif status == "failed":
         message = record.error_message or "Image generation failed"
 
@@ -625,5 +780,13 @@ async def get_tryon_image(try_on_id: str, db: DBSession = Depends(get_db)):
 
     if not image_bytes:
         raise HTTPException(410, "Try-on image has expired from cache")
+    if not _is_valid_image_payload(image_bytes):
+        logger.error("Cached try-on payload is not a valid image for try_on_id=%s", try_on_id)
+        raise HTTPException(500, "Cached try-on payload is invalid. Please generate again.")
 
-    return Response(content=image_bytes, media_type="image/png")
+    media_type = _infer_image_media_type(image_bytes)
+    return Response(
+        content=image_bytes,
+        media_type=media_type,
+        headers={"Content-Disposition": f'inline; filename="{try_on_id}.jpg"'},
+    )

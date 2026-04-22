@@ -10,6 +10,7 @@ with header fallbacks for the current embedded-app migration state.
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.security import HTTPAuthorizationCredentials
@@ -53,12 +54,20 @@ from app.models.schemas import (
 )
 from app.api.v1.sessions import create_or_resume_session_for_product
 from app.services.shopify_service import ShopifyService
+from app.services.customer_login_policy import (
+    customer_login_required_message,
+    is_customer_logged_in,
+    requires_customer_login,
+)
 from app.services.usage_governance_service import UsageGovernanceService
 
 logger = logging.getLogger(__name__)
 
 merchant_router = APIRouter(prefix="/merchant", tags=["Merchant"])
 widget_router = APIRouter(prefix="/widget", tags=["Widget"])
+
+INTRO_TRIAL_DAYS = 14
+INTRO_TRIAL_CREDITS = 80
 
 
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -76,6 +85,57 @@ def _normalize_shopify_product_gid(value: str) -> str:
     return normalized
 
 
+def _build_theme_editor_urls(shop_domain: str) -> tuple[str, str]:
+    """
+    Build valid Shopify Admin theme editor URLs.
+
+    - theme_editor_url: generic editor entry
+    - add_to_theme_url: editor deep link that opens product template and preps app block add flow
+    """
+    theme_editor_url = f"https://{shop_domain}/admin/themes/current/editor"
+
+    api_key = (get_settings().SHOPIFY_API_KEY or "").strip()
+    block_handle = "optimo_vts_widget"
+    if not api_key:
+        return theme_editor_url, theme_editor_url
+
+    query = urlencode(
+        {
+            "template": "product",
+            "addAppBlockId": f"{api_key}/{block_handle}",
+            "target": "mainSection",
+        }
+    )
+    add_to_theme_url = f"{theme_editor_url}?{query}"
+    return theme_editor_url, add_to_theme_url
+
+
+def _sync_billing_lock_flags(store: Store) -> None:
+    """
+    Keep billing lock fields consistent with current trial state.
+    """
+    now = datetime.utcnow()
+
+    if store.trial_mode == "intro_free":
+        if store.trial_ends_at and store.trial_ends_at < now and not store.billing_lock_reason:
+            store.billing_lock_reason = "trial_expired"
+            if not store.trial_end_reason:
+                store.trial_end_reason = "time_expired"
+        return
+
+    # Paid plans and non-intro states should not retain intro lock flags.
+    if store.billing_lock_reason in {"trial_expired", "trial_credits_exhausted"}:
+        store.billing_lock_reason = None
+
+
+def _billing_lock_message(lock_reason: Optional[str]) -> Optional[str]:
+    if lock_reason == "trial_expired":
+        return "Trial ended. Select a plan to re-enable widget and customer try-ons."
+    if lock_reason == "trial_credits_exhausted":
+        return "Trial credits are exhausted. Select a plan to re-enable widget and customer try-ons."
+    return None
+
+
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Onboarding â€” Status
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -83,13 +143,30 @@ def _normalize_shopify_product_gid(value: str) -> str:
 @merchant_router.get("/onboarding/status", response_model=OnboardingStatusResponse)
 def get_onboarding_status(
     store: Store = Depends(get_current_merchant_store),
+    db: DBSession = Depends(get_db),
 ):
     """
     Return the full onboarding state for the store.
     Called on every app load so the Remix frontend can route to the correct step.
     """
     ob = store.onboarding
+    _sync_billing_lock_flags(store)
     wc = store.widget_config
+
+    # Auto-heal stale onboarding records where billing is already active.
+    if (
+        store.onboarding_step == "plan"
+        and not store.billing_lock_reason
+        and (
+            bool(store.plan_shopify_subscription_id)
+            or store.plan_name in {"free_trial", "founding_trial", "starter", "growth", "professional", "scale"}
+        )
+    ):
+        store.onboarding_step = "complete"
+        if store.onboarding_completed_at is None:
+            store.onboarding_completed_at = datetime.utcnow()
+
+    db.commit()
 
     return OnboardingStatusResponse(
         store_id=store.store_id,
@@ -103,6 +180,8 @@ def get_onboarding_status(
         enabled_collection_ids=wc.enabled_collection_ids if wc else None,
         enabled_product_ids=wc.enabled_product_ids if wc else None,
         theme_extension_detected=wc.theme_extension_detected if wc else False,
+        billing_lock_reason=store.billing_lock_reason,
+        trial_mode=store.trial_mode,
     )
 
 
@@ -231,12 +310,16 @@ def save_widget_scope(
 def get_theme_status(store: Store = Depends(get_current_merchant_store)):
     """
     Return whether the theme app extension block has been detected.
-    Also returns a link to the merchant's Themes admin page.
+    Also returns links to the merchant's theme editor and add-to-theme deep link.
     """
     wc = store.widget_config
     detected = wc.theme_extension_detected if wc else False
-    themes_url = f"https://{store.shopify_domain}/admin/online-store/themes"
-    return ThemeStatusResponse(theme_extension_detected=detected, themes_url=themes_url)
+    theme_editor_url, add_to_theme_url = _build_theme_editor_urls(store.shopify_domain)
+    return ThemeStatusResponse(
+        theme_extension_detected=detected,
+        themes_url=theme_editor_url,
+        add_to_theme_url=add_to_theme_url,
+    )
 
 
 @merchant_router.post("/onboarding/theme-status", response_model=OnboardingStepResponse)
@@ -275,8 +358,15 @@ def update_theme_status(
     if qualifies:
         store.is_founding_merchant = True
         store.plan_name = "founding_trial"
+        store.trial_mode = "intro_free"
+        store.has_used_intro_trial = True
+        store.trial_end_reason = None
+        store.billing_lock_reason = None
         store.credits_limit = settings.FOUNDING_MERCHANT_CREDITS
         store.trial_ends_at = datetime.utcnow() + timedelta(days=settings.FOUNDING_MERCHANT_TRIAL_DAYS)
+        store.plan_shopify_subscription_id = None
+        store.plan_activated_at = datetime.utcnow()
+        store.billing_interval = None
         store.onboarding_step = "complete"
         store.onboarding_completed_at = datetime.utcnow()
         db.commit()
@@ -291,6 +381,69 @@ def update_theme_status(
     db.commit()
     logger.info(f"Theme status updated for store {store.store_id}: detected={body.detected}")
     return OnboardingStepResponse(saved=True, next_step="plan")
+
+
+@merchant_router.post("/onboarding/start-free-trial", response_model=OnboardingStepResponse)
+def start_intro_free_trial(
+    store: Store = Depends(get_current_merchant_store),
+    db: DBSession = Depends(get_db),
+):
+    """
+    Step 7 option: start 14-day / 80-credit free intro trial with no Shopify billing approval.
+    """
+    if store.plan_shopify_subscription_id:
+        raise HTTPException(409, "A paid subscription is already active for this store.")
+
+    if store.has_used_intro_trial and store.plan_name not in {"free_trial", "founding_trial"}:
+        raise HTTPException(409, "Intro trial has already been used for this store.")
+
+    store.plan_name = "free_trial"
+    store.trial_mode = "intro_free"
+    store.has_used_intro_trial = True
+    store.trial_end_reason = None
+    store.billing_lock_reason = None
+    store.credits_limit = INTRO_TRIAL_CREDITS
+    store.trial_ends_at = datetime.utcnow() + timedelta(days=INTRO_TRIAL_DAYS)
+    store.plan_shopify_subscription_id = None
+    store.plan_activated_at = datetime.utcnow()
+    store.billing_interval = None
+    store.subscription_status = None
+    store.has_usage_billing = False
+    store.usage_line_item_id = None
+    store.onboarding_step = "complete"
+    if store.onboarding_completed_at is None:
+        store.onboarding_completed_at = datetime.utcnow()
+
+    db.commit()
+    logger.info("Intro free trial started for store %s", store.store_id)
+    return OnboardingStepResponse(saved=True, next_step="complete")
+
+
+@merchant_router.post("/onboarding/complete-from-billing", response_model=OnboardingStepResponse)
+def complete_onboarding_from_billing(
+    store: Store = Depends(get_current_merchant_store),
+    db: DBSession = Depends(get_db),
+):
+    """
+    Idempotent completion endpoint for Step 7 actions like:
+    - Current Plan
+    - Continue with current setup
+    """
+    _sync_billing_lock_flags(store)
+    if store.billing_lock_reason:
+        db.commit()
+        raise HTTPException(409, _billing_lock_message(store.billing_lock_reason) or "Billing is locked.")
+
+    is_eligible = bool(store.plan_shopify_subscription_id) or store.plan_name in {"founding_trial", "free_trial"}
+    if not is_eligible:
+        db.commit()
+        raise HTTPException(409, "Complete billing selection first to finish onboarding.")
+
+    store.onboarding_step = "complete"
+    if store.onboarding_completed_at is None:
+        store.onboarding_completed_at = datetime.utcnow()
+    db.commit()
+    return OnboardingStepResponse(saved=True, next_step="complete")
 
 
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -320,7 +473,10 @@ def activate_billing(
 
     plan = _get_plan_or_404(body.plan_name, db)
 
+    previous_plan_name = store.plan_name
+    previous_trial_mode = store.trial_mode
     full_credits = plan.credits_monthly if body.billing_interval == "monthly" else plan.credits_annual
+    applied_trial_days = 0 if store.has_used_intro_trial else int(plan.trial_days or 0)
 
     store.plan_name = body.plan_name
     store.plan_shopify_subscription_id = body.shopify_subscription_id
@@ -332,16 +488,25 @@ def activate_billing(
     store.usage_line_item_id = None
     store.billing_cycle_start_at = None
     store.billing_cycle_end_at = None
-    if plan.trial_days:
+    if applied_trial_days > 0:
         # Trial is always applied. During trial, grant trial_credits (80); full credits after.
         store.credits_limit = plan.trial_credits if plan.trial_credits else full_credits
-        store.trial_ends_at = datetime.utcnow() + timedelta(days=plan.trial_days)
+        store.trial_ends_at = datetime.utcnow() + timedelta(days=applied_trial_days)
+        store.trial_mode = "plan_trial"
+        store.trial_end_reason = None
     else:
         store.credits_limit = full_credits
         store.trial_ends_at = None
+        store.trial_mode = "none"
+        if previous_trial_mode == "intro_free":
+            store.trial_end_reason = "converted_to_plan"
 
+    if previous_plan_name in {"free_trial", "founding_trial"}:
+        store.trial_end_reason = "converted_to_plan"
+    store.billing_lock_reason = None
+
+    store.onboarding_step = "complete"
     if store.onboarding_completed_at is None:
-        store.onboarding_step = "complete"
         store.onboarding_completed_at = datetime.utcnow()
 
     db.commit()
@@ -418,6 +583,7 @@ async def get_billing_status(
     - If the trial has expired and Shopify confirms ACTIVE status, the store is
       automatically upgraded to full plan credits (lazy upgrade, no webhook needed).
     """
+    _sync_billing_lock_flags(store)
     shopify_status = None
     if store.plan_shopify_subscription_id:
         try:
@@ -465,6 +631,10 @@ async def get_billing_status(
             )
             store.credits_limit = full_credits
             store.trial_ends_at = None
+            if store.trial_mode == "plan_trial":
+                store.trial_mode = "none"
+                if not store.trial_end_reason:
+                    store.trial_end_reason = "time_expired"
 
     db.commit()
 
@@ -480,6 +650,9 @@ async def get_billing_status(
         is_test_subscription=(shopify_status or {}).get("test"),
         has_usage_billing=store.has_usage_billing,
         store_timezone=store.store_timezone,
+        trial_mode=store.trial_mode,
+        trial_end_reason=store.trial_end_reason,
+        billing_lock_reason=store.billing_lock_reason,
     )
 
 
@@ -524,7 +697,7 @@ async def create_subscription(
         raise HTTPException(409, f"Store is already on '{body.plan_name}' ({body.billing_interval})")
 
     price = float(plan.price_monthly if body.billing_interval == "monthly" else plan.price_annual_total)
-    trial_days = plan.trial_days or 0  # Trial is always applied
+    trial_days = 0 if store.has_used_intro_trial else int(plan.trial_days or 0)
 
     settings = get_settings()
     is_test = settings.APP_ENV == "development"
@@ -591,6 +764,9 @@ async def cancel_subscription(
     store.credits_limit = 0
     store.billing_interval = None
     store.trial_ends_at = None
+    store.trial_mode = "none"
+    store.trial_end_reason = "manual"
+    store.billing_lock_reason = None
     store.plan_shopify_subscription_id = None
     store.plan_activated_at = None
     store.subscription_status = "CANCELLED"
@@ -629,7 +805,7 @@ def get_dashboard_overview(
 
     # â”€â”€ Section 1: theme detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     theme_detected = wc.theme_extension_detected if wc else False
-    themes_url = f"https://{store.shopify_domain}/admin/online-store/themes"
+    themes_url, _ = _build_theme_editor_urls(store.shopify_domain)
 
     # â”€â”€ Section 2: try-on usage (rolling 30 days) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     thirty_days_ago = datetime.utcnow() - timedelta(days=30)
@@ -658,6 +834,7 @@ def get_dashboard_overview(
         scope_type=scope_type,
         enabled_collections_count=enabled_collections_count,
         enabled_products_count=enabled_products_count,
+        billing_lock_reason=store.billing_lock_reason,
     )
 
 
@@ -751,7 +928,9 @@ def update_widget_config(
 @widget_router.get("/check-enabled", response_model=WidgetCheckResponse)
 def check_widget_enabled(
     shopify_product_gid: str = Query(..., description="Shopify product GID, e.g. gid://shopify/Product/123"),
+    x_logged_in_customer_id: Optional[str] = Header(None, alias="X-Logged-In-Customer-Id"),
     store: Store = Depends(get_public_store),
+    db: DBSession = Depends(get_db),
 ):
     """
     Called by the storefront widget to decide whether to render the try-on button.
@@ -763,35 +942,93 @@ def check_widget_enabled(
     - 'selected_collections'  â†’ enabled=true (collection membership check deferred to Remix layer)
     - no config yet           â†’ enabled=true (default open)
 
-    Billing gate: widget is disabled for founding merchants whose trial has expired.
+    Billing gate: widget is disabled whenever billing lock is active
+    (expired/exhausted intro or founding trial).
     """
-    # â”€â”€ Billing gate: founding trial expired â†’ widget disabled â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    if (
-        store.plan_name == "founding_trial"
-        and store.trial_ends_at
-        and store.trial_ends_at < datetime.utcnow()
-    ):
-        return WidgetCheckResponse(enabled=False)
+    customer_logged_in = is_customer_logged_in(x_logged_in_customer_id)
+    login_required = requires_customer_login(store)
+    login_message = customer_login_required_message() if login_required else None
+
+    lock_before = store.billing_lock_reason
+    trial_end_before = store.trial_end_reason
+    _sync_billing_lock_flags(store)
+    if lock_before != store.billing_lock_reason or trial_end_before != store.trial_end_reason:
+        db.commit()
+    if store.billing_lock_reason:
+        return WidgetCheckResponse(
+            enabled=False,
+            customer_login_required=login_required,
+            customer_logged_in=customer_logged_in,
+            login_message=login_message,
+        )
     # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     normalized_gid = _normalize_shopify_product_gid(shopify_product_gid)
     wc = store.widget_config
     if wc is None or wc.scope_type == "all":
-        return WidgetCheckResponse(enabled=True)
+        return WidgetCheckResponse(
+            enabled=True,
+            customer_login_required=login_required,
+            customer_logged_in=customer_logged_in,
+            login_message=login_message,
+        )
 
     if wc.scope_type == "selected_products":
         ids = wc.enabled_product_ids
         enabled = bool(ids) and normalized_gid in ids
-        return WidgetCheckResponse(enabled=enabled)
+        return WidgetCheckResponse(
+            enabled=enabled,
+            customer_login_required=login_required,
+            customer_logged_in=customer_logged_in,
+            login_message=login_message,
+        )
 
     if wc.scope_type == "mixed":
         product_ids = wc.enabled_product_ids or []
         enabled = (not product_ids) or (normalized_gid in product_ids)
-        return WidgetCheckResponse(enabled=enabled)
+        return WidgetCheckResponse(
+            enabled=enabled,
+            customer_login_required=login_required,
+            customer_logged_in=customer_logged_in,
+            login_message=login_message,
+        )
 
     # 'selected_collections' â€” collection membership requires Shopify Admin API
     # (only available in Remix). Return true and let the Remix layer filter further.
-    return WidgetCheckResponse(enabled=True)
+    return WidgetCheckResponse(
+        enabled=True,
+        customer_login_required=login_required,
+        customer_logged_in=customer_logged_in,
+        login_message=login_message,
+    )
+
+
+@widget_router.post("/theme-detected")
+def mark_theme_extension_detected(
+    store: Store = Depends(get_public_store),
+    db: DBSession = Depends(get_db),
+):
+    """
+    Mark theme extension as detected from storefront/theme-editor runtime.
+
+    The app block script pings this endpoint when it loads in Shopify design mode.
+    """
+    lock_before = store.billing_lock_reason
+    trial_end_before = store.trial_end_reason
+    _sync_billing_lock_flags(store)
+    if lock_before != store.billing_lock_reason or trial_end_before != store.trial_end_reason:
+        db.commit()
+    wc = store.widget_config
+    if wc is None:
+        wc = WidgetConfig(store_id=store.store_id)
+        db.add(wc)
+
+    if not wc.theme_extension_detected:
+        wc.theme_extension_detected = True
+        logger.info("Theme extension runtime detection set for store %s", store.store_id)
+
+    db.commit()
+    return {"detected": True}
 
 
 @widget_router.post("/sessions", response_model=SessionResponse)

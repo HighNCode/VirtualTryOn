@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { EmbeddedLink } from "../_components/EmbeddedNavigation";
+import { EmbeddedLink, useEmbeddedRouter } from "../_components/EmbeddedNavigation";
 import PortalSidebar from "../_components/PortalSidebar";
 import {
   getBillingStatus,
@@ -21,6 +21,7 @@ function clampPercent(value: number): number {
 }
 
 export default function DashboardPage() {
+  const router = useEmbeddedRouter();
   const storeId = useMemo(() => getDefaultStoreId(), []);
   const [overview, setOverview] = useState<DashboardOverviewResponse | null>(null);
   const [billingStatus, setBillingStatus] = useState<BillingStatusResponse | null>(null);
@@ -45,6 +46,10 @@ export default function DashboardPage() {
     ])
       .then(([overviewData, billingData, usageData]) => {
         if (active) {
+          if (overviewData.billing_lock_reason || billingData.billing_lock_reason) {
+            router.replace("/settings/billing");
+            return;
+          }
           setOverview(overviewData);
           setBillingStatus(billingData);
           setUsageSummary(usageData);
@@ -68,7 +73,7 @@ export default function DashboardPage() {
       active = false;
       controller.abort();
     };
-  }, [storeId]);
+  }, [router, storeId]);
 
   const includedUsed = usageSummary?.consumed_credits ?? 0;
   const includedLimit = usageSummary?.included_credits ?? 0;

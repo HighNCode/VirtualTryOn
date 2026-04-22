@@ -6,6 +6,7 @@ Generates zone-based fit data for frontend SVG rendering.
 from typing import Dict, Optional
 
 from app.data.size_standards import get_standard_size_charts
+from app.services.size_matcher import SizeMatcher
 
 FIT_COLORS = {
     "tight": "#C04020",
@@ -15,27 +16,64 @@ FIT_COLORS = {
     "very_loose": "#1A5FAA",
 }
 
-MEASUREMENT_TO_ZONE = {
-    "shoulder_width": "shoulders",
-    "chest": "chest",
-    "waist": "waist",
-    "hip": "hips",
-    "neck": "neck",
-    "arm_length": "sleeves",
-    "thigh": "thigh",
-    "calf": "calf",
-    "ankle": "ankle",
-}
+ALL_MEASUREMENT_KEYS = [
+    "height",
+    "shoulder_width",
+    "arm_length",
+    "torso_length",
+    "inseam",
+    "chest",
+    "waist",
+    "hip",
+    "neck",
+    "thigh",
+    "upper_arm",
+    "wrist",
+    "calf",
+    "ankle",
+    "bicep",
+]
 
-CATEGORY_ZONES = {
-    "tops": ["shoulders", "chest", "waist", "neck", "sleeves"],
-    "bottoms": ["waist", "hips", "thigh", "calf", "ankle"],
-    "dresses": ["shoulders", "chest", "waist", "hips"],
-    "outerwear": ["shoulders", "chest", "sleeves"],
-    "unknown": ["chest", "waist", "hips"],
+CATEGORY_MEASUREMENTS = {
+    "tops": [
+        "neck",
+        "shoulder_width",
+        "chest",
+        "torso_length",
+        "waist",
+        "arm_length",
+        "upper_arm",
+        "bicep",
+        "wrist",
+    ],
+    "outerwear": [
+        "neck",
+        "shoulder_width",
+        "chest",
+        "torso_length",
+        "waist",
+        "arm_length",
+        "upper_arm",
+        "bicep",
+        "wrist",
+    ],
+    "bottoms": ["waist", "hip", "thigh", "calf", "ankle", "inseam"],
+    "dresses": [
+        "neck",
+        "shoulder_width",
+        "chest",
+        "torso_length",
+        "waist",
+        "hip",
+        "upper_arm",
+        "bicep",
+        "wrist",
+        "thigh",
+        "calf",
+        "ankle",
+    ],
+    "unknown": ALL_MEASUREMENT_KEYS,
 }
-
-ZONE_TO_MEASUREMENT = {v: k for k, v in MEASUREMENT_TO_ZONE.items()}
 
 
 class HeatmapService:
@@ -57,17 +95,13 @@ class HeatmapService:
         if not isinstance(user_measurements, dict):
             user_measurements = {}
 
-        category_key = category if category in CATEGORY_ZONES else "unknown"
-        zones_to_render = CATEGORY_ZONES[category_key]
+        normalized_category = (category or "").strip().lower()
+        category_key = normalized_category if normalized_category in CATEGORY_MEASUREMENTS else "unknown"
+        measurements_to_render = CATEGORY_MEASUREMENTS[category_key]
 
         zones = {}
-        scores = []
-
-        for zone in zones_to_render:
-            measurement_name = ZONE_TO_MEASUREMENT.get(zone)
-            if not measurement_name:
-                continue
-
+        matcher = SizeMatcher()
+        for measurement_name in measurements_to_render:
             user_val = user_measurements.get(measurement_name)
             size_range = size_data.get(measurement_name)
             if user_val is None or size_range is None:
@@ -87,10 +121,11 @@ class HeatmapService:
 
             product_val = round((min_num + max_num) / 2, 1)
             delta = round(product_val - user_num, 1)
-            fit_label = self._classify_fit_label(delta)
-            fit_score = self._score_from_delta(delta)
+            metric_score, metric_status, metric_difference = matcher._region_score(user_num, min_num, max_num)
+            fit_label = self._fit_label_from_status(metric_status, metric_difference)
+            fit_score = max(20, min(100, round(metric_score)))
 
-            zones[zone] = {
+            zones[measurement_name] = {
                 "delta_cm": delta,
                 "user_cm": round(user_num, 1),
                 "product_cm": product_val,
@@ -98,16 +133,26 @@ class HeatmapService:
                 "fit_score": fit_score,
                 "color": FIT_COLORS[fit_label],
             }
-            scores.append(fit_score)
 
         if not zones:
             raise ValueError("Could not compute fit for any body zone")
 
-        overall_fit_score = round(sum(scores) / len(scores))
+        canonical = SizeMatcher().score_single_size(
+            user_measurements=user_measurements,
+            category=category_key,
+            size_measurements=size_data,
+        )
+        overall_fit_score = canonical.get("score")
+        canonical_coverage = canonical.get("coverage", {}) or {}
+        zone_deltas = {zone_name: zone_payload["delta_cm"] for zone_name, zone_payload in zones.items()}
         return {
             "size": size_name,
+            "category": category_key,
             "overall_fit_score": overall_fit_score,
             "zones": zones,
+            "zone_deltas": zone_deltas,
+            "coverage_available": int(canonical_coverage.get("used_measurements") or len(zones)),
+            "coverage_total": int(canonical_coverage.get("expected_measurements") or len(ALL_MEASUREMENT_KEYS)),
             "legend": FIT_COLORS,
         }
 
@@ -127,27 +172,17 @@ class HeatmapService:
         return standard.get(size_name)
 
     @staticmethod
-    def _classify_fit_label(delta: float) -> str:
-        if delta < -3.5:
-            return "tight"
-        if delta < -1.0:
-            return "snug"
-        if delta <= 1.5:
+    def _fit_label_from_status(status: str, difference: float) -> str:
+        if status == "perfect_fit":
             return "perfect"
-        if delta <= 3.5:
+        if status == "good_fit":
+            return "snug" if difference > 0 else "loose"
+        if status == "slightly_tight":
+            return "snug"
+        if status == "slightly_loose":
             return "loose"
-        return "very_loose"
-
-    @staticmethod
-    def _score_from_delta(delta: float) -> int:
-        abs_delta = abs(delta)
-        if abs_delta <= 1.5:
-            score = 100 - (abs_delta / 1.5) * 10
-        elif abs_delta <= 3.5:
-            score = 90 - ((abs_delta - 1.5) / 2.0) * 20
-        elif abs_delta <= 6.0:
-            score = 70 - ((abs_delta - 3.5) / 2.5) * 25
-        else:
-            score = 45 - (abs_delta - 6.0) * 5
-
-        return max(20, min(100, round(score)))
+        if status == "too_tight":
+            return "tight"
+        if status == "too_loose":
+            return "very_loose"
+        return "perfect"

@@ -29,7 +29,14 @@ class Settings(BaseSettings):
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
     REDIS_MAX_CONNECTIONS: int = 50
-    IMAGE_CACHE_TTL: int = 86400  # 24 hours
+    # Deprecated compatibility key (kept to avoid env breakage in older setups)
+    IMAGE_CACHE_TTL: int = 86400
+    # Photos/front-side images in Redis
+    PHOTO_CACHE_TTL_SECONDS: int = 3600  # 1 hour
+    # Returning-user mapping and profile/measurement pointer cache
+    MEASUREMENT_CACHE_TTL_SECONDS: int = 86400  # 24 hours
+    # Generated try-on and studio results in Redis
+    TRYON_RESULT_TTL_SECONDS: int = 3600  # 1 hour
     STUDIO_CACHE_TTL: int = 3600  # 1 hour for studio look results
     SESSION_TTL: int = 86400  # 24 hours
 

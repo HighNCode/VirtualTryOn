@@ -125,6 +125,9 @@ class SessionResponse(BaseModel):
     has_existing_measurements: bool = False
     measurement_id: Optional[UUID] = None
     measurements: Optional[Dict[str, float]] = None
+    height_cm: Optional[float] = None
+    weight_kg: Optional[float] = None
+    gender: Optional[str] = None
     photos_available: bool = False
     cached_until: Optional[datetime] = None
     expires_at: datetime
@@ -194,6 +197,9 @@ class SizeRecommendationResponse(BaseModel):
     fit_analysis: Dict[str, FitAnalysis]
     alternative_sizes: List[AlternativeSize]
     all_sizes: List[str]
+    size_scores: Dict[str, Optional[int]] = Field(default_factory=dict)
+    coverage_by_size: Dict[str, Dict[str, float]] = Field(default_factory=dict)
+    score_model_version: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -224,8 +230,12 @@ class HeatmapResponse(BaseModel):
     """Heatmap generation response"""
     heatmap_id: UUID
     size: str
-    overall_fit_score: int
+    category: str = "unknown"
+    overall_fit_score: Optional[int] = None
     zones: Dict[str, HeatmapZone]
+    zone_deltas: Dict[str, float] = Field(default_factory=dict)
+    coverage_available: int = 0
+    coverage_total: int = 15
     legend: Dict[str, str]
 
 
@@ -323,6 +333,8 @@ class OnboardingStatusResponse(BaseModel):
     enabled_collection_ids: Optional[List[str]] = None
     enabled_product_ids: Optional[List[str]] = None
     theme_extension_detected: bool = False
+    billing_lock_reason: Optional[str] = None
+    trial_mode: Optional[str] = None
 
 
 class GoalsRequest(BaseModel):
@@ -360,6 +372,7 @@ class ThemeStatusResponse(BaseModel):
     """Step 5: whether the theme extension block has been detected"""
     theme_extension_detected: bool
     themes_url: str
+    add_to_theme_url: str
 
 
 class ThemeStatusUpdateRequest(BaseModel):
@@ -387,6 +400,9 @@ class PlanResponse(BaseModel):
 class WidgetCheckResponse(BaseModel):
     """Whether the widget should be shown for a given product"""
     enabled: bool
+    customer_login_required: bool = False
+    customer_logged_in: bool = False
+    login_message: Optional[str] = None
 
 
 class WidgetSessionCreateRequest(BaseModel):
@@ -408,6 +424,7 @@ class DashboardOverviewResponse(BaseModel):
     scope_type: str
     enabled_collections_count: int
     enabled_products_count: int
+    billing_lock_reason: Optional[str] = None
 
 
 class WidgetConfigResponse(BaseModel):
@@ -487,6 +504,9 @@ class BillingStatusResponse(BaseModel):
     is_test_subscription: Optional[bool] = None
     has_usage_billing: bool = False
     store_timezone: Optional[str] = None
+    trial_mode: Optional[str] = None
+    trial_end_reason: Optional[str] = None
+    billing_lock_reason: Optional[str] = None
 
 
 class BillingUsageSummaryResponse(BaseModel):

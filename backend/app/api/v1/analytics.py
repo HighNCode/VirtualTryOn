@@ -43,6 +43,8 @@ VALID_EVENT_TYPES: Set[str] = {
     "try_on_viewed",
     "size_selected",
     "added_to_cart",
+    # Non-funnel diagnostics from widget-side resilience handlers.
+    "result_image_load_failed",
 }
 
 # ─────────────────────────────────────────────────────────────

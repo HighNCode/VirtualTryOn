@@ -425,8 +425,10 @@ class ShopifyService:
                 {
                     "plan": {
                         "appRecurringPricingDetails": {
-                            "amount": price_usd,
-                            "currencyCode": "USD",
+                            "price": {
+                                "amount": price_usd,
+                                "currencyCode": "USD",
+                            },
                             "interval": shopify_interval,
                         }
                     }
