@@ -1,4 +1,4 @@
-﻿"""
+"""
 Merchant Admin Endpoints
 Covers the 6-step onboarding wizard, billing plan management, and the
 widget check-enabled endpoint consumed by the storefront widget.
@@ -8,11 +8,12 @@ with header fallbacks for the current embedded-app migration state.
 """
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import List, Optional
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import func
 from sqlalchemy.orm import Session as DBSession
@@ -26,7 +27,15 @@ from app.api.store_context import (
 from app.core.database import get_db
 from app.core.security import _bearer_scheme
 from app.config import get_settings
-from app.models.database import Store, MerchantOnboarding, WidgetConfig, TryOn, Product, Plan
+from app.models.database import (
+    Store,
+    MerchantOnboarding,
+    WidgetConfig,
+    MerchantDashboardFeedback,
+    TryOn,
+    Product,
+    Plan,
+)
 from app.models.schemas import (
     OnboardingStatusResponse,
     GoalsRequest,
@@ -40,6 +49,9 @@ from app.models.schemas import (
     PlanResponse,
     WidgetCheckResponse,
     DashboardOverviewResponse,
+    DashboardFeedbackRequest,
+    DashboardFeedbackResponse,
+    MerchantCollectionResponse,
     WidgetConfigUpdateRequest,
     WidgetConfigResponse,
     PlanConfigResponse,
@@ -60,6 +72,8 @@ from app.services.customer_login_policy import (
     requires_customer_login,
 )
 from app.services.usage_governance_service import UsageGovernanceService
+from app.services.storefront_identity_service import StorefrontIdentityService
+from app.services.rate_limit_service import StorefrontRateLimitService
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +82,7 @@ widget_router = APIRouter(prefix="/widget", tags=["Widget"])
 
 INTRO_TRIAL_DAYS = 14
 INTRO_TRIAL_CREDITS = 80
+_HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -83,6 +98,80 @@ def _normalize_shopify_product_gid(value: str) -> str:
     if normalized.isdigit():
         return f"gid://shopify/Product/{normalized}"
     return normalized
+
+
+def _extract_shopify_numeric_id(value: str) -> Optional[str]:
+    normalized = (value or "").strip()
+    if not normalized:
+        return None
+    if normalized.isdigit():
+        return normalized
+
+    match = re.search(r"/(\d+)$", normalized)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _normalize_shopify_collection_gid(value: str) -> Optional[str]:
+    normalized = (value or "").strip()
+    if not normalized:
+        return None
+    if normalized.startswith("gid://shopify/Collection/"):
+        return normalized
+    numeric = _extract_shopify_numeric_id(normalized)
+    if numeric:
+        return f"gid://shopify/Collection/{numeric}"
+    return normalized
+
+
+def _expand_product_identifier_variants(values: List[str]) -> set[str]:
+    expanded: set[str] = set()
+    for raw in values:
+        normalized = str(raw or "").strip()
+        if not normalized:
+            continue
+        expanded.add(normalized)
+        numeric = _extract_shopify_numeric_id(normalized)
+        if numeric:
+            expanded.add(numeric)
+            expanded.add(f"gid://shopify/Product/{numeric}")
+    return expanded
+
+
+def _normalize_collection_identifier_set(values: List[str]) -> set[str]:
+    normalized_set: set[str] = set()
+    for raw in values:
+        normalized = _normalize_shopify_collection_gid(str(raw or ""))
+        if not normalized:
+            continue
+        normalized_set.add(normalized)
+        numeric = _extract_shopify_numeric_id(normalized)
+        if numeric:
+            normalized_set.add(numeric)
+    return normalized_set
+
+
+def _parse_collection_ids_query(value: Optional[str]) -> tuple[List[str], bool]:
+    if value is None:
+        return [], False
+    parts = [item.strip() for item in value.split(",")]
+    parsed = [item for item in parts if item]
+    return parsed, True
+
+
+async def _resolve_product_collection_identifiers(
+    *,
+    store: Store,
+    shopify_product_gid: str,
+    provided_collection_ids: List[str],
+    provided_collection_ids_present: bool,
+) -> List[str]:
+    if provided_collection_ids_present:
+        return provided_collection_ids
+
+    service = ShopifyService(store.shopify_domain, require_shopify_access_token(store))
+    return await service.get_product_collection_ids(shopify_product_gid=shopify_product_gid)
 
 
 def _build_theme_editor_urls(shop_domain: str) -> tuple[str, str]:
@@ -270,6 +359,26 @@ def get_widget_scope(store: Store = Depends(get_current_merchant_store)):
     )
 
 
+@merchant_router.get("/collections", response_model=List[MerchantCollectionResponse])
+async def list_merchant_collections(
+    store: Store = Depends(get_current_merchant_store),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
+    limit: int = Query(100, ge=1, le=250),
+    offset: int = Query(0, ge=0),
+    search: Optional[str] = Query(None),
+):
+    """
+    List Shopify collections for dashboard/onboarding scope selection screens.
+    """
+    access_token = await resolve_merchant_shopify_access_token(
+        store,
+        credentials,
+        action_label="collection listing",
+    )
+    svc = ShopifyService(store.shopify_domain, access_token)
+    return await svc.list_collections(limit=limit, offset=offset, search=search)
+
+
 @merchant_router.post("/onboarding/widget-scope", response_model=WidgetScopeResponse)
 def save_widget_scope(
     body: WidgetScopeRequest,
@@ -291,7 +400,8 @@ def save_widget_scope(
     wc.scope_type = body.scope_type
     wc.enabled_collection_ids = body.enabled_collection_ids
     wc.enabled_product_ids = body.enabled_product_ids
-    store.onboarding_step = "theme_setup"
+    if store.onboarding_step != "complete" and store.onboarding_completed_at is None:
+        store.onboarding_step = "theme_setup"
     db.commit()
 
     logger.info(f"Widget scope saved for store {store.store_id}: {body.scope_type}")
@@ -795,17 +905,18 @@ def get_dashboard_overview(
     db: DBSession = Depends(get_db),
 ):
     """
-    Single call that feeds all three sections of the merchant dashboard overview screen.
+    Single call that feeds the merchant dashboard overview screen.
 
     Section 1 â€” theme button status (mirrors onboarding step 5 data)
     Section 2 â€” try-on usage: count of completed try-ons in last 30 rolling days
     Section 3 â€” widget scope summary: scope type + counts of enabled IDs
+    Section 4 â€” whether one-time merchant feedback has been submitted
     """
     wc = store.widget_config
 
     # â”€â”€ Section 1: theme detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     theme_detected = wc.theme_extension_detected if wc else False
-    themes_url, _ = _build_theme_editor_urls(store.shopify_domain)
+    themes_url, add_to_theme_url = _build_theme_editor_urls(store.shopify_domain)
 
     # â”€â”€ Section 2: try-on usage (rolling 30 days) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     thirty_days_ago = datetime.utcnow() - timedelta(days=30)
@@ -824,17 +935,53 @@ def get_dashboard_overview(
     scope_type = wc.scope_type if wc else "all"
     enabled_products_count = len(wc.enabled_product_ids or []) if wc else 0
     enabled_collections_count = len(wc.enabled_collection_ids or []) if wc else 0
+    feedback_submitted = bool(store.dashboard_feedback)
 
     return DashboardOverviewResponse(
         theme_extension_detected=theme_detected,
         themes_url=themes_url,
+        add_to_theme_url=add_to_theme_url,
         tryon_used_30d=tryon_used,
         credits_limit=store.credits_limit,
         plan_name=store.plan_name,
         scope_type=scope_type,
         enabled_collections_count=enabled_collections_count,
         enabled_products_count=enabled_products_count,
+        feedback_submitted=feedback_submitted,
         billing_lock_reason=store.billing_lock_reason,
+    )
+
+
+@merchant_router.post("/dashboard/feedback", response_model=DashboardFeedbackResponse)
+def submit_dashboard_feedback(
+    body: DashboardFeedbackRequest,
+    store: Store = Depends(get_current_merchant_store),
+    db: DBSession = Depends(get_db),
+):
+    """
+    Save one-time merchant feedback from the dashboard overview.
+    """
+    if store.dashboard_feedback is not None:
+        raise HTTPException(409, "Dashboard feedback has already been submitted for this store.")
+
+    improvement_text = (body.improvement_text or "").strip()
+    if body.rating < 5 and not improvement_text:
+        raise HTTPException(422, "improvement_text is required when rating is below 5.0")
+
+    feedback = MerchantDashboardFeedback(
+        store_id=store.store_id,
+        rating=body.rating,
+        improvement_text=None if body.rating == 5 else improvement_text,
+        submitted_at=datetime.utcnow(),
+    )
+    db.add(feedback)
+    db.commit()
+    db.refresh(feedback)
+
+    return DashboardFeedbackResponse(
+        saved=True,
+        rating=feedback.rating,
+        submitted_at=feedback.submitted_at,
     )
 
 
@@ -842,7 +989,13 @@ def get_dashboard_overview(
 # Dashboard â€” Widget Config (GET + PATCH, post-onboarding)
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-_DEFAULT_WIDGET_COLOR = "#FF0000"
+def _normalize_hex_color(value: Optional[str]) -> Optional[str]:
+    candidate = (value or "").strip()
+    if not candidate:
+        return None
+    if not _HEX_COLOR_RE.fullmatch(candidate):
+        return None
+    return candidate.upper()
 
 
 def _widget_config_response(wc: Optional[WidgetConfig]) -> WidgetConfigResponse:
@@ -853,7 +1006,7 @@ def _widget_config_response(wc: Optional[WidgetConfig]) -> WidgetConfigResponse:
             enabled_collection_ids=[],
             enabled_product_ids=[],
             theme_extension_detected=False,
-            widget_color=_DEFAULT_WIDGET_COLOR,
+            widget_color="",
             weekly_tryon_limit=get_settings().WEEKLY_TRYON_LIMIT_DEFAULT,
         )
     return WidgetConfigResponse(
@@ -861,7 +1014,7 @@ def _widget_config_response(wc: Optional[WidgetConfig]) -> WidgetConfigResponse:
         enabled_collection_ids=wc.enabled_collection_ids or [],
         enabled_product_ids=wc.enabled_product_ids or [],
         theme_extension_detected=wc.theme_extension_detected,
-        widget_color=wc.widget_color or _DEFAULT_WIDGET_COLOR,
+        widget_color=_normalize_hex_color(wc.widget_color) or "",
         weekly_tryon_limit=wc.weekly_tryon_limit,
     )
 
@@ -870,7 +1023,7 @@ def _widget_config_response(wc: Optional[WidgetConfig]) -> WidgetConfigResponse:
 def get_widget_config(store: Store = Depends(get_current_merchant_store)):
     """
     Return the full widget configuration for the Settings â†’ Custom screen.
-    If no config has been saved yet, returns defaults (scope_type='all', widget_color='#FF0000').
+    If no config has been saved yet, returns defaults (scope_type='all', widget_color='').
     """
     return _widget_config_response(store.widget_config)
 
@@ -893,8 +1046,19 @@ def update_widget_config(
     """
     if body.scope_type is not None and body.scope_type not in VALID_SCOPE_TYPES:
         raise HTTPException(422, f"scope_type must be one of: {', '.join(sorted(VALID_SCOPE_TYPES))}")
-    if body.weekly_tryon_limit is not None and not (1 <= body.weekly_tryon_limit <= 1000):
-        raise HTTPException(422, "weekly_tryon_limit must be between 1 and 1000")
+    if body.weekly_tryon_limit is not None and not (5 <= body.weekly_tryon_limit <= 100):
+        raise HTTPException(422, "weekly_tryon_limit must be between 5 and 100")
+
+    normalized_widget_color: Optional[str] = None
+    widget_color_was_provided = body.widget_color is not None
+    if body.widget_color is not None:
+        raw_widget_color = (body.widget_color or "").strip()
+        if not raw_widget_color:
+            normalized_widget_color = ""
+        else:
+            normalized_widget_color = _normalize_hex_color(raw_widget_color)
+            if normalized_widget_color is None:
+                raise HTTPException(422, "widget_color must be a valid hex color like #FF0000")
 
     wc = store.widget_config
     if wc is None:
@@ -909,8 +1073,8 @@ def update_widget_config(
         wc.enabled_product_ids = body.enabled_product_ids
     if body.theme_extension_detected is not None:
         wc.theme_extension_detected = body.theme_extension_detected
-    if body.widget_color is not None:
-        wc.widget_color = body.widget_color
+    if widget_color_was_provided:
+        wc.widget_color = normalized_widget_color or None
     if body.weekly_tryon_limit is not None:
         wc.weekly_tryon_limit = body.weekly_tryon_limit
 
@@ -926,8 +1090,12 @@ def update_widget_config(
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @widget_router.get("/check-enabled", response_model=WidgetCheckResponse)
-def check_widget_enabled(
+async def check_widget_enabled(
     shopify_product_gid: str = Query(..., description="Shopify product GID, e.g. gid://shopify/Product/123"),
+    shopify_collection_ids: Optional[str] = Query(
+        None,
+        description="Optional comma-separated Shopify collection IDs/GIDs for the current product.",
+    ),
     x_logged_in_customer_id: Optional[str] = Header(None, alias="X-Logged-In-Customer-Id"),
     store: Store = Depends(get_public_store),
     db: DBSession = Depends(get_db),
@@ -936,11 +1104,11 @@ def check_widget_enabled(
     Called by the storefront widget to decide whether to render the try-on button.
 
     Scope rules:
-    - 'all'                   â†’ always enabled
-    - 'selected_products'     â†’ enabled only if GID is in enabled_product_ids
-    - 'mixed'                 â†’ enabled if GID is in enabled_product_ids (default true if list is empty)
-    - 'selected_collections'  â†’ enabled=true (collection membership check deferred to Remix layer)
-    - no config yet           â†’ enabled=true (default open)
+    - 'all'                  -> always enabled
+    - 'selected_products'    -> enabled only when product ID/GID is explicitly selected
+    - 'selected_collections' -> enabled only when product belongs to selected collections
+    - 'mixed'                -> enabled when either product or collection selection matches
+    - no config yet          -> enabled=true (default open)
 
     Billing gate: widget is disabled whenever billing lock is active
     (expired/exhausted intro or founding trial).
@@ -948,6 +1116,16 @@ def check_widget_enabled(
     customer_logged_in = is_customer_logged_in(x_logged_in_customer_id)
     login_required = requires_customer_login(store)
     login_message = customer_login_required_message() if login_required else None
+    widget_color = _normalize_hex_color(store.widget_config.widget_color if store.widget_config else None) or ""
+
+    def _response(enabled: bool) -> WidgetCheckResponse:
+        return WidgetCheckResponse(
+            enabled=enabled,
+            widget_color=widget_color,
+            customer_login_required=login_required,
+            customer_logged_in=customer_logged_in,
+            login_message=login_message,
+        )
 
     lock_before = store.billing_lock_reason
     trial_end_before = store.trial_end_reason
@@ -955,52 +1133,63 @@ def check_widget_enabled(
     if lock_before != store.billing_lock_reason or trial_end_before != store.trial_end_reason:
         db.commit()
     if store.billing_lock_reason:
-        return WidgetCheckResponse(
-            enabled=False,
-            customer_login_required=login_required,
-            customer_logged_in=customer_logged_in,
-            login_message=login_message,
-        )
-    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        return _response(False)
 
     normalized_gid = _normalize_shopify_product_gid(shopify_product_gid)
+    normalized_numeric = _extract_shopify_numeric_id(normalized_gid)
     wc = store.widget_config
     if wc is None or wc.scope_type == "all":
-        return WidgetCheckResponse(
-            enabled=True,
-            customer_login_required=login_required,
-            customer_logged_in=customer_logged_in,
-            login_message=login_message,
-        )
+        return _response(True)
+
+    configured_product_ids = _expand_product_identifier_variants(wc.enabled_product_ids or [])
+    configured_collection_ids = _normalize_collection_identifier_set(wc.enabled_collection_ids or [])
+    request_collection_ids, request_collection_ids_present = _parse_collection_ids_query(shopify_collection_ids)
+
+    def _product_match() -> bool:
+        if not configured_product_ids:
+            return False
+        if normalized_gid in configured_product_ids:
+            return True
+        if normalized_numeric and normalized_numeric in configured_product_ids:
+            return True
+        return False
+
+    async def _collection_match() -> bool:
+        if not configured_collection_ids:
+            return False
+        try:
+            resolved_collection_ids = await _resolve_product_collection_identifiers(
+                store=store,
+                shopify_product_gid=normalized_gid,
+                provided_collection_ids=request_collection_ids,
+                provided_collection_ids_present=request_collection_ids_present,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Collection membership resolution failed for store %s and product %s: %s",
+                store.store_id,
+                normalized_gid,
+                exc,
+            )
+            return False
+
+        product_collection_ids = _normalize_collection_identifier_set(resolved_collection_ids)
+        if not product_collection_ids:
+            return False
+        return bool(configured_collection_ids.intersection(product_collection_ids))
 
     if wc.scope_type == "selected_products":
-        ids = wc.enabled_product_ids
-        enabled = bool(ids) and normalized_gid in ids
-        return WidgetCheckResponse(
-            enabled=enabled,
-            customer_login_required=login_required,
-            customer_logged_in=customer_logged_in,
-            login_message=login_message,
-        )
+        return _response(_product_match())
+
+    if wc.scope_type == "selected_collections":
+        return _response(await _collection_match())
 
     if wc.scope_type == "mixed":
-        product_ids = wc.enabled_product_ids or []
-        enabled = (not product_ids) or (normalized_gid in product_ids)
-        return WidgetCheckResponse(
-            enabled=enabled,
-            customer_login_required=login_required,
-            customer_logged_in=customer_logged_in,
-            login_message=login_message,
-        )
+        has_any_scope = bool(configured_product_ids or configured_collection_ids)
+        enabled = has_any_scope and (_product_match() or await _collection_match())
+        return _response(enabled)
 
-    # 'selected_collections' â€” collection membership requires Shopify Admin API
-    # (only available in Remix). Return true and let the Remix layer filter further.
-    return WidgetCheckResponse(
-        enabled=True,
-        customer_login_required=login_required,
-        customer_logged_in=customer_logged_in,
-        login_message=login_message,
-    )
+    return _response(False)
 
 
 @widget_router.post("/theme-detected")
@@ -1034,6 +1223,9 @@ def mark_theme_extension_detected(
 @widget_router.post("/sessions", response_model=SessionResponse)
 def create_widget_session(
     body: WidgetSessionCreateRequest,
+    request: Request,
+    x_logged_in_customer_id: Optional[str] = Header(None, alias="X-Logged-In-Customer-Id"),
+    x_optimo_anon_id: Optional[str] = Header(None, alias="X-Optimo-Anon-Id"),
     store: Store = Depends(get_public_store),
     db: DBSession = Depends(get_db),
 ):
@@ -1055,11 +1247,25 @@ def create_widget_session(
             f"Product not found for Shopify product: {body.shopify_product_gid}",
         )
 
+    StorefrontRateLimitService(db).enforce(
+        request=request,
+        store=store,
+        endpoint_key="widget_sessions",
+        limit_per_minute=get_settings().RATE_LIMIT_WIDGET_SESSIONS_PER_MINUTE,
+    )
+
+    identity = StorefrontIdentityService(db)
+    resolved_subject_identifier = identity.resolve_subject_identifier(
+        store=store,
+        logged_in_customer_id=x_logged_in_customer_id,
+        anon_id=x_optimo_anon_id,
+    )
+
     try:
         return create_or_resume_session_for_product(
             product=product,
             store=store,
-            user_identifier=body.user_identifier,
+            user_identifier=resolved_subject_identifier or body.user_identifier,
             db=db,
         )
     except HTTPException:

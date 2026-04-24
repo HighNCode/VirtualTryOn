@@ -25,8 +25,6 @@ from app.models.database import (
 )
 from app.services.customer_login_policy import (
     customer_login_required_message,
-    is_customer_logged_in,
-    requires_customer_login,
 )
 from app.services.shopify_service import ShopifyService
 
@@ -67,17 +65,6 @@ class UsageGovernanceService:
 
         await self._ensure_store_billing_synced(store)
         self._enforce_store_generation_allowed(store, now)
-
-        if (
-            enforce_weekly_limit
-            and requires_customer_login(store)
-            and not is_customer_logged_in(customer_identifier)
-        ):
-            self._raise_usage_error(
-                status_code=401,
-                code="CUSTOMER_LOGIN_REQUIRED",
-                message=customer_login_required_message(),
-            )
 
         plan = self._get_active_plan(store)
         cycle_start_at, cycle_end_at = self._resolve_cycle_window(store, now)
@@ -135,18 +122,30 @@ class UsageGovernanceService:
 
         week_start_utc = None
         weekly_counter = None
-        # Weekly counter rows require a non-null customer_identifier. In development
-        # (or any anonymous storefront call), we skip weekly counter persistence
-        # and only keep store-level credit reservation.
-        if enforce_weekly_limit and bool(customer_identifier):
+        normalized_subject = (customer_identifier or "").strip()
+        is_logged_in_subject = normalized_subject.startswith("shopify:")
+        is_anonymous_subject = not is_logged_in_subject
+
+        if enforce_weekly_limit and not normalized_subject:
+            self._raise_usage_error(
+                status_code=401,
+                code="CUSTOMER_LOGIN_REQUIRED",
+                message=customer_login_required_message(),
+            )
+
+        if enforce_weekly_limit:
             week_start_utc, week_end_utc, tz_name = self._resolve_week_window(store, now)
-            effective_limit = weekly_tryon_limit or settings.WEEKLY_TRYON_LIMIT_DEFAULT
+            effective_limit = (
+                int(settings.ANON_WEEKLY_TRYON_LIMIT)
+                if is_anonymous_subject
+                else int(weekly_tryon_limit or settings.WEEKLY_TRYON_LIMIT_DEFAULT)
+            )
 
             weekly_counter = (
                 self.db.query(UsageCustomerWeek)
                 .filter_by(
                     store_id=store.store_id,
-                    customer_identifier=customer_identifier,
+                    customer_identifier=normalized_subject,
                     week_start_utc=week_start_utc,
                 )
                 .with_for_update()
@@ -155,7 +154,7 @@ class UsageGovernanceService:
             if weekly_counter is None:
                 weekly_counter = UsageCustomerWeek(
                     store_id=store.store_id,
-                    customer_identifier=customer_identifier,
+                    customer_identifier=normalized_subject,
                     week_start_utc=week_start_utc,
                     week_end_utc=week_end_utc,
                     used_count=0,
@@ -165,6 +164,14 @@ class UsageGovernanceService:
 
             if weekly_counter.used_count + 1 > effective_limit:
                 reset_at = week_end_utc.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+                if is_anonymous_subject:
+                    self._raise_usage_error(
+                        status_code=401,
+                        code="CUSTOMER_LOGIN_REQUIRED",
+                        message=customer_login_required_message(),
+                        reset_at=reset_at,
+                        timezone=tz_name,
+                    )
                 self._raise_usage_error(
                     status_code=429,
                     code="WEEKLY_LIMIT_REACHED",
@@ -199,7 +206,7 @@ class UsageGovernanceService:
 
         event = UsageEvent(
             store_id=store.store_id,
-            customer_identifier=customer_identifier,
+            customer_identifier=normalized_subject or None,
             action_type=action_type,
             status="reserved",
             reserved_credits=credits_to_reserve,

@@ -12,17 +12,18 @@ def is_customer_logged_in(customer_identifier: str | None) -> bool:
 
 def requires_customer_login(store: Store | None = None) -> bool:
     """
-    In development, allow anonymous storefront usage for testing.
-    In non-development environments, require logged-in customers for try-on limits.
+    Teaser policy:
+    - Allow anonymous storefront usage up to the configured anonymous weekly cap.
+    - Require login only after anonymous cap is exhausted (enforced in usage governance).
+    The check-enabled endpoint should not hard-block anonymous entry.
     """
-    env = (get_settings().APP_ENV or "").strip().lower()
-    if env == "development":
-        return False
-    return True
+    _ = store
+    _ = get_settings()
+    return False
 
 
 def customer_login_required_message() -> str:
     return (
         "Please log in to your store account to continue virtual try-on. "
-        "After logging in, reopen this widget and continue."
+        "Your anonymous preview limit has been reached."
     )

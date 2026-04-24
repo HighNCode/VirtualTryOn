@@ -35,6 +35,8 @@ NEXT_PUBLIC_DEFAULT_PRODUCT_GID=gid://shopify/Product/1234567890
 NEXT_PUBLIC_DEFAULT_PRODUCT_IMAGE_URL=https://cdn.shopify.com/...
 SHOPIFY_API_SECRET=your-shopify-app-client-secret
 SHOPIFY_BILLING_TEST_MODE=false
+WIDGET_PROXY_SHARED_SECRET=shared-secret-between-proxy-and-backend
+WIDGET_PROXY_MAX_SKEW_SECONDS=300
 ```
 
 When the app is opened from Shopify Admin, the frontend calls the upstream API only through the local `/api/backend/*` proxy so App Bridge can attach a session token without browser CORS issues.

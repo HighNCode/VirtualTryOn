@@ -1,35 +1,36 @@
 "use client";
 
-import { EmbeddedLink } from "../_components/EmbeddedNavigation";
-import PortalSidebar from "../_components/PortalSidebar";
 import { useEffect, useMemo, useState } from "react";
+import PortalSidebar from "../_components/PortalSidebar";
 import {
   getDefaultStoreId,
   getStandardAnalytics,
   type StandardAnalyticsResponse
 } from "../../lib/photoshootApi";
 
-const weekdayOrder = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-
-function formatPercent(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) {
+function formatPercent(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
     return "-";
   }
-
   return `${value.toFixed(1)}%`;
 }
 
-function formatCurrency(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) {
+function formatCurrency(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
     return "-";
   }
-
   return `$${value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+}
+
+function formatNumber(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "-";
+  }
+  return value.toLocaleString();
 }
 
 export default function AnalyticsPage() {
   const storeId = useMemo(() => getDefaultStoreId(), []);
-
   const [period, setPeriod] = useState(30);
   const [analytics, setAnalytics] = useState<StandardAnalyticsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -42,8 +43,8 @@ export default function AnalyticsPage() {
 
     const controller = new AbortController();
     let active = true;
-
     setIsLoading(true);
+    setErrorMessage("");
 
     getStandardAnalytics({ storeId, period, signal: controller.signal })
       .then((data) => {
@@ -55,7 +56,6 @@ export default function AnalyticsPage() {
         if (!active || controller.signal.aborted) {
           return;
         }
-
         const message = error instanceof Error ? error.message : "Failed to load analytics.";
         setErrorMessage(message);
       })
@@ -71,48 +71,40 @@ export default function AnalyticsPage() {
     };
   }, [storeId, period]);
 
-  const peakDays = useMemo(() => {
-    const sums = new Map<string, number>();
-    weekdayOrder.forEach((day) => sums.set(day, 0));
+  const trendRows = analytics?.performance_trend ?? [];
+  const trendSvg = useMemo(() => {
+    if (trendRows.length === 0) {
+      return { points: "", labels: [] as string[] };
+    }
 
-    analytics?.trend.forEach((entry) => {
-      const day = new Date(entry.date).toLocaleDateString("en-US", { weekday: "long" });
-      sums.set(day, (sums.get(day) ?? 0) + entry.try_ons);
-    });
+    const width = 700;
+    const height = 260;
+    const leftPad = 22;
+    const rightPad = 22;
+    const topPad = 20;
+    const bottomPad = 30;
+    const maxValue = Math.max(1, ...trendRows.map((entry) => entry.try_on_sessions));
+    const usableW = width - leftPad - rightPad;
+    const usableH = height - topPad - bottomPad;
 
-    const max = Math.max(1, ...Array.from(sums.values()));
+    const points = trendRows
+      .map((entry, index) => {
+        const x = leftPad + (trendRows.length === 1 ? usableW / 2 : (index / (trendRows.length - 1)) * usableW);
+        const y = topPad + usableH - (entry.try_on_sessions / maxValue) * usableH;
+        return `${x.toFixed(2)},${y.toFixed(2)}`;
+      })
+      .join(" ");
 
-    return weekdayOrder.map((day) => ({
-      day,
-      value: sums.get(day) ?? 0,
-      max
-    }));
-  }, [analytics]);
-
-  const peakHours = useMemo(() => {
-    const total = Math.max(analytics?.total_try_ons ?? 0, 1);
-    const addToCart = analytics?.add_to_cart_count ?? 0;
-
-    return [
-      { slot: "12-3pm", value: `${Math.round(((analytics?.widget_opens ?? 0) / total) * 100)}%` },
-      { slot: "3-6pm", value: `${Math.round((addToCart / total) * 100)}%` },
-      { slot: "6-9pm", value: `${Math.round(((analytics?.unique_users ?? 0) / total) * 100)}%` },
-      { slot: "9-12pm", value: `${Math.round(((analytics?.credits_used ?? 0) / total) * 100)}%` }
+    const labels = [
+      trendRows[0]?.date ?? "",
+      trendRows[Math.floor((trendRows.length - 1) / 2)]?.date ?? "",
+      trendRows[trendRows.length - 1]?.date ?? ""
     ];
-  }, [analytics]);
 
-  const categoryCards = useMemo(
-    () =>
-      (analytics?.top_products ?? []).slice(0, 4).map((product) => ({
-        id: product.shopify_product_id,
-        name: product.title,
-        tryOns: String(product.try_on_count),
-        conversions: `${product.conversion_rate.toFixed(1)}%`,
-        returns: analytics?.return_count === null ? "-" : String(analytics?.return_count),
-        revenue: formatCurrency(analytics?.revenue_impact ?? null)
-      })),
-    [analytics]
-  );
+    return { points, labels };
+  }, [trendRows]);
+
+  const topProducts = analytics?.top_performing_products ?? [];
 
   return (
     <main className="portal-shell">
@@ -128,119 +120,127 @@ export default function AnalyticsPage() {
         {isLoading ? <p className="ai-status-note">Loading analytics...</p> : null}
         {errorMessage ? <p className="ai-error-note">{errorMessage}</p> : null}
 
-        <label className="ai-select-wrap" style={{ maxWidth: 180, marginBottom: 12 }}>
-          <select value={period} onChange={(event) => setPeriod(Number(event.target.value))} aria-label="Analytics period">
-            <option value={7}>Last 7 days</option>
-            <option value={30}>Last 30 days</option>
-            <option value={90}>Last 90 days</option>
-          </select>
-        </label>
+        <div className="analytics-v2-toolbar">
+          <label className="ai-select-wrap analytics-v2-period">
+            <select value={period} onChange={(event) => setPeriod(Number(event.target.value))} aria-label="Analytics period">
+              <option value={7}>Last 7 days</option>
+              <option value={30}>Last 30 days</option>
+              <option value={90}>Last 90 days</option>
+            </select>
+          </label>
+        </div>
 
-        <section className="analytics-top-grid">
-          <article className="analytics-card">
-            <h3>Customer Segmentation</h3>
-            <p>
-              VTS users generated {analytics?.total_try_ons ?? 0} try-ons in the selected period with
-              conversion rate {formatPercent(analytics?.conversion_rate ?? null)}.
-            </p>
+        <section className="analytics-v2-kpis">
+          <article className="analytics-v2-kpi">
+            <h3>Return Reduction</h3>
+            <p>{formatPercent(analytics?.return_reduction)}</p>
+            <span>vs previous equal period</span>
+          </article>
 
-            <div className="analytics-insight-card">
-              <h4>Key Insight</h4>
-              <p>Last {period} days activity</p>
-              <p className="analytics-user-tag">
-                <span aria-hidden>●</span>
-                VTS Users
-              </p>
+          <article className="analytics-v2-kpi">
+            <h3>Conversion Rate</h3>
+            <p>{formatPercent(analytics?.conversion_rate)}</p>
+            <span>{formatNumber(analytics?.conversions)} attributed orders</span>
+          </article>
 
-              <div className="analytics-kpi-grid">
-                <article>
-                  <h5>Conversion</h5>
-                  <p>{formatPercent(analytics?.conversion_rate ?? null)}</p>
-                </article>
-                <article>
-                  <h5>Return Rate</h5>
-                  <p>{analytics?.return_count ?? "-"}</p>
-                </article>
-                <article>
-                  <h5>Revenue</h5>
-                  <p>{formatCurrency(analytics?.revenue_impact ?? null)}</p>
-                </article>
-                <article>
-                  <h5>Try-Ons</h5>
-                  <p>{analytics?.total_try_ons ?? 0}</p>
-                </article>
-              </div>
+          <article className="analytics-v2-kpi">
+            <h3>Revenue Impact</h3>
+            <p>{formatCurrency(analytics?.revenue_impact)}</p>
+            <span>Attributed line-item revenue</span>
+          </article>
+
+          <article className="analytics-v2-kpi">
+            <h3>Active Users</h3>
+            <p>{formatNumber(analytics?.active_users)}</p>
+            <span>{formatNumber(analytics?.anonymous_users)} anonymous users</span>
+          </article>
+        </section>
+
+        <section className="analytics-v2-main-grid">
+          <article className="analytics-v2-card">
+            <div className="analytics-v2-card-head">
+              <h3>Performance Trends</h3>
+              <p>Daily try-on sessions</p>
+            </div>
+            <div className="analytics-v2-trend">
+              {trendRows.length === 0 ? (
+                <p className="ai-inline-note">No trend data yet.</p>
+              ) : (
+                <>
+                  <svg viewBox="0 0 700 260" role="img" aria-label="Try-on session trend">
+                    <polyline className="analytics-v2-trend-line" points={trendSvg.points} />
+                    <polyline className="analytics-v2-trend-fill" points={`${trendSvg.points} 678,230 22,230`} />
+                  </svg>
+                  <div className="analytics-v2-trend-labels">
+                    {trendSvg.labels.map((label, index) => (
+                      <span key={`${label}-${index}`}>{label}</span>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           </article>
 
-          <article className="analytics-card">
-            <h3>Time Based Patterns</h3>
-            <p>Peak usage hours and days</p>
-
-            <div className="analytics-day-list">
-              <h4>Peak Days</h4>
-              {peakDays.map((row) => (
-                <div key={row.day} className="analytics-day-row">
-                  <p>{row.day}</p>
-                  <div className="analytics-day-track" aria-hidden>
-                    <span style={{ width: `${(row.value / row.max) * 100}%` }} />
-                  </div>
-                  <p>
-                    {row.value}/{row.max}
-                  </p>
-                </div>
-              ))}
+          <article className="analytics-v2-card analytics-v2-quick">
+            <div className="analytics-v2-card-head">
+              <h3>Quick Stats</h3>
+              <p>Current period snapshot</p>
             </div>
-
-            <div className="analytics-hour-list">
-              <h4>Derived Ratios</h4>
-              <div className="analytics-hour-grid">
-                {peakHours.map((hour) => (
-                  <article key={hour.slot}>
-                    <h5>{hour.slot}</h5>
-                    <p>{hour.value}</p>
-                  </article>
-                ))}
+            <div className="analytics-v2-quick-list">
+              <div>
+                <span>Try-on Sessions</span>
+                <strong>{formatNumber(analytics?.try_on_sessions)}</strong>
+              </div>
+              <div>
+                <span>Widget Click Rate</span>
+                <strong>{formatPercent(analytics?.widget_click_rate)}</strong>
+              </div>
+              <div>
+                <span>Attributed Returns</span>
+                <strong>{formatNumber(analytics?.return_count)}</strong>
+              </div>
+              <div>
+                <span>Credits Used</span>
+                <strong>{formatNumber(analytics?.credits_used)}</strong>
               </div>
             </div>
           </article>
         </section>
 
-        <section className="analytics-category-card">
-          <div className="analytics-category-head">
-            <div>
-              <h3>Top Products</h3>
-              <p>Sorted by conversion rate</p>
-            </div>
-            <EmbeddedLink href="/step-4/select-products">Manage products</EmbeddedLink>
+        <section className="analytics-v2-card analytics-v2-table-card">
+          <div className="analytics-v2-card-head">
+            <h3>Top Performing Products</h3>
+            <p>Try-on Sessions, Conversion, Returns, Revenue</p>
           </div>
 
-          <div className="analytics-category-grid">
-            {categoryCards.length === 0 ? <p className="ai-inline-note">No product analytics yet.</p> : null}
-            {categoryCards.map((category) => (
-              <article key={category.id}>
-                <h4>{category.name}</h4>
-                <dl>
-                  <div>
-                    <dt>Try-Ons</dt>
-                    <dd>{category.tryOns}</dd>
-                  </div>
-                  <div>
-                    <dt>Conversions</dt>
-                    <dd>{category.conversions}</dd>
-                  </div>
-                  <div>
-                    <dt>Returns</dt>
-                    <dd>{category.returns}</dd>
-                  </div>
-                  <div>
-                    <dt>Revenue</dt>
-                    <dd className="analytics-revenue">{category.revenue}</dd>
-                  </div>
-                </dl>
-              </article>
-            ))}
-          </div>
+          {topProducts.length === 0 ? (
+            <p className="ai-inline-note">No product analytics yet.</p>
+          ) : (
+            <div className="analytics-v2-table-wrap">
+              <table className="analytics-v2-table">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th>Try-on Sessions</th>
+                    <th>Conversion %</th>
+                    <th>Return %</th>
+                    <th>Revenue</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topProducts.map((product) => (
+                    <tr key={product.shopify_product_id}>
+                      <td>{product.title}</td>
+                      <td>{formatNumber(product.try_on_sessions)}</td>
+                      <td>{formatPercent(product.conversion_rate)}</td>
+                      <td>{formatPercent(product.return_rate)}</td>
+                      <td>{formatCurrency(product.revenue_impact)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
       </section>
     </main>

@@ -70,6 +70,12 @@ class Store(Base, TimestampMixin):
     analytics_events = relationship("AnalyticsEvent", back_populates="store", cascade="all, delete-orphan")
     onboarding = relationship("MerchantOnboarding", back_populates="store", uselist=False, cascade="all, delete-orphan")
     widget_config = relationship("WidgetConfig", back_populates="store", uselist=False, cascade="all, delete-orphan")
+    dashboard_feedback = relationship(
+        "MerchantDashboardFeedback",
+        back_populates="store",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self):
         return f"<Store {self.shopify_domain}>"
@@ -540,6 +546,59 @@ class WidgetConfig(Base, TimestampMixin):
 
     def __repr__(self):
         return f"<WidgetConfig store={self.store_id} scope={self.scope_type}>"
+
+
+class MerchantDashboardFeedback(Base, TimestampMixin):
+    """
+    One-time merchant feedback submitted from the dashboard overview card.
+    One record per store (unique FK).
+    """
+    __tablename__ = "merchant_dashboard_feedback"
+    __table_args__ = (
+        UniqueConstraint("store_id", name="uq_merchant_dashboard_feedback_store"),
+        Index("idx_merchant_dashboard_feedback_store", "store_id"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    store_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("stores.store_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    rating = Column(Numeric(2, 1), nullable=False)
+    improvement_text = Column(Text, nullable=True)
+    submitted_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    store = relationship("Store", back_populates="dashboard_feedback")
+
+    def __repr__(self):
+        return f"<MerchantDashboardFeedback store={self.store_id} rating={self.rating}>"
+
+
+class StoreIdentityLink(Base, TimestampMixin):
+    """
+    Store-scoped link between anonymous browser identity and Shopify customer identity.
+    Used to migrate weekly usage and cached measurement pointers when login happens.
+    """
+    __tablename__ = "store_identity_links"
+    __table_args__ = (
+        UniqueConstraint("store_id", "anon_identifier", "customer_identifier", name="uq_store_identity_link"),
+        Index("idx_store_identity_links_store_customer", "store_id", "customer_identifier"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    store_id = Column(UUID(as_uuid=True), ForeignKey("stores.store_id", ondelete="CASCADE"), nullable=False)
+    anon_identifier = Column(String(255), nullable=False)
+    customer_identifier = Column(String(255), nullable=False)
+    last_migrated_week_start_utc = Column(DateTime, nullable=True)
+
+    store = relationship("Store")
+
+    def __repr__(self):
+        return (
+            f"<StoreIdentityLink store={self.store_id} anon={self.anon_identifier} "
+            f"customer={self.customer_identifier}>"
+        )
 
 
 class UsageEvent(Base, TimestampMixin):

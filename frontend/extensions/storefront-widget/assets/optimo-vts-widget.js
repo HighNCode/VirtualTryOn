@@ -273,7 +273,9 @@
         activeHeatmapZone: "",
         customerLoginRequired: false,
         customerLoggedIn: false,
-        loginMessage: ""
+        loginMessage: "",
+        widgetColor: "",
+        productViewTracked: false
       };
 
       this.handleHostClick = this.handleHostClick.bind(this);
@@ -331,14 +333,31 @@
       if (button) {
         button.addEventListener("click", this.handleHostClick);
       }
+      this.applyTriggerColor(this.state.widgetColor);
+    }
+
+    normalizeHexColor(value) {
+      const candidate = String(value || "").trim();
+      if (!/^#[0-9A-Fa-f]{6}$/.test(candidate)) {
+        return "";
+      }
+      return candidate.toUpperCase();
+    }
+
+    applyTriggerColor(color) {
+      const normalized = this.normalizeHexColor(color);
+      if (!normalized) {
+        this.host.style.removeProperty("--ovts-trigger-background");
+        this.state.widgetColor = "";
+        return;
+      }
+      this.host.style.setProperty("--ovts-trigger-background", normalized);
+      this.state.widgetColor = normalized;
     }
 
     async checkEnabled() {
       try {
-        const response = await this.request(
-          "/widget/check-enabled?shopify_product_gid=" + encodeURIComponent(this.config.product.gid),
-          { withSession: false }
-        );
+        const response = await this.request(this.buildCheckEnabledPath(), { withSession: false });
         this.applyEligibilityResponse(response);
         this.state.isVisible = Boolean(response && response.enabled);
       } catch (error) {
@@ -348,6 +367,14 @@
         const button = this.host.querySelector("[data-ovts-trigger]");
         if (button) {
           button.hidden = !this.state.isVisible;
+        }
+        if (!this.state.productViewTracked) {
+          this.state.productViewTracked = true;
+          this.trackEvent(
+            "product_viewed",
+            { product_id: this.config.product.id },
+            { allowWithoutSession: true }
+          );
         }
       }
     }
@@ -361,6 +388,9 @@
       this.state.customerLoggedIn = Boolean(response.customer_logged_in);
       this.state.loginMessage =
         typeof response.login_message === "string" ? response.login_message : "";
+      if (typeof response.widget_color === "string") {
+        this.applyTriggerColor(response.widget_color);
+      }
     }
 
     getCustomerLoginMessage() {
@@ -376,14 +406,31 @@
 
     async refreshCustomerEligibility() {
       try {
-        const response = await this.request(
-          "/widget/check-enabled?shopify_product_gid=" + encodeURIComponent(this.config.product.gid),
-          { withSession: false }
-        );
+        const response = await this.request(this.buildCheckEnabledPath(), { withSession: false });
         this.applyEligibilityResponse(response);
       } catch (error) {
         return;
       }
+    }
+
+    buildCheckEnabledPath() {
+      const params = new URLSearchParams();
+      params.set("shopify_product_gid", this.config.product.gid);
+
+      const hasCollectionArray = Array.isArray(this.config.product.collectionIds);
+      const collectionIds = hasCollectionArray
+        ? this.config.product.collectionIds
+            .map(function (value) {
+              return String(value || "").trim();
+            })
+            .filter(Boolean)
+        : [];
+
+      if (hasCollectionArray) {
+        params.set("shopify_collection_ids", collectionIds.join(","));
+      }
+
+      return "/widget/check-enabled?" + params.toString();
     }
 
     async ensureCustomerLoginBeforeAction() {
@@ -654,7 +701,9 @@
           this.state.notice = "";
         }
 
-        this.trackEvent("widget_opened");
+        this.trackEvent("widget_opened", {
+          product_id: this.config.product.id
+        });
       } catch (error) {
         this.state.error = error.message || "Unable to start the Optimo VTS flow.";
         this.state.stage = "setup";
@@ -2269,18 +2318,26 @@
       return false;
     }
 
-    trackEvent(eventType, eventData) {
-      if (!this.state.session) {
+    trackEvent(eventType, eventData, options) {
+      const trackOptions = options || {};
+      const hasSession = Boolean(this.state.session && this.state.session.session_id);
+      if (!hasSession && !trackOptions.allowWithoutSession) {
         return;
+      }
+
+      const payload = {
+        event_type: eventType,
+        event_data: eventData || {}
+      };
+
+      if (hasSession) {
+        payload.session_id = this.state.session.session_id;
       }
 
       this.request("/analytics/events", {
         method: "POST",
-        json: {
-          event_type: eventType,
-          session_id: this.state.session.session_id,
-          event_data: eventData || {}
-        }
+        withSession: hasSession,
+        json: payload
       }).catch(function () {
         return null;
       });

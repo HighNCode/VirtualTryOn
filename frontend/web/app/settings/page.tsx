@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import PortalSidebar from "../_components/PortalSidebar";
 import {
   getDefaultStoreId,
@@ -8,10 +8,25 @@ import {
   updateWidgetConfig
 } from "../../lib/photoshootApi";
 
+const DEFAULT_WIDGET_COLOR_HEX = "#FF0000";
+const DEFAULT_WIDGET_BACKGROUND = "linear-gradient(90deg, #a50070 0%, #f1001f 100%)";
+const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
+
+function normalizeWidgetColor(value: string | null | undefined): string {
+  const candidate = String(value || "").trim();
+  if (!HEX_COLOR_RE.test(candidate)) {
+    return "";
+  }
+  return candidate.toUpperCase();
+}
+
 export default function SettingsPage() {
   const storeId = useMemo(() => getDefaultStoreId(), []);
+  const colorInputRef = useRef<HTMLInputElement | null>(null);
 
-  const [widgetColor, setWidgetColor] = useState("#FF0000");
+  const [widgetColorInput, setWidgetColorInput] = useState("");
+  const [appliedWidgetColor, setAppliedWidgetColor] = useState(DEFAULT_WIDGET_COLOR_HEX);
+  const [useDefaultWidgetColor, setUseDefaultWidgetColor] = useState(true);
   const [generationLimit, setGenerationLimit] = useState("10");
 
   const [isLoading, setIsLoading] = useState(false);
@@ -32,7 +47,16 @@ export default function SettingsPage() {
     getWidgetConfig({ storeId, signal: controller.signal })
       .then((config) => {
         if (active) {
-          setWidgetColor(config.widget_color || "#FF0000");
+          const normalized = normalizeWidgetColor(config.widget_color);
+          if (normalized) {
+            setWidgetColorInput(normalized);
+            setAppliedWidgetColor(normalized);
+            setUseDefaultWidgetColor(false);
+          } else {
+            setWidgetColorInput("");
+            setAppliedWidgetColor(DEFAULT_WIDGET_COLOR_HEX);
+            setUseDefaultWidgetColor(true);
+          }
           setGenerationLimit(String(config.weekly_tryon_limit ?? 10));
         }
       })
@@ -67,20 +91,36 @@ export default function SettingsPage() {
     setStatusMessage("");
 
     const parsedLimit = Number.parseInt(generationLimit, 10);
-    if (!Number.isFinite(parsedLimit) || parsedLimit < 1 || parsedLimit > 1000) {
-      setErrorMessage("Weekly generation limit must be a whole number between 1 and 1000.");
+    if (!Number.isFinite(parsedLimit) || parsedLimit < 5 || parsedLimit > 100) {
+      setErrorMessage("Weekly generation limit must be a whole number between 5 and 100.");
       setIsSaving(false);
       return;
+    }
+    let normalizedColor = "";
+    if (!useDefaultWidgetColor) {
+      if (!HEX_COLOR_RE.test(widgetColorInput.trim())) {
+        setErrorMessage("Primary color must be a valid hex code like #FF0000.");
+        setIsSaving(false);
+        return;
+      }
+      normalizedColor = normalizeWidgetColor(widgetColorInput);
     }
 
     try {
       await updateWidgetConfig({
         storeId,
         payload: {
-          widget_color: widgetColor,
+          widget_color: useDefaultWidgetColor ? "" : normalizedColor,
           weekly_tryon_limit: parsedLimit
         }
       });
+      if (useDefaultWidgetColor) {
+        setWidgetColorInput("");
+        setAppliedWidgetColor(DEFAULT_WIDGET_COLOR_HEX);
+      } else {
+        setWidgetColorInput(normalizedColor);
+        setAppliedWidgetColor(normalizedColor);
+      }
       setStatusMessage("Widget settings saved.");
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Failed to save widget config.";
@@ -89,6 +129,44 @@ export default function SettingsPage() {
       setIsSaving(false);
     }
   };
+
+  const openColorPicker = () => {
+    const input = colorInputRef.current;
+    if (!input) {
+      return;
+    }
+    try {
+      if (typeof input.showPicker === "function") {
+        input.showPicker();
+        return;
+      }
+    } catch {
+      // Fallback to click below when showPicker is unavailable or blocked.
+    }
+    input.click();
+  };
+
+  const handleColorInputChange = (value: string) => {
+    setWidgetColorInput(value);
+    const trimmed = value.trim();
+    if (!trimmed) {
+      setUseDefaultWidgetColor(true);
+      return;
+    }
+    setUseDefaultWidgetColor(false);
+    if (HEX_COLOR_RE.test(trimmed)) {
+      const normalized = normalizeWidgetColor(value);
+      setAppliedWidgetColor(normalized);
+    }
+  };
+
+  const handleUseDefaultColor = () => {
+    setWidgetColorInput("");
+    setAppliedWidgetColor(DEFAULT_WIDGET_COLOR_HEX);
+    setUseDefaultWidgetColor(true);
+  };
+
+  const previewBackground = useDefaultWidgetColor ? DEFAULT_WIDGET_BACKGROUND : appliedWidgetColor;
 
   return (
     <main className="portal-shell">
@@ -107,21 +185,61 @@ export default function SettingsPage() {
 
         <section className="settings-card">
           <h3>Primary Color</h3>
-          <label className="settings-color-field">
-            <span className="settings-color-dot" aria-hidden style={{ backgroundColor: widgetColor }} />
-            <input
-              type="text"
-              value={widgetColor}
-              onChange={(event) => setWidgetColor(event.target.value)}
-              aria-label="Primary color code"
-            />
-          </label>
-          <p className="settings-help-text">This color is used for the Try-On button in theme extension.</p>
+          <div className="settings-color-controls">
+            <div className="settings-color-field">
+              <button
+                type="button"
+                className="settings-color-dot-button"
+                onClick={openColorPicker}
+                aria-label="Open color picker"
+                title="Open color picker"
+              >
+                <span className="settings-color-dot" aria-hidden style={{ background: previewBackground }} />
+              </button>
+              <input
+                type="text"
+                className="settings-color-code"
+                value={widgetColorInput}
+                onChange={(event) => handleColorInputChange(event.target.value)}
+                placeholder="#FF0000"
+                aria-label="Primary color hex code"
+                autoCapitalize="characters"
+                spellCheck={false}
+              />
+              <button
+                type="button"
+                className="settings-default-color-button"
+                onClick={handleUseDefaultColor}
+                disabled={useDefaultWidgetColor}
+              >
+                Use default
+              </button>
+            </div>
 
-          <h3>Preview</h3>
-          <button type="button" className="settings-preview-button" style={{ backgroundColor: widgetColor }}>
-            Try It On
-          </button>
+            <div className="settings-preview-button" style={{ background: previewBackground }}>
+              Try It On
+            </div>
+          </div>
+          <input
+            ref={colorInputRef}
+            type="color"
+            className="settings-color-picker-hidden"
+            value={appliedWidgetColor}
+            onInput={(event) => {
+              const normalized = normalizeWidgetColor((event.target as HTMLInputElement).value);
+              setWidgetColorInput(normalized);
+              setAppliedWidgetColor(normalized);
+              setUseDefaultWidgetColor(false);
+            }}
+            onChange={(event) => {
+              const normalized = normalizeWidgetColor((event.target as HTMLInputElement).value);
+              setWidgetColorInput(normalized);
+              setAppliedWidgetColor(normalized);
+              setUseDefaultWidgetColor(false);
+            }}
+            aria-label="Primary color"
+          />
+          <p className="settings-help-text">Click the color circle to pick a color, type a hex code, or use default gradient.</p>
 
           <h3>Generation Limits</h3>
           <p className="settings-subtext">Max Weekly Generations Per User</p>
@@ -129,8 +247,8 @@ export default function SettingsPage() {
             type="number"
             className="settings-limit-input"
             value={generationLimit}
-            min={1}
-            max={1000}
+            min={5}
+            max={100}
             step={1}
             onChange={(event) => setGenerationLimit(event.target.value)}
             aria-label="Generation limit"

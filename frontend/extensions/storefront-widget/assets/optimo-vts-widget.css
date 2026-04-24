@@ -6,11 +6,15 @@
   box-sizing: border-box;
 }
 
+.optimo-vts-host {
+  --ovts-trigger-background: linear-gradient(90deg, #a50070 0%, #f1001f 100%);
+}
+
 .ovts-trigger {
   width: 100%;
   border: 0;
   border-radius: 14px;
-  background: linear-gradient(90deg, #a50070 0%, #f1001f 100%);
+  background: var(--ovts-trigger-background);
   color: #fff;
   display: inline-flex;
   align-items: center;
@@ -19,11 +23,11 @@
   padding: 14px 18px;
   font: 800 17px/1.1 "Manrope", "Helvetica Neue", Arial, sans-serif;
   cursor: pointer;
-  box-shadow: 0 14px 28px rgba(177, 0, 73, 0.22);
+  box-shadow: none;
 }
 
 /* Guard against theme-level button resets overriding app block visuals. */
-.optimo-vts-host .ovts-trigger {
+.optimo-vts-host .ovts-trigger:not([hidden]) {
   appearance: none !important;
   -webkit-appearance: none !important;
   display: inline-flex !important;
@@ -34,12 +38,18 @@
   padding: 14px 18px !important;
   border: 0 !important;
   border-radius: 14px !important;
-  background: linear-gradient(90deg, #a50070 0%, #f1001f 100%) !important;
+  background: var(--ovts-trigger-background) !important;
   color: #ffffff !important;
   opacity: 1 !important;
   visibility: visible !important;
   text-decoration: none !important;
-  box-shadow: 0 14px 28px rgba(177, 0, 73, 0.22) !important;
+  box-shadow: none !important;
+}
+
+.optimo-vts-host .ovts-trigger[hidden] {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
 }
 
 .optimo-vts-host .ovts-trigger__text,

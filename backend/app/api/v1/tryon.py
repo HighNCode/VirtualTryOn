@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from io import BytesIO
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Depends, Header, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends, Header, BackgroundTasks, Request
 from fastapi.responses import Response
 from sqlalchemy.orm import Session as DBSession
 from PIL import Image
@@ -25,17 +25,13 @@ from app.models.schemas import (
     StudioBackgroundResponse, StudioTryOnRequest,
 )
 from app.services.cache_service import CacheService
+from app.services.rate_limit_service import StorefrontRateLimitService
+from app.services.storefront_identity_service import StorefrontIdentityService
 from app.services.usage_governance_service import UsageGovernanceService
 
 router = APIRouter(prefix="/tryon", tags=["Virtual Try-On"])
 logger = logging.getLogger(__name__)
 settings = get_settings()
-
-
-def _normalize_customer_id(value: Optional[str]) -> Optional[str]:
-    candidate = (value or "").strip()
-    return candidate or None
-
 
 def _infer_image_media_type(image_bytes: bytes) -> str:
     """Infer image mime type from magic bytes for reliable browser rendering."""
@@ -312,6 +308,7 @@ def _run_studio_generation(
 @router.get("/studio-backgrounds", response_model=list[StudioBackgroundResponse])
 async def list_studio_backgrounds(
     gender: str = "unisex",
+    store: Store = Depends(get_public_store),
     db: DBSession = Depends(get_db),
 ):
     """
@@ -322,6 +319,7 @@ async def list_studio_backgrounds(
 
     Note: Backed by photoshoot_models table (unified model/person photo library).
     """
+    _ = store
     backgrounds = db.query(PhotoshootModel).filter(
         PhotoshootModel.is_active == True,
         PhotoshootModel.gender.in_([gender, "unisex"]),
@@ -340,11 +338,13 @@ async def list_studio_backgrounds(
 @router.get("/studio-backgrounds/{bg_id}/image")
 async def get_studio_background_image(
     bg_id: str,
+    store: Store = Depends(get_public_store),
     db: DBSession = Depends(get_db),
 ):
     """Serve a model photo from static files (image_path is relative to backend/static/)."""
     import os
 
+    _ = store
     bg = db.query(PhotoshootModel).filter_by(id=bg_id, is_active=True).first()
     if not bg:
         raise HTTPException(404, "Studio background not found")
@@ -365,8 +365,11 @@ async def get_studio_background_image(
 @router.post("/studio", status_code=202)
 async def generate_studio_tryon(
     request: StudioTryOnRequest,
+    http_request: Request,
     background_tasks: BackgroundTasks,
     x_logged_in_customer_id: Optional[str] = Header(None, alias="X-Logged-In-Customer-Id"),
+    x_optimo_anon_id: Optional[str] = Header(None, alias="X-Optimo-Anon-Id"),
+    store: Store = Depends(get_public_store),
     db: DBSession = Depends(get_db),
 ):
     """
@@ -437,13 +440,25 @@ async def generate_studio_tryon(
         product = db.query(Product).filter_by(product_id=original.product_id).first()
         if not product:
             raise HTTPException(404, "Product not found for original try-on")
-        store = db.query(Store).filter_by(store_id=product.store_id).first()
-        if not store:
-            raise HTTPException(404, "Store not found")
+        if str(product.store_id) != str(store.store_id):
+            raise HTTPException(403, "Try-on does not belong to this store")
+
+        StorefrontRateLimitService(db).enforce(
+            request=http_request,
+            store=store,
+            endpoint_key="tryon_studio",
+            limit_per_minute=settings.RATE_LIMIT_TRYON_STUDIO_PER_MINUTE,
+        )
+
+        identity = StorefrontIdentityService(db)
+        customer_identifier = identity.resolve_subject_identifier(
+            store=store,
+            logged_in_customer_id=x_logged_in_customer_id,
+            anon_id=x_optimo_anon_id,
+        )
 
         widget_cfg = db.query(WidgetConfig).filter_by(store_id=store.store_id).first()
         weekly_limit = widget_cfg.weekly_tryon_limit if widget_cfg else settings.WEEKLY_TRYON_LIMIT_DEFAULT
-        customer_identifier = _normalize_customer_id(x_logged_in_customer_id)
 
         usage = UsageGovernanceService(db)
         reservation = await usage.reserve_generation(
@@ -513,8 +528,10 @@ async def generate_studio_tryon(
 @router.post("/generate", status_code=202)
 async def generate_tryon(
     request: TryOnGenerateRequest,
+    http_request: Request,
     background_tasks: BackgroundTasks,
     x_logged_in_customer_id: Optional[str] = Header(None, alias="X-Logged-In-Customer-Id"),
+    x_optimo_anon_id: Optional[str] = Header(None, alias="X-Optimo-Anon-Id"),
     session: Session = Depends(get_session_from_header),
     db: DBSession = Depends(get_db),
 ):
@@ -636,9 +653,25 @@ async def generate_tryon(
         store = db.query(Store).filter_by(store_id=session.store_id).first()
         if not store:
             raise HTTPException(404, "Store not found")
+
+        StorefrontRateLimitService(db).enforce(
+            request=http_request,
+            store=store,
+            endpoint_key="tryon_generate",
+            limit_per_minute=settings.RATE_LIMIT_TRYON_GENERATE_PER_MINUTE,
+        )
+
+        identity = StorefrontIdentityService(db)
+        customer_identifier = identity.resolve_subject_identifier(
+            store=store,
+            logged_in_customer_id=x_logged_in_customer_id,
+            anon_id=x_optimo_anon_id,
+        ) or session.user_identifier
+        if customer_identifier and customer_identifier != session.user_identifier:
+            session.user_identifier = customer_identifier
+
         widget_cfg = db.query(WidgetConfig).filter_by(store_id=store.store_id).first()
         weekly_limit = widget_cfg.weekly_tryon_limit if widget_cfg else settings.WEEKLY_TRYON_LIMIT_DEFAULT
-        customer_identifier = _normalize_customer_id(x_logged_in_customer_id)
 
         usage = UsageGovernanceService(db)
         reservation = await usage.reserve_generation(
@@ -708,6 +741,7 @@ async def generate_tryon(
 @router.get("/{try_on_id}/status", response_model=TryOnStatusResponse)
 async def get_tryon_status(
     try_on_id: str,
+    store: Store = Depends(get_public_store),
     db: DBSession = Depends(get_db),
 ):
     """
@@ -717,6 +751,9 @@ async def get_tryon_status(
     """
     record = db.query(TryOn).filter_by(try_on_id=try_on_id).first()
     if not record:
+        raise HTTPException(404, "Try-on not found")
+    product = db.query(Product).filter_by(product_id=record.product_id).first()
+    if not product or str(product.store_id) != str(store.store_id):
         raise HTTPException(404, "Try-on not found")
 
     status = record.processing_status
@@ -764,12 +801,19 @@ async def get_tryon_status(
 
 
 @router.get("/{try_on_id}/image")
-async def get_tryon_image(try_on_id: str, db: DBSession = Depends(get_db)):
+async def get_tryon_image(
+    try_on_id: str,
+    store: Store = Depends(get_public_store),
+    db: DBSession = Depends(get_db),
+):
     """
     Serve the generated try-on image from Redis cache.
     """
     record = db.query(TryOn).filter_by(try_on_id=try_on_id).first()
     if not record:
+        raise HTTPException(404, "Try-on not found")
+    product = db.query(Product).filter_by(product_id=record.product_id).first()
+    if not product or str(product.store_id) != str(store.store_id):
         raise HTTPException(404, "Try-on not found")
 
     if record.processing_status != "completed":

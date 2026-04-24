@@ -73,13 +73,26 @@ export type ThemeStatusResponse = {
 export type DashboardOverviewResponse = {
   theme_extension_detected: boolean;
   themes_url: string;
+  add_to_theme_url: string;
   tryon_used_30d: number;
   credits_limit: number;
   plan_name: string;
   scope_type: string;
   enabled_collections_count: number;
   enabled_products_count: number;
+  feedback_submitted: boolean;
   billing_lock_reason?: string | null;
+};
+
+export type DashboardFeedbackRequest = {
+  rating: number;
+  improvement_text?: string | null;
+};
+
+export type DashboardFeedbackResponse = {
+  saved: boolean;
+  rating: number;
+  submitted_at: string;
 };
 
 export type TopProductEntry = {
@@ -95,6 +108,20 @@ export type TrendEntry = {
   try_ons: number;
 };
 
+export type PerformanceTrendEntry = {
+  date: string;
+  try_on_sessions: number;
+};
+
+export type TopPerformingProductEntry = {
+  shopify_product_id: string;
+  title: string;
+  try_on_sessions: number;
+  conversion_rate: number | null;
+  return_rate: number | null;
+  revenue_impact: number | null;
+};
+
 export type StandardAnalyticsResponse = {
   period_days: number;
   period_start: string;
@@ -108,6 +135,13 @@ export type StandardAnalyticsResponse = {
   conversion_rate: number | null;
   revenue_impact: number | null;
   return_count: number | null;
+  return_reduction: number | null;
+  active_users: number;
+  anonymous_users: number;
+  try_on_sessions: number;
+  widget_click_rate: number | null;
+  performance_trend: PerformanceTrendEntry[];
+  top_performing_products: TopPerformingProductEntry[];
   top_products: TopProductEntry[];
   trend: TrendEntry[];
 };
@@ -723,6 +757,17 @@ export async function getDashboardOverview(options: {
     method: "GET",
     storeId: options.storeId,
     signal: options.signal
+  });
+}
+
+export async function submitDashboardFeedback(options: {
+  storeId: string;
+  payload: DashboardFeedbackRequest;
+}): Promise<DashboardFeedbackResponse> {
+  return requestJson<DashboardFeedbackResponse>("/api/v1/merchant/dashboard/feedback", {
+    method: "POST",
+    storeId: options.storeId,
+    body: options.payload
   });
 }
 

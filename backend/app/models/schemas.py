@@ -2,7 +2,8 @@
 Pydantic Schemas for API Request/Response Validation
 """
 
-from pydantic import BaseModel, Field, HttpUrl
+from decimal import Decimal
+from pydantic import BaseModel, Field, HttpUrl, condecimal
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from uuid import UUID
@@ -305,7 +306,7 @@ class WebhookAppUninstallData(BaseModel):
 # ============================================================================
 
 class AnalyticsEventCreate(BaseModel):
-    """Create analytics event — sent by the storefront widget"""
+    """Create analytics event Ã¢â‚¬â€ sent by the storefront widget"""
     event_type: str
     session_id: Optional[UUID] = None
     event_data: Optional[Dict[str, Any]] = None
@@ -321,7 +322,7 @@ class AnalyticsEventSaved(BaseModel):
 # ============================================================================
 
 class OnboardingStatusResponse(BaseModel):
-    """Full onboarding status — returned by GET /merchant/onboarding/status"""
+    """Full onboarding status Ã¢â‚¬â€ returned by GET /merchant/onboarding/status"""
     store_id: UUID
     onboarding_step: str
     onboarding_completed: bool
@@ -386,7 +387,7 @@ class BillingActivateRequest(BaseModel):
     billing_interval: str        # 'monthly' | 'annual'
     shopify_subscription_id: str
     status: str                  # 'active'
-    # Trial is always applied when the plan has trial_days set — no opt-in flag needed
+    # Trial is always applied when the plan has trial_days set Ã¢â‚¬â€ no opt-in flag needed
 
 
 class PlanResponse(BaseModel):
@@ -400,6 +401,7 @@ class PlanResponse(BaseModel):
 class WidgetCheckResponse(BaseModel):
     """Whether the widget should be shown for a given product"""
     enabled: bool
+    widget_color: str = ""
     customer_login_required: bool = False
     customer_logged_in: bool = False
     login_message: Optional[str] = None
@@ -411,29 +413,63 @@ class WidgetSessionCreateRequest(BaseModel):
     user_identifier: Optional[str] = None
 
 
+HalfStarRating = condecimal(
+    ge=Decimal("0.5"),
+    le=Decimal("5.0"),
+    multiple_of=Decimal("0.5"),
+    max_digits=2,
+    decimal_places=1,
+)
+
+
 class DashboardOverviewResponse(BaseModel):
     """All data needed to render the merchant dashboard overview screen"""
-    # Section 1 — theme button status
+    # Section 1 - theme button status
     theme_extension_detected: bool
     themes_url: str
-    # Section 2 — try-on usage (rolling 30 days)
+    add_to_theme_url: str
+    # Section 2 - try-on usage (rolling 30 days)
     tryon_used_30d: int
     credits_limit: int
     plan_name: str
-    # Section 3 — widget scope summary
+    # Section 3 - widget scope summary
     scope_type: str
     enabled_collections_count: int
     enabled_products_count: int
+    # Section 4 - one-time merchant feedback
+    feedback_submitted: bool
     billing_lock_reason: Optional[str] = None
 
 
+class DashboardFeedbackRequest(BaseModel):
+    """Submit one-time merchant feedback from the dashboard overview screen."""
+    rating: HalfStarRating
+    improvement_text: Optional[str] = None
+
+
+class DashboardFeedbackResponse(BaseModel):
+    """Feedback submission acknowledgement."""
+    saved: bool
+    rating: HalfStarRating
+    submitted_at: datetime
+
+
+class MerchantCollectionResponse(BaseModel):
+    """Collection list item for merchant selection screens."""
+    id: str
+    title: str
+    handle: Optional[str] = None
+    image_url: Optional[str] = None
+    products_count: Optional[int] = None
+
+
 class WidgetConfigResponse(BaseModel):
-    """Full widget config state — returned by GET and PATCH /merchant/widget-config"""
+    """Full widget config state Ã¢â‚¬â€ returned by GET and PATCH /merchant/widget-config"""
     scope_type: str
     enabled_collection_ids: List[str]
     enabled_product_ids: List[str]
     theme_extension_detected: bool
-    widget_color: str  # Hex e.g. '#FF0000'; default applied in API layer when DB value is null
+    widget_color: str  # Hex e.g. '#FF0000'; empty string means use default gradient
     weekly_tryon_limit: int
 
 
@@ -443,7 +479,7 @@ class WidgetConfigUpdateRequest(BaseModel):
     enabled_collection_ids: Optional[List[str]] = None
     enabled_product_ids: Optional[List[str]] = None
     theme_extension_detected: Optional[bool] = None
-    widget_color: Optional[str] = None  # Hex color e.g. '#FF0000'
+    widget_color: Optional[str] = None  # Hex color e.g. '#FF0000'; empty string clears to default gradient
     weekly_tryon_limit: Optional[int] = None
 
 
@@ -481,17 +517,17 @@ class CreateSubscriptionRequest(BaseModel):
     plan_name: str           # 'starter' | 'growth'
     billing_interval: str    # 'monthly' | 'annual'
     return_url: str          # Remix callback URL after merchant approves on Shopify
-    # Trial is always applied (trial_days from the plan) — no opt-in flag
+    # Trial is always applied (trial_days from the plan) Ã¢â‚¬â€ no opt-in flag
 
 
 class CreateSubscriptionResponse(BaseModel):
     """Shopify subscription creation result"""
-    confirmation_url: str         # Shopify approval page — Remix redirects merchant here
+    confirmation_url: str         # Shopify approval page Ã¢â‚¬â€ Remix redirects merchant here
     shopify_subscription_id: str  # GID returned by Shopify (for reference)
 
 
 class BillingStatusResponse(BaseModel):
-    """Full billing status — DB data enriched with live Shopify subscription info"""
+    """Full billing status Ã¢â‚¬â€ DB data enriched with live Shopify subscription info"""
     plan_name: str
     billing_interval: Optional[str] = None      # 'monthly' | 'annual' | null for free
     credits_limit: int
@@ -571,7 +607,7 @@ class GhostMannequinRefResponse(BaseModel):
 
 
 class GhostMannequinRequest(BaseModel):
-    """Start a ghost mannequin job — 2 product images from the same Shopify product"""
+    """Start a ghost mannequin job Ã¢â‚¬â€ 2 product images from the same Shopify product"""
     image1_url: str = Field(..., description="First product image URL (Shopify CDN)")
     image2_url: str = Field(..., description="Second product image URL (Shopify CDN)")
     shopify_product_gid: str = Field(..., description="Shopify product GID e.g. gid://shopify/Product/123")
@@ -579,7 +615,7 @@ class GhostMannequinRequest(BaseModel):
 
 
 class PhotoshootJobResponse(BaseModel):
-    """Photoshoot job status response — returned by POST (202) and GET /status"""
+    """Photoshoot job status response Ã¢â‚¬â€ returned by POST (202) and GET /status"""
     job_id: UUID
     job_type: str
     status: str
@@ -616,13 +652,29 @@ class TopProductEntry(BaseModel):
     title: str
     try_on_count: int
     cart_count: int         # added_to_cart events for this product
-    conversion_rate: float  # cart_count / try_on_count × 100 (0.0 if try_on_count == 0)
+    conversion_rate: float  # cart_count / try_on_count Ãƒâ€” 100 (0.0 if try_on_count == 0)
 
 
 class TrendEntry(BaseModel):
     """One calendar day in the try-on trend (line chart data)"""
     date: str   # ISO date "2026-03-02"
     try_ons: int
+
+
+class PerformanceTrendEntry(BaseModel):
+    """One calendar day in the revamp performance trend."""
+    date: str
+    try_on_sessions: int
+
+
+class TopPerformingProductEntry(BaseModel):
+    """Top performing product row for analytics dashboard table."""
+    shopify_product_id: str
+    title: str
+    try_on_sessions: int
+    conversion_rate: Optional[float] = None
+    return_rate: Optional[float] = None
+    revenue_impact: Optional[float] = None
 
 
 class StandardAnalyticsResponse(BaseModel):
@@ -636,13 +688,21 @@ class StandardAnalyticsResponse(BaseModel):
     total_try_ons: int
     credits_used: int
     add_to_cart_count: int
-    # Conversions (Shopify Orders cross-ref — null if Shopify unavailable)
+    # Conversions (Shopify Orders cross-ref - null if Shopify unavailable)
     conversions: Optional[int] = None
-    conversion_rate: Optional[float] = None   # conversions / widget_opens × 100
+    conversion_rate: Optional[float] = None   # conversions / widget_opens x 100
     revenue_impact: Optional[float] = None    # sum of converted order totals (USD)
-    # Returns (Shopify — null if Shopify unavailable)
+    # Returns (Shopify - null if Shopify unavailable)
     return_count: Optional[int] = None
-    # Breakdown
+    # Revamp fields
+    return_reduction: Optional[float] = None
+    active_users: int = 0
+    anonymous_users: int = 0
+    try_on_sessions: int = 0
+    widget_click_rate: Optional[float] = None
+    performance_trend: List[PerformanceTrendEntry] = Field(default_factory=list)
+    top_performing_products: List[TopPerformingProductEntry] = Field(default_factory=list)
+    # Breakdown (legacy compatibility)
     top_products: List[TopProductEntry]  # sorted by conversion_rate DESC
     trend: List[TrendEntry]              # one entry per calendar day; Y-axis = try_ons
 
@@ -659,3 +719,5 @@ class ErrorResponse(BaseModel):
     retry_allowed: bool = False
     request_id: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+

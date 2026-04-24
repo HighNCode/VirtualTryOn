@@ -3,8 +3,8 @@
   assign selected_variant = product.selected_or_first_available_variant
 %}
 
-{{ 'optimo-vts-widget.css' | asset_url | append: '?v=20260420-persistence' | stylesheet_tag }}
-<script src="{{ 'optimo-vts-widget.js' | asset_url | append: '?v=20260420-persistence' }}" defer></script>
+{{ 'optimo-vts-widget.css' | asset_url | append: '?v=20260423-analytics-revamp' | stylesheet_tag }}
+<script src="{{ 'optimo-vts-widget.js' | asset_url | append: '?v=20260423-analytics-revamp' }}" defer></script>
 
 {% if product != blank %}
   <div
@@ -59,6 +59,11 @@
                 {% endif %},
               "options": {{ variant.options | json }}
             }{% unless forloop.last %},{% endunless %}
+          {% endfor %}
+        ],
+        "collectionIds": [
+          {% for collection in product.collections %}
+            {{ collection.id | prepend: 'gid://shopify/Collection/' | json }}{% unless forloop.last %},{% endunless %}
           {% endfor %}
         ]
       }
