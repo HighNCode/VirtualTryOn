@@ -1,8 +1,11 @@
 (function () {
   const STORAGE_KEY = "optimo-vts-user-id";
+  const FLOW_SNAPSHOT_TTL_MS = 60 * 60 * 1000;
+  const FLOW_SNAPSHOT_PREFIX = "optimo-vts-flow";
+  const FLOW_POINTER_PREFIX = "optimo-vts-flow-pointer";
   const ACTIVE_PROGRESS_COLOR = "linear-gradient(90deg, #a4006e 0%, #f3001f 100%)";
   const IDLE_PROGRESS_COLOR = "#d7d5d8";
-  const HEATMAP_VIEWBOX = "0 0 200 500";
+  const HEATMAP_VIEWBOX = "0 0 300 620";
   const MEASUREMENT_ROWS = [
     ["height", "Height"],
     ["chest", "Chest circumference"],
@@ -23,45 +26,65 @@
     loose: "Loose",
     very_loose: "Very loose"
   };
+  const FIT_COLOR_ANCHORS = [
+    { delta: -6, color: "#C04020", label: "tight" },
+    { delta: -2, color: "#E87040", label: "snug" },
+    { delta: 0, color: "#2D9E5A", label: "perfect" },
+    { delta: 2, color: "#4A8FD4", label: "loose" },
+    { delta: 6, color: "#1A5FAA", label: "very_loose" }
+  ];
 
-  const SILHOUETTE_BODY_D =
-    "M76 98 " +
-    "Q100 82 124 98 " +
-    "Q152 118 154 150 " +
-    "Q158 210 150 258 " +
-    "Q146 286 140 306 " +
-    "Q136 320 132 338 " +
-    "Q128 360 132 390 " +
-    "L136 448 " +
-    "Q138 476 122 490 " +
-    "Q110 498 100 498 " +
-    "Q90 498 78 490 " +
-    "Q62 476 64 448 " +
-    "L68 390 " +
-    "Q72 360 68 338 " +
-    "Q64 320 60 306 " +
-    "Q54 286 50 258 " +
-    "Q42 210 46 150 " +
-    "Q48 118 76 98 Z";
+  const HEATMAP_MEASUREMENT_LABELS = {
+    height: "Height",
+    shoulder_width: "Shoulder width",
+    arm_length: "Arm length",
+    torso_length: "Torso length",
+    inseam: "Inseam",
+    chest: "Chest",
+    waist: "Waist",
+    hip: "Hip",
+    neck: "Neck",
+    thigh: "Thigh",
+    upper_arm: "Upper arm",
+    wrist: "Wrist",
+    calf: "Calf",
+    ankle: "Ankle",
+    bicep: "Bicep"
+  };
 
-  const ZONE_PATHS = [
-    { zone: "neck", label: "Neck", d: "M86 86 Q100 78 114 86 L120 104 Q100 114 80 104 Z" },
-    { zone: "shoulders", label: "Shoulders", d: "M54 106 Q100 90 146 106 L162 140 Q100 160 38 140 Z" },
-    { zone: "chest", label: "Chest", d: "M56 140 Q100 126 144 140 L152 206 Q100 226 48 206 Z" },
-    { zone: "waist", label: "Waist", d: "M64 206 Q100 194 136 206 L142 260 Q100 278 58 260 Z" },
-    { zone: "hips", label: "Hips", d: "M56 262 Q100 244 144 262 L152 322 Q100 350 48 322 Z" },
+  const HEATMAP_CATEGORY_MEASUREMENTS = {
+    tops: ["neck", "shoulder_width", "chest", "torso_length", "waist", "arm_length", "upper_arm", "bicep", "wrist"],
+    outerwear: ["neck", "shoulder_width", "chest", "torso_length", "waist", "arm_length", "upper_arm", "bicep", "wrist"],
+    bottoms: ["waist", "hip", "thigh", "calf", "ankle", "inseam"],
+    dresses: ["neck", "shoulder_width", "chest", "torso_length", "waist", "hip", "upper_arm", "bicep", "wrist", "thigh", "calf", "ankle"],
+    unknown: ["height", "shoulder_width", "arm_length", "torso_length", "inseam", "chest", "waist", "hip", "neck", "thigh", "upper_arm", "wrist", "calf", "ankle", "bicep"]
+  };
 
-    { zone: "sleeves", label: "Sleeves", d: "M34 146 Q18 192 30 244 Q40 280 62 304 L74 292 Q54 262 48 232 Q38 188 60 152 Z" },
-    { zone: "sleeves", label: "Sleeves", d: "M166 146 Q182 192 170 244 Q160 280 138 304 L126 292 Q146 262 152 232 Q162 188 140 152 Z" },
+  const HEATMAP_SEGMENTS = [
+    { id: "neck", measurementKey: "neck", label: "Neck", d: "M130 78 L170 78 L176 104 L124 104 Z" },
+    { id: "shoulders", measurementKey: "shoulder_width", label: "Shoulder width", d: "M60 106 L240 106 L256 140 L44 140 Z" },
+    { id: "chest", measurementKey: "chest", label: "Chest", d: "M74 140 L226 140 L216 204 L84 204 Z" },
+    { id: "torso", measurementKey: "torso_length", label: "Torso length", d: "M98 204 L202 204 L194 318 L106 318 Z" },
+    { id: "waist", measurementKey: "waist", label: "Waist", d: "M82 254 L218 254 L210 318 L90 318 Z" },
+    { id: "hips", measurementKey: "hip", label: "Hip", d: "M70 318 L230 318 L220 378 L80 378 Z" },
 
-    { zone: "thigh", label: "Thigh", d: "M72 326 Q84 316 96 326 L96 396 Q84 406 72 396 Z" },
-    { zone: "thigh", label: "Thigh", d: "M104 326 Q116 316 128 326 L128 396 Q116 406 104 396 Z" },
+    { id: "arm_length_left", measurementKey: "arm_length", label: "Arm length", d: "M50 138 L86 146 L34 334 L2 324 Z" },
+    { id: "arm_length_right", measurementKey: "arm_length", label: "Arm length", d: "M250 138 L214 146 L266 334 L298 324 Z" },
+    { id: "upper_arm_left", measurementKey: "upper_arm", label: "Upper arm", d: "M56 144 L92 152 L64 254 L30 242 Z" },
+    { id: "upper_arm_right", measurementKey: "upper_arm", label: "Upper arm", d: "M244 144 L208 152 L236 254 L270 242 Z" },
+    { id: "bicep_left", measurementKey: "bicep", label: "Bicep", d: "M50 186 L80 194 L74 230 L44 220 Z" },
+    { id: "bicep_right", measurementKey: "bicep", label: "Bicep", d: "M250 186 L220 194 L226 230 L256 220 Z" },
+    { id: "wrist_left", measurementKey: "wrist", label: "Wrist", d: "M10 312 L42 320 L36 352 L6 344 Z" },
+    { id: "wrist_right", measurementKey: "wrist", label: "Wrist", d: "M290 312 L258 320 L264 352 L294 344 Z" },
 
-    { zone: "calf", label: "Calf", d: "M74 398 Q84 392 94 398 L92 452 Q84 460 76 452 Z" },
-    { zone: "calf", label: "Calf", d: "M106 398 Q116 392 126 398 L124 452 Q116 460 108 452 Z" },
-
-    { zone: "ankle", label: "Ankle", d: "M78 456 Q84 452 90 456 L88 486 Q84 490 80 486 Z" },
-    { zone: "ankle", label: "Ankle", d: "M110 456 Q116 452 122 456 L120 486 Q116 490 112 486 Z" }
+    { id: "thigh_left", measurementKey: "thigh", label: "Thigh", d: "M88 378 L140 378 L138 486 L94 486 Z" },
+    { id: "thigh_right", measurementKey: "thigh", label: "Thigh", d: "M160 378 L212 378 L206 486 L162 486 Z" },
+    { id: "inseam_left", measurementKey: "inseam", label: "Inseam", d: "M140 380 L148 380 L146 486 L138 486 Z" },
+    { id: "inseam_right", measurementKey: "inseam", label: "Inseam", d: "M152 380 L160 380 L162 486 L154 486 Z" },
+    { id: "calf_left", measurementKey: "calf", label: "Calf", d: "M96 486 L130 486 L126 574 L100 574 Z" },
+    { id: "calf_right", measurementKey: "calf", label: "Calf", d: "M170 486 L204 486 L200 574 L174 574 Z" },
+    { id: "ankle_left", measurementKey: "ankle", label: "Ankle", d: "M100 574 L126 574 L124 606 L104 606 Z" },
+    { id: "ankle_right", measurementKey: "ankle", label: "Ankle", d: "M174 574 L200 574 L196 606 L176 606 Z" }
   ];
 
   function escapeHtml(value) {
@@ -84,6 +107,14 @@
   function getLocalStorage() {
     try {
       return window.localStorage;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function getSessionStorage() {
+    try {
+      return window.sessionStorage;
     } catch (error) {
       return null;
     }
@@ -117,6 +148,10 @@
       return window.Shopify.routes.root;
     }
     return "/";
+  }
+
+  function isThemeEditorDesignMode() {
+    return Boolean(window.Shopify && window.Shopify.designMode);
   }
 
   function svgIcon(name) {
@@ -210,13 +245,19 @@
         fitScores: {},
         tryOnId: "",
         tryOnImageUrl: "",
+        fitGeneratedAt: 0,
         tryOnError: "",
         limitCode: "",
         limitResetAt: "",
         limitTimezone: "",
         limitMessage: "",
         activeImageUrl: "",
+        lastGoodImageUrl: "",
+        imageLoadError: "",
+        failedImageUrl: "",
+        lastImageErrorUrl: "",
         studioBackgrounds: [],
+        studioBackgroundsError: false,
         studioResults: {},
         currentStudioBackgroundId: "",
         studioLoadingId: "",
@@ -229,7 +270,12 @@
         isHeatmapLoading: false,
         selectedStudioImageUrl: "",
         returningUser: false,
-        activeHeatmapZone: ""
+        activeHeatmapZone: "",
+        customerLoginRequired: false,
+        customerLoggedIn: false,
+        loginMessage: "",
+        widgetColor: "",
+        productViewTracked: false
       };
 
       this.handleHostClick = this.handleHostClick.bind(this);
@@ -239,11 +285,34 @@
       this.handleOverlayInput = this.handleOverlayInput.bind(this);
       this.handleOverlayMouseOver = this.handleOverlayMouseOver.bind(this);
       this.handleOverlayMouseOut = this.handleOverlayMouseOut.bind(this);
+      this.handleOverlayAssetError = this.handleOverlayAssetError.bind(this);
+      this.handleOverlayAssetLoad = this.handleOverlayAssetLoad.bind(this);
     }
 
     async init() {
       this.renderHost();
+      if (isThemeEditorDesignMode()) {
+        // In Shopify theme editor we always render the trigger so merchants can
+        // place and preview the block even when runtime scope rules would hide it.
+        this.state.isVisible = true;
+        this.state.isChecking = false;
+        const button = this.host.querySelector("[data-ovts-trigger]");
+        if (button) {
+          button.hidden = false;
+        }
+        this.notifyThemeDetected();
+        return;
+      }
       await this.checkEnabled();
+    }
+
+    notifyThemeDetected() {
+      this.request("/widget/theme-detected", {
+        method: "POST",
+        withSession: false
+      }).catch(function () {
+        return null;
+      });
     }
 
     renderHost() {
@@ -264,14 +333,32 @@
       if (button) {
         button.addEventListener("click", this.handleHostClick);
       }
+      this.applyTriggerColor(this.state.widgetColor);
+    }
+
+    normalizeHexColor(value) {
+      const candidate = String(value || "").trim();
+      if (!/^#[0-9A-Fa-f]{6}$/.test(candidate)) {
+        return "";
+      }
+      return candidate.toUpperCase();
+    }
+
+    applyTriggerColor(color) {
+      const normalized = this.normalizeHexColor(color);
+      if (!normalized) {
+        this.host.style.removeProperty("--ovts-trigger-background");
+        this.state.widgetColor = "";
+        return;
+      }
+      this.host.style.setProperty("--ovts-trigger-background", normalized);
+      this.state.widgetColor = normalized;
     }
 
     async checkEnabled() {
       try {
-        const response = await this.request(
-          "/widget/check-enabled?shopify_product_gid=" + encodeURIComponent(this.config.product.gid),
-          { withSession: false }
-        );
+        const response = await this.request(this.buildCheckEnabledPath(), { withSession: false });
+        this.applyEligibilityResponse(response);
         this.state.isVisible = Boolean(response && response.enabled);
       } catch (error) {
         this.state.isVisible = false;
@@ -281,7 +368,82 @@
         if (button) {
           button.hidden = !this.state.isVisible;
         }
+        if (!this.state.productViewTracked) {
+          this.state.productViewTracked = true;
+          this.trackEvent(
+            "product_viewed",
+            { product_id: this.config.product.id },
+            { allowWithoutSession: true }
+          );
+        }
       }
+    }
+
+    applyEligibilityResponse(response) {
+      if (!response || typeof response !== "object") {
+        return;
+      }
+
+      this.state.customerLoginRequired = Boolean(response.customer_login_required);
+      this.state.customerLoggedIn = Boolean(response.customer_logged_in);
+      this.state.loginMessage =
+        typeof response.login_message === "string" ? response.login_message : "";
+      if (typeof response.widget_color === "string") {
+        this.applyTriggerColor(response.widget_color);
+      }
+    }
+
+    getCustomerLoginMessage() {
+      return (
+        this.state.loginMessage ||
+        "Please log in to your store account to continue virtual try-on. After logging in, reopen this widget and continue."
+      );
+    }
+
+    isCustomerLoginBlocked() {
+      return this.state.customerLoginRequired && !this.state.customerLoggedIn;
+    }
+
+    async refreshCustomerEligibility() {
+      try {
+        const response = await this.request(this.buildCheckEnabledPath(), { withSession: false });
+        this.applyEligibilityResponse(response);
+      } catch (error) {
+        return;
+      }
+    }
+
+    buildCheckEnabledPath() {
+      const params = new URLSearchParams();
+      params.set("shopify_product_gid", this.config.product.gid);
+
+      const hasCollectionArray = Array.isArray(this.config.product.collectionIds);
+      const collectionIds = hasCollectionArray
+        ? this.config.product.collectionIds
+            .map(function (value) {
+              return String(value || "").trim();
+            })
+            .filter(Boolean)
+        : [];
+
+      if (hasCollectionArray) {
+        params.set("shopify_collection_ids", collectionIds.join(","));
+      }
+
+      return "/widget/check-enabled?" + params.toString();
+    }
+
+    async ensureCustomerLoginBeforeAction() {
+      await this.refreshCustomerEligibility();
+      if (!this.isCustomerLoginBlocked()) {
+        return true;
+      }
+
+      this.state.error = this.getCustomerLoginMessage();
+      this.state.notice = "";
+      this.state.stage = "setup";
+      this.renderOverlay();
+      return false;
     }
 
     ensureOverlay() {
@@ -298,6 +460,8 @@
       this.overlay.addEventListener("input", this.handleOverlayInput);
       this.overlay.addEventListener("mouseover", this.handleOverlayMouseOver);
       this.overlay.addEventListener("mouseout", this.handleOverlayMouseOut);
+      this.overlay.addEventListener("error", this.handleOverlayAssetError, true);
+      this.overlay.addEventListener("load", this.handleOverlayAssetLoad, true);
       document.body.appendChild(this.overlay);
     }
 
@@ -327,6 +491,136 @@
       this.clearToast();
     }
 
+    getFlowSnapshotKey(sessionId, productId) {
+      return FLOW_SNAPSHOT_PREFIX + ":" + String(sessionId || "") + ":" + String(productId || "");
+    }
+
+    getFlowSnapshotPointerKey(productId) {
+      return FLOW_POINTER_PREFIX + ":" + this.userIdentifier + ":" + String(productId || "");
+    }
+
+    hasFreshFitState(referenceTs) {
+      if (!referenceTs) {
+        return false;
+      }
+      return Date.now() - Number(referenceTs) <= FLOW_SNAPSHOT_TTL_MS;
+    }
+
+    saveFlowSnapshot() {
+      if (!this.state.session || !this.state.session.session_id || !this.state.session.product_id) {
+        return;
+      }
+      if (!this.state.recommendation || !this.state.tryOnImageUrl) {
+        return;
+      }
+      const storage = getSessionStorage();
+      if (!storage) {
+        return;
+      }
+
+      const createdAt = this.state.fitGeneratedAt || Date.now();
+      const payload = {
+        createdAt: createdAt,
+        stage: this.state.stage,
+        measurement_id: this.state.measurement ? this.state.measurement.measurement_id : null,
+        measurements: this.state.measurement ? this.state.measurement.measurements || {} : {},
+        recommendation: this.state.recommendation,
+        selectedSize: this.state.selectedSize,
+        heatmapBySize: this.state.heatmapBySize || {},
+        fitScores: this.state.fitScores || {},
+        tryOnId: this.state.tryOnId || "",
+        tryOnImageUrl: this.state.tryOnImageUrl || "",
+        activeImageUrl: this.state.activeImageUrl || "",
+        studioResults: this.state.studioResults || {},
+        currentStudioBackgroundId: this.state.currentStudioBackgroundId || "",
+        selectedStudioImageUrl: this.state.selectedStudioImageUrl || "",
+        form: this.state.form
+      };
+
+      const snapshotKey = this.getFlowSnapshotKey(this.state.session.session_id, this.state.session.product_id);
+      const pointerKey = this.getFlowSnapshotPointerKey(this.state.session.product_id);
+      storage.setItem(snapshotKey, JSON.stringify(payload));
+      storage.setItem(pointerKey, snapshotKey);
+    }
+
+    clearFlowSnapshotForCurrentSession() {
+      if (!this.state.session || !this.state.session.session_id || !this.state.session.product_id) {
+        return;
+      }
+      const storage = getSessionStorage();
+      if (!storage) {
+        return;
+      }
+      const snapshotKey = this.getFlowSnapshotKey(this.state.session.session_id, this.state.session.product_id);
+      storage.removeItem(snapshotKey);
+    }
+
+    tryRestoreFlowSnapshot(session) {
+      const storage = getSessionStorage();
+      if (!storage || !session || !session.session_id || !session.product_id) {
+        return false;
+      }
+
+      const directKey = this.getFlowSnapshotKey(session.session_id, session.product_id);
+      const pointerKey = this.getFlowSnapshotPointerKey(session.product_id);
+      const candidateKeys = [];
+      const pointerValue = storage.getItem(pointerKey);
+      if (pointerValue) {
+        candidateKeys.push(pointerValue);
+      }
+      candidateKeys.push(directKey);
+
+      for (let i = 0; i < candidateKeys.length; i += 1) {
+        const key = candidateKeys[i];
+        if (!key) {
+          continue;
+        }
+        const raw = storage.getItem(key);
+        if (!raw) {
+          continue;
+        }
+        try {
+          const snapshot = JSON.parse(raw);
+          if (!snapshot || !this.hasFreshFitState(snapshot.createdAt)) {
+            storage.removeItem(key);
+            continue;
+          }
+          if (!snapshot.recommendation || !snapshot.tryOnImageUrl) {
+            storage.removeItem(key);
+            continue;
+          }
+
+          this.state.measurement = {
+            measurement_id: session.measurement_id || snapshot.measurement_id,
+            measurements: session.measurements || snapshot.measurements || {},
+            confidence_score: null,
+            cached: true
+          };
+          this.state.recommendation = snapshot.recommendation;
+          this.state.selectedSize = snapshot.selectedSize || snapshot.recommendation.recommended_size;
+          this.state.heatmapBySize = snapshot.heatmapBySize || {};
+          this.state.fitScores = snapshot.fitScores || this.buildFitScoreMap(snapshot.recommendation);
+          this.state.tryOnId = snapshot.tryOnId || "";
+          this.state.tryOnImageUrl = snapshot.tryOnImageUrl || "";
+          this.state.activeImageUrl = snapshot.activeImageUrl || snapshot.tryOnImageUrl || "";
+          this.state.studioResults = snapshot.studioResults || {};
+          this.state.currentStudioBackgroundId = snapshot.currentStudioBackgroundId || "";
+          this.state.selectedStudioImageUrl = snapshot.selectedStudioImageUrl || "";
+          this.state.fitGeneratedAt = snapshot.createdAt;
+          if (snapshot.form && typeof snapshot.form === "object") {
+            this.state.form = Object.assign({}, this.state.form, snapshot.form);
+          }
+          this.state.stage = snapshot.stage === "measurements" ? "measurements" : "results";
+          this.state.notice = "Restored your recent fit from the last hour.";
+          this.state.returningUser = true;
+          return true;
+        } catch (error) {
+          storage.removeItem(key);
+        }
+      }
+      return false;
+    }
+
     async startSession() {
       this.state.returningUser = false;
       this.state.activeHeatmapZone = "";
@@ -350,20 +644,41 @@
         this.state.fitScores = {};
         this.state.tryOnId = "";
         this.state.tryOnImageUrl = "";
+        this.state.fitGeneratedAt = 0;
         this.state.tryOnError = "";
         this.state.limitCode = "";
         this.state.limitResetAt = "";
         this.state.limitTimezone = "";
         this.state.limitMessage = "";
         this.state.activeImageUrl = "";
+        this.state.lastGoodImageUrl = "";
+        this.state.imageLoadError = "";
+        this.state.failedImageUrl = "";
+        this.state.lastImageErrorUrl = "";
         this.state.studioBackgrounds = [];
+        this.state.studioBackgroundsError = false;
         this.state.studioResults = {};
         this.state.currentStudioBackgroundId = "";
         this.state.studioLoadingId = "";
         this.state.selectedStudioImageUrl = "";
         this.state.activeHeatmapZone = "";
 
-        if (session.has_existing_measurements && session.measurement_id && session.photos_available) {
+        if (session.has_existing_measurements) {
+          if (session.height_cm != null && Number.isFinite(Number(session.height_cm))) {
+            this.state.form.height = String(session.height_cm);
+          }
+          if (session.weight_kg != null && Number.isFinite(Number(session.weight_kg))) {
+            this.state.form.weight = String(session.weight_kg);
+          }
+          if (typeof session.gender === "string" && ["male", "female", "unisex"].includes(session.gender)) {
+            this.state.form.gender = session.gender;
+          }
+        }
+
+        const restored = this.tryRestoreFlowSnapshot(session);
+        if (restored) {
+          // Keep restored stage/results and avoid forcing setup flow.
+        } else if (session.has_existing_measurements && session.measurement_id && session.photos_available) {
           this.state.returningUser = true;
           this.state.measurement = {
             measurement_id: session.measurement_id,
@@ -380,7 +695,15 @@
           this.state.stage = "setup";
         }
 
-        this.trackEvent("widget_opened");
+        if (this.isCustomerLoginBlocked()) {
+          this.state.error = this.getCustomerLoginMessage();
+          this.state.stage = "setup";
+          this.state.notice = "";
+        }
+
+        this.trackEvent("widget_opened", {
+          product_id: this.config.product.id
+        });
       } catch (error) {
         this.state.error = error.message || "Unable to start the Optimo VTS flow.";
         this.state.stage = "setup";
@@ -465,7 +788,9 @@
         this.generateFit();
       } else if (action === "submit-studio" && this.state.selectedStudioImageUrl) {
         this.state.activeImageUrl = this.state.selectedStudioImageUrl;
+        this.state.imageLoadError = "";
         this.showToast("Studio look applied.");
+        this.saveFlowSnapshot();
         this.renderOverlay();
       } else if (action === "retry-studio" && this.state.currentStudioBackgroundId) {
         this.generateStudio(this.state.currentStudioBackgroundId, true);
@@ -478,7 +803,9 @@
       } else if (action === "select-size") {
         this.selectSize(actionTarget.getAttribute("data-size"));
       } else if (action === "share-look") {
-        this.shareLook(actionTarget.getAttribute("data-network") || "share");
+        this.shareLook();
+      } else if (action === "download-look") {
+        this.downloadActiveImage();
       }
     }
 
@@ -511,6 +838,95 @@
       }
 
       this.setActiveHeatmapZone("");
+    }
+
+    handleOverlayAssetLoad(event) {
+      const target = event.target;
+      if (!(target instanceof HTMLImageElement)) {
+        return;
+      }
+      if (target.getAttribute("data-role") !== "result-image") {
+        return;
+      }
+
+      this.state.lastGoodImageUrl = target.currentSrc || target.src || this.state.lastGoodImageUrl;
+      this.state.imageLoadError = "";
+    }
+
+    handleOverlayAssetError(event) {
+      const target = event.target;
+      if (!(target instanceof HTMLImageElement)) {
+        return;
+      }
+      if (target.getAttribute("data-role") !== "result-image") {
+        return;
+      }
+
+      const src = target.currentSrc || target.src || "";
+      this.trackEvent("result_image_load_failed", {
+        image_url: src
+      });
+      this.resolveResultImageFailure(src);
+    }
+
+    async resolveResultImageFailure(src) {
+      if (src && this.state.lastImageErrorUrl === src) {
+        return;
+      }
+      this.state.lastImageErrorUrl = src || "";
+      const fallback = this.state.lastGoodImageUrl || this.state.tryOnImageUrl || "";
+      if (fallback && this.state.activeImageUrl === src) {
+        this.state.activeImageUrl = fallback;
+      }
+
+      if (!fallback || fallback === src) {
+        this.state.failedImageUrl = src || this.state.tryOnImageUrl || this.state.activeImageUrl || "";
+        if (this.state.activeImageUrl === src) {
+          this.state.activeImageUrl = "";
+        }
+      }
+
+      let message = "Couldn't load the generated image. Please retry.";
+      if (src) {
+        const reason = await this.probeImageFailureReason(src);
+        if (reason === "expired") {
+          message = "Your generated image expired from cache. Please generate again.";
+        } else if (reason === "mime") {
+          message = "Image format issue detected. Please retry generation.";
+        } else if (reason === "proxy") {
+          message = "Image proxy couldn't reach the result. Please retry.";
+        }
+      }
+
+      this.state.imageLoadError = message;
+      this.state.notice = message;
+      this.clearFlowSnapshotForCurrentSession();
+      this.renderOverlay();
+    }
+
+    async probeImageFailureReason(url) {
+      if (!url) {
+        return "unknown";
+      }
+      try {
+        const response = await window.fetch(url, {
+          method: "GET",
+          credentials: "same-origin"
+        });
+        if (response.status === 410) {
+          return "expired";
+        }
+        if (response.status >= 500 || response.status === 404) {
+          return "proxy";
+        }
+        const contentType = (response.headers.get("content-type") || "").toLowerCase();
+        if (contentType && contentType.indexOf("image/") !== 0) {
+          return "mime";
+        }
+      } catch (error) {
+        return "proxy";
+      }
+      return "unknown";
     }
 
     handleOverlayChange(event) {
@@ -547,7 +963,12 @@
       }
     }
 
-    goToFrontPose() {
+    async goToFrontPose() {
+      const loginAllowed = await this.ensureCustomerLoginBeforeAction();
+      if (!loginAllowed) {
+        return;
+      }
+
       const validationError = this.validateSetupForm();
       if (validationError) {
         this.state.error = validationError;
@@ -591,6 +1012,7 @@
     }
 
     resetPhotoCapture() {
+      this.clearFlowSnapshotForCurrentSession();
       this.state.frontFile = null;
       this.state.sideFile = null;
       if (this.state.frontPreviewUrl) {
@@ -602,18 +1024,33 @@
       this.state.frontPreviewUrl = "";
       this.state.sidePreviewUrl = "";
       this.state.error = "";
+      this.state.notice = "";
+      this.state.returningUser = false;
+      this.state.recommendation = null;
+      this.state.selectedSize = "";
+      this.state.heatmapBySize = {};
+      this.state.fitScores = {};
+      this.state.tryOnId = "";
+      this.state.tryOnImageUrl = "";
+      this.state.activeImageUrl = "";
+      this.state.studioResults = {};
+      this.state.currentStudioBackgroundId = "";
+      this.state.selectedStudioImageUrl = "";
+      this.state.fitGeneratedAt = 0;
       this.state.stage = "front-pose";
       this.renderOverlay();
     }
 
     async handlePoseFile(pose, file) {
       const currentPoseLabel = pose === "front" ? "front" : "side";
+      let followupNotice = "";
       this.state.error = "";
       this.state.notice = "Checking your " + currentPoseLabel + " pose...";
       this.renderOverlay();
 
       try {
-        await this.validatePose(file, pose);
+        const validation = await this.validatePose(file, pose);
+        followupNotice = this.getPoseValidationWarningNotice(validation, currentPoseLabel);
 
         if (pose === "front") {
           this.state.frontFile = file;
@@ -627,9 +1064,10 @@
         this.trackEvent("photo_captured", { pose: pose });
       } catch (error) {
         this.state.error = error.message || "We could not use that image. Try another photo.";
+        followupNotice = "";
       }
 
-      this.state.notice = "";
+      this.state.notice = followupNotice;
       this.renderOverlay();
 
       if (pose === "side" && this.state.sideFile) {
@@ -647,12 +1085,69 @@
         formData: formData
       });
 
-      if (!response || response.valid) {
+      if (!response) {
         return;
       }
 
+      const status = typeof response.status === "string" ? response.status : "";
+      if (status === "accepted" || status === "accepted_with_warnings") {
+        return response;
+      }
+
+      if (status === "rejected" || response.valid === false) {
+        const hardFailures = Array.isArray(response.hard_failures) ? response.hard_failures : [];
+        const hardMessages = hardFailures
+          .map((item) => {
+            if (!item || !item.message) {
+              return "";
+            }
+            const base = String(item.message).trim();
+            const suggestion = item.suggestion ? String(item.suggestion).trim() : "";
+            return suggestion ? base + " " + suggestion : base;
+          })
+          .filter(Boolean);
+        if (hardMessages.length) {
+          throw new Error(hardMessages.join(" "));
+        }
+
+        const issues = Array.isArray(response.issues) ? response.issues.filter(Boolean) : [];
+        throw new Error(issues.length ? issues.join(" ") : "We couldn't verify that pose. Try another photo.");
+      }
+
+      if (response.valid === true) {
+        return response;
+      }
+
       const issues = Array.isArray(response.issues) ? response.issues.filter(Boolean) : [];
-      throw new Error(issues.length ? issues.join(" ") : "We couldn't verify that pose. Try again.");
+      throw new Error(issues.length ? issues.join(" ") : "We couldn't verify that pose. Try another photo.");
+    }
+
+    getPoseValidationWarningNotice(response, poseLabel) {
+      if (!response || response.status !== "accepted_with_warnings") {
+        return "";
+      }
+
+      const warnings = Array.isArray(response.warnings) ? response.warnings : [];
+      const warningMessages = warnings
+        .map((item) => (item && item.message ? String(item.message).trim() : ""))
+        .filter(Boolean);
+
+      if (!warningMessages.length) {
+        return (
+          "Your " +
+          poseLabel +
+          " photo was accepted, but image quality may slightly affect fit precision."
+        );
+      }
+
+      const top = warningMessages.slice(0, 2).join(" ");
+      return (
+        "Your " +
+        poseLabel +
+        " photo was accepted with caution: " +
+        top +
+        " Fit accuracy may be slightly reduced."
+      );
     }
 
     clearAnalysisTicker() {
@@ -678,13 +1173,65 @@
       }, 1100);
     }
 
+    clearFailedImageState() {
+      this.state.imageLoadError = "";
+      this.state.failedImageUrl = "";
+      this.state.lastImageErrorUrl = "";
+    }
+
+    async isImageUrlUsable(url) {
+      if (!url) {
+        return false;
+      }
+      try {
+        const response = await window.fetch(url, {
+          method: "GET",
+          credentials: "same-origin"
+        });
+        if (!response.ok) {
+          return false;
+        }
+        const contentType = (response.headers.get("content-type") || "").toLowerCase();
+        return contentType.indexOf("image/") === 0;
+      } catch (error) {
+        return false;
+      }
+    }
+
+    resetFitArtifactsForRegeneration() {
+      this.state.recommendation = null;
+      this.state.selectedSize = "";
+      this.state.heatmapBySize = {};
+      this.state.fitScores = {};
+      this.state.tryOnId = "";
+      this.state.tryOnImageUrl = "";
+      this.state.activeImageUrl = "";
+      this.state.lastGoodImageUrl = "";
+      this.state.studioResults = {};
+      this.state.currentStudioBackgroundId = "";
+      this.state.selectedStudioImageUrl = "";
+      this.state.fitGeneratedAt = 0;
+      this.clearFailedImageState();
+      this.clearFlowSnapshotForCurrentSession();
+    }
+
     async extractMeasurements() {
       if (!this.state.frontFile || !this.state.sideFile || !this.state.session) {
         return;
       }
 
+      const validationError = this.validateSetupForm();
+      if (validationError) {
+        this.state.error = validationError + " Please complete setup details before extracting measurements.";
+        this.state.notice = "";
+        this.state.stage = "setup";
+        this.renderOverlay();
+        return;
+      }
+
       this.state.stage = "analyzing";
       this.state.error = "";
+      this.state.notice = "";
       this.startAnalysisTicker("analyzing");
       this.renderOverlay();
 
@@ -703,12 +1250,26 @@
 
         this.clearAnalysisTicker();
         this.state.measurement = measurement;
+        this.state.recommendation = null;
+        this.state.selectedSize = "";
+        this.state.heatmapBySize = {};
+        this.state.fitScores = {};
+        this.state.tryOnId = "";
+        this.state.tryOnImageUrl = "";
+        this.state.activeImageUrl = "";
+        this.state.studioResults = {};
+        this.state.currentStudioBackgroundId = "";
+        this.state.selectedStudioImageUrl = "";
+        this.state.fitGeneratedAt = 0;
+        this.clearFailedImageState();
         this.state.notice = "";
         this.state.stage = "measurements";
         this.trackEvent("measurement_completed");
+        this.clearFlowSnapshotForCurrentSession();
       } catch (error) {
         this.clearAnalysisTicker();
         this.state.error = error.message || "Measurement extraction failed.";
+        this.state.notice = "";
         this.state.stage = "side-pose";
       }
 
@@ -720,6 +1281,33 @@
         this.state.error = "Measurement data is missing. Please retake your photos.";
         this.state.stage = "setup";
         this.renderOverlay();
+        return;
+      }
+
+      if (
+        this.state.recommendation &&
+        this.state.tryOnImageUrl &&
+        this.hasFreshFitState(this.state.fitGeneratedAt)
+      ) {
+        const stillUsable = await this.isImageUrlUsable(this.state.activeImageUrl || this.state.tryOnImageUrl);
+        if (!stillUsable) {
+          this.resetFitArtifactsForRegeneration();
+        } else {
+          this.state.error = "";
+          this.state.notice = "Showing your recent fit from the last hour.";
+          this.state.stage = "results";
+          this.renderOverlay();
+          if (!this.state.studioBackgrounds.length) {
+            this.loadStudioBackgrounds().then(() => {
+              this.renderOverlay();
+            });
+          }
+          return;
+        }
+      }
+
+      const loginAllowed = await this.ensureCustomerLoginBeforeAction();
+      if (!loginAllowed) {
         return;
       }
 
@@ -764,18 +1352,27 @@
         this.state.generatingStep = 2;
         this.renderOverlay();
 
-        const tryOnStatus = await this.pollTryOn(tryOnStart.try_on_id);
+        let tryOnStatus = null;
+        if (tryOnStart.status === "completed" && tryOnStart.result_image_url) {
+          tryOnStatus = tryOnStart;
+        } else {
+          tryOnStatus = await this.pollTryOn(tryOnStart.try_on_id);
+        }
         this.state.tryOnId = tryOnStatus.try_on_id;
         this.state.tryOnImageUrl = this.toProxyUrl(tryOnStatus.result_image_url);
         this.state.activeImageUrl = this.state.tryOnImageUrl;
+        this.clearFailedImageState();
+        this.state.fitGeneratedAt = Date.now();
         this.trackEvent("try_on_generated", {
-          try_on_id: tryOnStatus.try_on_id
+          try_on_id: tryOnStatus.try_on_id,
+          reused: Boolean(tryOnStart.reused)
         });
 
         await backgroundPromise;
         this.clearAnalysisTicker();
         this.state.generatingStep = 3;
         this.state.stage = "results";
+        this.saveFlowSnapshot();
       } catch (error) {
         this.clearAnalysisTicker();
         if (!this.handleGenerationError(error, "tryon")) {
@@ -793,13 +1390,25 @@
         return map;
       }
 
-      map[recommendation.recommended_size] = recommendation.fit_score;
-      if (Array.isArray(recommendation.alternative_sizes)) {
-        recommendation.alternative_sizes.forEach(function (entry) {
-          if (entry && entry.size) {
-            map[entry.size] = entry.fit_score;
+      if (recommendation.size_scores && typeof recommendation.size_scores === "object") {
+        Object.keys(recommendation.size_scores).forEach(function (sizeKey) {
+          const raw = recommendation.size_scores[sizeKey];
+          if (raw == null) {
+            map[sizeKey] = null;
+            return;
           }
+          const numeric = Number(raw);
+          map[sizeKey] = Number.isFinite(numeric) ? numeric : null;
         });
+      } else {
+        map[recommendation.recommended_size] = recommendation.fit_score;
+        if (Array.isArray(recommendation.alternative_sizes)) {
+          recommendation.alternative_sizes.forEach(function (entry) {
+            if (entry && entry.size) {
+              map[entry.size] = entry.fit_score;
+            }
+          });
+        }
       }
 
       return map;
@@ -824,12 +1433,57 @@
         });
 
         this.state.heatmapBySize[size] = heatmap;
-        this.state.fitScores[size] = heatmap.overall_fit_score;
+        this.saveFlowSnapshot();
         return heatmap;
       } finally {
         this.state.isHeatmapLoading = false;
         this.renderOverlay();
       }
+    }
+
+    getSelectedFitScore() {
+      if (!this.state.selectedSize) {
+        return null;
+      }
+      if (Object.prototype.hasOwnProperty.call(this.state.fitScores || {}, this.state.selectedSize)) {
+        const raw = this.state.fitScores[this.state.selectedSize];
+        return raw == null ? null : Number(raw);
+      }
+      if (this.state.recommendation && this.state.selectedSize === this.state.recommendation.recommended_size) {
+        const fallback = Number(this.state.recommendation.fit_score);
+        return Number.isFinite(fallback) ? fallback : null;
+      }
+      return null;
+    }
+
+    getCoverageForSize(size) {
+      if (!this.state.recommendation || !this.state.recommendation.coverage_by_size) {
+        return null;
+      }
+      const coverage = this.state.recommendation.coverage_by_size[size];
+      if (!coverage || typeof coverage !== "object") {
+        return null;
+      }
+      return coverage;
+    }
+
+    getCoverageNote(size) {
+      const coverage = this.getCoverageForSize(size);
+      if (!coverage) {
+        return "";
+      }
+      const expected = Number(coverage.expected_measurements || 0);
+      const used = Number(coverage.used_measurements || 0);
+      const totalWeight = Number(coverage.total_weight || 0);
+      const usedWeight = Number(coverage.used_weight || 0);
+      const ratio = totalWeight > 0 ? usedWeight / totalWeight : 0;
+      if (expected <= 0 || used <= 0) {
+        return "Insufficient size-chart data for this size.";
+      }
+      if (ratio < 0.55 || used < Math.ceil(expected * 0.5)) {
+        return "Lower confidence due to limited size data.";
+      }
+      return "";
     }
 
     async pollTryOn(tryOnId) {
@@ -859,6 +1513,7 @@
           { withSession: false }
         );
 
+        this.state.studioBackgroundsError = false;
         this.state.studioBackgrounds = Array.isArray(list)
           ? list.slice(0, 5).map((entry) => {
               return {
@@ -868,6 +1523,7 @@
             })
           : [];
       } catch (error) {
+        this.state.studioBackgroundsError = true;
         this.state.studioBackgrounds = [];
       }
     }
@@ -889,6 +1545,13 @@
       this.state.error = "";
       this.renderOverlay();
 
+      const loginAllowed = await this.ensureCustomerLoginBeforeAction();
+      if (!loginAllowed) {
+        this.state.studioLoadingId = "";
+        this.renderOverlay();
+        return;
+      }
+
       try {
         const start = await this.request("/tryon/studio", {
           method: "POST",
@@ -908,6 +1571,8 @@
 
         this.state.studioResults[backgroundId] = imageUrl;
         this.state.selectedStudioImageUrl = imageUrl;
+        this.state.imageLoadError = "";
+        this.saveFlowSnapshot();
         this.showToast("Studio look ready.");
       } catch (error) {
         if (!this.handleGenerationError(error, "studio")) {
@@ -934,7 +1599,9 @@
       } catch (error) {
         this.state.error = error.message || "Unable to load fit heatmap for that size.";
         this.renderOverlay();
+        return;
       }
+      this.saveFlowSnapshot();
     }
 
     resolveVariantForSize(size) {
@@ -1057,35 +1724,97 @@
       this.renderOverlay();
     }
 
-    async shareLook(network) {
+    isLikelyMobileDevice() {
+      const userAgent = (navigator.userAgent || "").toLowerCase();
+      const mobileUa = /android|iphone|ipad|ipod|mobile|silk/.test(userAgent);
+      const narrowViewport = window.matchMedia && window.matchMedia("(max-width: 820px)").matches;
+      return mobileUa || narrowViewport || (navigator.maxTouchPoints || 0) > 1;
+    }
+
+    shouldUseNativeShare() {
+      return typeof navigator.share === "function" && this.isLikelyMobileDevice();
+    }
+
+    async fetchResultBlob(url) {
+      const response = await window.fetch(url, {
+        method: "GET",
+        credentials: "same-origin"
+      });
+      if (!response.ok) {
+        throw new Error("Image is no longer available.");
+      }
+      return response.blob();
+    }
+
+    getShareText() {
+      return "I just tried this look with Optimo VTS. Try it on your store.";
+    }
+
+    async shareLook() {
       const shareUrl = window.location.href;
-      const shareText = "See how this fit looks with Optimo VTS.";
+      const shareText = this.getShareText();
+      if (!this.shouldUseNativeShare()) {
+        await this.downloadActiveImage();
+        return;
+      }
 
-      if (navigator.share) {
-        try {
-          await navigator.share({
-            title: document.title,
-            text: shareText,
-            url: shareUrl
+      const activeUrl = this.state.activeImageUrl || this.state.tryOnImageUrl;
+      try {
+        if (activeUrl) {
+          const blob = await this.fetchResultBlob(activeUrl);
+          const extension = blob.type && blob.type.indexOf("png") !== -1 ? "png" : "jpg";
+          const file = new File([blob], "optimo-vts-look." + extension, {
+            type: blob.type || "image/jpeg"
           });
-          return;
-        } catch (error) {
-          /* no-op */
+          if (typeof navigator.canShare === "function" && navigator.canShare({ files: [file] })) {
+            await navigator.share({
+              title: document.title,
+              text: shareText,
+              url: shareUrl,
+              files: [file]
+            });
+            return;
+          }
         }
-      }
 
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        try {
-          await navigator.clipboard.writeText(shareUrl);
-          this.showToast(network + " share link copied.");
-          this.renderOverlay();
+        await navigator.share({
+          title: document.title,
+          text: shareText,
+          url: shareUrl
+        });
+      } catch (error) {
+        if (error && error.name === "AbortError") {
           return;
-        } catch (error) {
-          /* no-op */
         }
+        this.state.error = error.message || "Unable to open share options right now.";
+        this.renderOverlay();
       }
+    }
 
-      window.open(shareUrl, "_blank", "noopener,noreferrer");
+    async downloadActiveImage() {
+      const activeUrl = this.state.activeImageUrl || this.state.tryOnImageUrl;
+      if (!activeUrl) {
+        this.state.error = "No image available to download yet.";
+        this.renderOverlay();
+        return;
+      }
+      try {
+        const blob = await this.fetchResultBlob(activeUrl);
+        const objectUrl = URL.createObjectURL(blob);
+        const extension = blob.type && blob.type.indexOf("png") !== -1 ? "png" : "jpg";
+        const link = document.createElement("a");
+        link.href = objectUrl;
+        link.download = "optimo-vts-look." + extension;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(objectUrl);
+        this.showToast("Image downloaded.");
+        this.renderOverlay();
+      } catch (error) {
+        this.state.error = error.message || "Unable to download image.";
+        this.renderOverlay();
+      }
     }
 
     toProxyUrl(path) {
@@ -1156,55 +1885,178 @@
       return heatmap.zones[zone] || null;
     }
 
-    resolveZoneFill(heatmap, zone) {
+    getZoneDelta(heatmap, zone) {
+      if (!heatmap || typeof heatmap !== "object") {
+        return null;
+      }
+      if (heatmap.zone_deltas && typeof heatmap.zone_deltas === "object" && heatmap.zone_deltas[zone] != null) {
+        const delta = Number(heatmap.zone_deltas[zone]);
+        return Number.isFinite(delta) ? delta : null;
+      }
       const payload = this.getZonePayload(heatmap, zone);
-      if (payload && payload.color) {
-        return String(payload.color);
+      if (!payload) {
+        return null;
       }
+      const delta = Number(payload.delta_cm);
+      return Number.isFinite(delta) ? delta : null;
+    }
 
-      const legend = this.getHeatmapLegend(heatmap);
-      if (payload && payload.fit_label && legend[payload.fit_label]) {
-        return String(legend[payload.fit_label]);
+    getHeatmapCategory(heatmap) {
+      const incoming = heatmap && typeof heatmap.category === "string" ? heatmap.category.toLowerCase() : "";
+      if (HEATMAP_CATEGORY_MEASUREMENTS[incoming]) {
+        return incoming;
       }
+      if (!heatmap || !heatmap.zones || typeof heatmap.zones !== "object") {
+        return "unknown";
+      }
+      const keys = Object.keys(heatmap.zones);
+      const hasLower = keys.includes("thigh") || keys.includes("calf") || keys.includes("ankle") || keys.includes("inseam");
+      const hasUpper = keys.includes("chest") || keys.includes("shoulder_width") || keys.includes("arm_length") || keys.includes("neck");
+      if (hasLower && hasUpper) {
+        return "dresses";
+      }
+      if (hasLower) {
+        return "bottoms";
+      }
+      if (keys.includes("arm_length")) {
+        return "outerwear";
+      }
+      if (keys.includes("chest") || keys.includes("shoulder_width")) {
+        return "tops";
+      }
+      return "unknown";
+    }
 
-      return "rgba(255,255,255,0.08)";
+    getHeatmapSegment(segmentId) {
+      for (let i = 0; i < HEATMAP_SEGMENTS.length; i += 1) {
+        if (HEATMAP_SEGMENTS[i].id === segmentId) {
+          return HEATMAP_SEGMENTS[i];
+        }
+      }
+      return null;
+    }
+
+    getSegmentPayload(heatmap, segment) {
+      if (!segment || !segment.measurementKey) {
+        return null;
+      }
+      return this.getZonePayload(heatmap, segment.measurementKey);
+    }
+
+    getSegmentDelta(heatmap, segment) {
+      if (!segment || !segment.measurementKey) {
+        return null;
+      }
+      return this.getZoneDelta(heatmap, segment.measurementKey);
+    }
+
+    isSegmentRelevant(segment, category) {
+      const measurements = HEATMAP_CATEGORY_MEASUREMENTS[category] || HEATMAP_CATEGORY_MEASUREMENTS.unknown;
+      return measurements.indexOf(segment.measurementKey) !== -1;
+    }
+
+    getMeasurementLabel(key) {
+      return HEATMAP_MEASUREMENT_LABELS[key] || String(key || "").replace(/_/g, " ");
+    }
+
+    hexToRgb(hex) {
+      const value = String(hex || "").replace("#", "");
+      if (value.length !== 6) {
+        return { r: 128, g: 128, b: 128 };
+      }
+      return {
+        r: parseInt(value.slice(0, 2), 16),
+        g: parseInt(value.slice(2, 4), 16),
+        b: parseInt(value.slice(4, 6), 16)
+      };
+    }
+
+    interpolateColor(colorA, colorB, t) {
+      const a = this.hexToRgb(colorA);
+      const b = this.hexToRgb(colorB);
+      const clampT = Math.max(0, Math.min(1, t));
+      const r = Math.round(a.r + (b.r - a.r) * clampT);
+      const g = Math.round(a.g + (b.g - a.g) * clampT);
+      const bCh = Math.round(a.b + (b.b - a.b) * clampT);
+      return "rgb(" + r + "," + g + "," + bCh + ")";
+    }
+
+    colorForDelta(delta) {
+      if (!Number.isFinite(delta)) {
+        return "rgba(255,255,255,0.08)";
+      }
+      if (delta <= FIT_COLOR_ANCHORS[0].delta) {
+        return FIT_COLOR_ANCHORS[0].color;
+      }
+      if (delta >= FIT_COLOR_ANCHORS[FIT_COLOR_ANCHORS.length - 1].delta) {
+        return FIT_COLOR_ANCHORS[FIT_COLOR_ANCHORS.length - 1].color;
+      }
+      for (let i = 0; i < FIT_COLOR_ANCHORS.length - 1; i += 1) {
+        const left = FIT_COLOR_ANCHORS[i];
+        const right = FIT_COLOR_ANCHORS[i + 1];
+        if (delta >= left.delta && delta <= right.delta) {
+          const fraction = (delta - left.delta) / (right.delta - left.delta);
+          return this.interpolateColor(left.color, right.color, fraction);
+        }
+      }
+      return FIT_COLOR_ANCHORS[2].color;
+    }
+
+    fitLabelForDelta(delta) {
+      if (!Number.isFinite(delta)) {
+        return "perfect";
+      }
+      if (delta < -3.5) {
+        return "tight";
+      }
+      if (delta < -1.0) {
+        return "snug";
+      }
+      if (delta <= 1.5) {
+        return "perfect";
+      }
+      if (delta <= 3.5) {
+        return "loose";
+      }
+      return "very_loose";
+    }
+
+    resolvePayloadFill(heatmap, segment) {
+      const delta = this.getSegmentDelta(heatmap, segment);
+      return this.colorForDelta(delta);
     }
 
     renderHeatmapSvg(heatmap) {
+      const category = this.getHeatmapCategory(heatmap);
       const parts = [
-        '<svg viewBox="' + HEATMAP_VIEWBOX + '" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Fit heatmap">',
-        '<g fill="none" stroke="none">',
-        '<circle cx="100" cy="56" r="26" fill="rgba(255,255,255,0.16)" stroke="rgba(255,255,255,0.32)" stroke-width="2"></circle>',
-        '<path d="' +
-          escapeHtml(SILHOUETTE_BODY_D) +
-          '" fill="rgba(255,255,255,0.12)" stroke="rgba(255,255,255,0.28)" stroke-width="2"></path>',
-        "</g>",
+        '<svg viewBox="' + HEATMAP_VIEWBOX + '" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Fit heatmap">',
         '<g class="ovts-heatmap-zones">'
       ];
 
-      for (let i = 0; i < ZONE_PATHS.length; i += 1) {
-        const entry = ZONE_PATHS[i];
-        const zone = entry.zone;
-        const payload = this.getZonePayload(heatmap, zone);
-        const fill = this.resolveZoneFill(heatmap, zone);
-        const fillOpacity = payload ? "0.72" : "0.10";
-        const stroke = payload ? fill : "rgba(255,255,255,0)";
-        const strokeOpacity = payload ? "0.88" : "0";
+      for (let i = 0; i < HEATMAP_SEGMENTS.length; i += 1) {
+        const entry = HEATMAP_SEGMENTS[i];
+        const payload = this.getSegmentPayload(heatmap, entry);
+        const delta = this.getSegmentDelta(heatmap, entry);
+        const isRelevant = this.isSegmentRelevant(entry, category);
+        const fill = this.resolvePayloadFill(heatmap, entry);
+        const fillOpacity = payload ? (isRelevant ? "0.92" : "0.48") : isRelevant ? "0.24" : "0.12";
+        const stroke = "#111111";
+        const strokeOpacity = payload ? "0.92" : isRelevant ? "0.52" : "0.30";
 
         const title = payload
           ? entry.label +
             ": " +
-            (FIT_LABEL_TITLES[payload.fit_label] || payload.fit_label) +
+            (FIT_LABEL_TITLES[this.fitLabelForDelta(delta)] || this.fitLabelForDelta(delta)) +
             " (" +
-            String(payload.delta_cm) +
+            String(Math.round((delta || 0) * 10) / 10) +
             " cm)"
-          : entry.label + ": no data";
+          : entry.label + ": no size data";
 
         parts.push(
           '<path d="' +
             escapeHtml(entry.d) +
             '" data-zone="' +
-            escapeHtml(zone) +
+            escapeHtml(entry.id) +
             '" fill="' +
             escapeHtml(fill) +
             '" fill-opacity="' +
@@ -1213,7 +2065,9 @@
             escapeHtml(stroke) +
             '" stroke-opacity="' +
             strokeOpacity +
-            '" stroke-width="1.6" vector-effect="non-scaling-stroke">' +
+            '" stroke-width="' +
+            (payload ? "2.4" : "1.9") +
+            '" vector-effect="non-scaling-stroke">' +
             "<title>" +
             escapeHtml(title) +
             "</title></path>"
@@ -1225,52 +2079,72 @@
     }
 
     renderHeatmapLegend(heatmap) {
-      const legend = this.getHeatmapLegend(heatmap);
       return FIT_LABEL_ORDER.map((key) => {
-        const color = legend[key] || "";
+        const anchor = FIT_COLOR_ANCHORS.find(function (entry) {
+          return entry.label === key;
+        });
+        const color = anchor ? anchor.color : "";
         const title = FIT_LABEL_TITLES[key] || key;
         const style = color ? ' style="background:' + escapeHtml(color) + '"' : "";
         return '<span><i' + style + '></i>' + escapeHtml(title) + "</span>";
       }).join("");
     }
 
+    renderHeatmapCoverage(heatmap) {
+      const availableRaw = heatmap && heatmap.coverage_available != null
+        ? Number(heatmap.coverage_available)
+        : NaN;
+      const totalRaw = heatmap && heatmap.coverage_total != null
+        ? Number(heatmap.coverage_total)
+        : NaN;
+      const available = Number.isFinite(availableRaw)
+        ? availableRaw
+        : Object.keys((heatmap && heatmap.zones) || {}).length;
+      const total = Number.isFinite(totalRaw) && totalRaw > 0 ? totalRaw : 15;
+      return '<div class="ovts-heatmap-coverage"><strong>Fit coverage:</strong> ' + escapeHtml(String(available)) + "/" + escapeHtml(String(total)) + " measurements</div>";
+    }
+
     renderHeatmapTooltip(heatmap) {
-      const zone = String(this.state.activeHeatmapZone || "");
-      const payload = zone ? this.getZonePayload(heatmap, zone) : null;
-      if (!zone) {
+      const segmentId = String(this.state.activeHeatmapZone || "");
+      if (!segmentId) {
         return '<div class="ovts-heatmap-tooltip" aria-hidden="true"></div>';
       }
+      const segment = this.getHeatmapSegment(segmentId);
+      const payload = segment ? this.getSegmentPayload(heatmap, segment) : null;
+      const delta = segment ? this.getSegmentDelta(heatmap, segment) : null;
+      const measurementKey = segment ? segment.measurementKey : "";
+      const measurementLabel = this.getMeasurementLabel(measurementKey);
 
       if (!payload) {
         return (
           '<div class="ovts-heatmap-tooltip is-visible" role="status" aria-live="polite">' +
           '<div class="ovts-heatmap-tooltip__row"><strong>' +
-          escapeHtml(zone.replace(/_/g, " ")) +
+          escapeHtml(measurementLabel) +
           "</strong><span>No data</span></div>" +
-          '<div class="ovts-heatmap-tooltip__meta"><span>This zone is not available for this garment.</span></div>' +
+          '<div class="ovts-heatmap-tooltip__meta"><span>No size chart data for this measurement.</span></div>' +
           "</div>"
         );
       }
 
-      const label = FIT_LABEL_TITLES[payload.fit_label] || payload.fit_label || "Fit";
-      const delta = typeof payload.delta_cm === "number" ? payload.delta_cm : Number(payload.delta_cm);
-      const deltaText = Number.isFinite(delta) ? (delta > 0 ? "+" + delta : String(delta)) + " cm" : "";
+      const labelKey = this.fitLabelForDelta(delta);
+      const label = FIT_LABEL_TITLES[labelKey] || labelKey || "Fit";
       const userText = formatNumber(payload.user_cm);
       const productText = formatNumber(payload.product_cm);
 
       return (
         '<div class="ovts-heatmap-tooltip is-visible" role="status" aria-live="polite">' +
         '<div class="ovts-heatmap-tooltip__row"><strong>' +
-        escapeHtml(zone.replace(/_/g, " ")) +
+        escapeHtml(measurementLabel) +
         "</strong><span>" +
         escapeHtml(label) +
         "</span></div>" +
         '<div class="ovts-heatmap-tooltip__meta">' +
-        '<span>Delta: <strong>' +
-        escapeHtml(deltaText) +
+        '<span>You: <strong>' +
+        escapeHtml(userText != null ? userText + " cm" : "--") +
         "</strong></span>" +
-        (userText != null ? '<span>You: <strong>' + escapeHtml(userText) + " cm</strong></span>" : "") +
-        (productText != null ? '<span>Garment: <strong>' + escapeHtml(productText) + " cm</strong></span>" : "") +
+        '<span>Garment: <strong>' +
+        escapeHtml(productText != null ? productText + " cm" : "--") +
+        "</strong></span>" +
         "</div></div>"
       );
     }
@@ -1420,7 +2294,9 @@
       }
 
       if (code === "CUSTOMER_LOGIN_REQUIRED") {
-        this.state.error = message || "Please log in to your store account to continue virtual try-on.";
+        this.state.customerLoginRequired = true;
+        this.state.customerLoggedIn = false;
+        this.state.error = message || this.getCustomerLoginMessage();
         this.state.stage = "setup";
         return true;
       }
@@ -1442,18 +2318,26 @@
       return false;
     }
 
-    trackEvent(eventType, eventData) {
-      if (!this.state.session) {
+    trackEvent(eventType, eventData, options) {
+      const trackOptions = options || {};
+      const hasSession = Boolean(this.state.session && this.state.session.session_id);
+      if (!hasSession && !trackOptions.allowWithoutSession) {
         return;
+      }
+
+      const payload = {
+        event_type: eventType,
+        event_data: eventData || {}
+      };
+
+      if (hasSession) {
+        payload.session_id = this.state.session.session_id;
       }
 
       this.request("/analytics/events", {
         method: "POST",
-        json: {
-          event_type: eventType,
-          session_id: this.state.session.session_id,
-          event_data: eventData || {}
-        }
+        withSession: hasSession,
+        json: payload
       }).catch(function () {
         return null;
       });
@@ -1513,6 +2397,23 @@
             } else {
               message = payload.error || payload.message || message;
             }
+          } else if (Array.isArray(payload && payload.detail)) {
+            const detailList = payload.detail
+              .map(function (item) {
+                if (!item || typeof item !== "object") {
+                  return "";
+                }
+                if (typeof item.msg === "string" && item.msg) {
+                  return item.msg;
+                }
+                return "";
+              })
+              .filter(Boolean);
+            if (detailList.length) {
+              message = detailList.join(" ");
+            } else {
+              message = payload.error || payload.message || message;
+            }
           } else {
             message = payload.detail || payload.error || payload.message || message;
           }
@@ -1550,6 +2451,8 @@
       if (!this.overlay) {
         return;
       }
+      const previousModal = this.overlay.querySelector(".ovts-modal");
+      const previousScrollTop = previousModal ? previousModal.scrollTop : 0;
 
       const toastMarkup = this.state.toast
         ? '<div class="ovts-toast">' + escapeHtml(this.state.toast) + "</div>"
@@ -1571,6 +2474,11 @@
         noticeMarkup +
         this.renderStage() +
         "</div>";
+
+      const nextModal = this.overlay.querySelector(".ovts-modal");
+      if (nextModal && previousScrollTop > 0) {
+        nextModal.scrollTop = previousScrollTop;
+      }
     }
 
     renderStage() {
@@ -1756,7 +2664,7 @@
         this.renderFeatureTile("Virtual Try-On", "Visualize the product on your body before purchasing.") +
         '</div><button type="button" class="ovts-primary ovts-primary--wide" data-action="view-fit">View Your Fit <span class="ovts-inline-icon">' +
         svgIcon("arrow") +
-        '</span></button><div class="ovts-subtle-note">Your measurements are saved for 1 year. Photo deleted in 1 hour.</div></section></div></div>'
+        '</span></button><div class="ovts-subtle-note">Measurements are cached for faster reuse. Photos are deleted in 1 hour.</div></section></div></div>'
       );
     }
 
@@ -1797,33 +2705,46 @@
     renderResults() {
       const heatmap = this.getSelectedHeatmap();
       const visibleSizes = this.getVisibleSizes();
-      const mainImage = this.state.activeImageUrl || this.state.tryOnImageUrl || this.config.product.featuredImage;
+      const requestedImage = this.state.activeImageUrl || this.state.tryOnImageUrl;
+      const blocked = this.state.failedImageUrl && requestedImage === this.state.failedImageUrl;
+      const mainImage =
+        (this.state.imageLoadError && this.state.lastGoodImageUrl) ||
+        (blocked ? "" : requestedImage) ||
+        this.state.lastGoodImageUrl ||
+        this.config.product.featuredImage;
       const selectedVariant = this.resolveVariantForSize(this.state.selectedSize) || this.getCurrentVariant();
       const price = selectedVariant && selectedVariant.price ? selectedVariant.price : this.config.product.price;
       const heatmapSvg = this.renderHeatmapSvg(heatmap);
       const heatmapLegend = this.renderHeatmapLegend(heatmap);
+      const heatmapCoverage = this.renderHeatmapCoverage(heatmap);
       const heatmapTooltip = this.renderHeatmapTooltip(heatmap);
       const shimmerClass = this.state.isHeatmapLoading ? " is-active" : "";
+      const selectedScore = this.getSelectedFitScore();
+      const selectedScoreText = selectedScore == null ? "--" : String(selectedScore);
+      const coverageNote = this.getCoverageNote(this.state.selectedSize);
 
       return (
         '<div class="ovts-stage ovts-stage--results"><button type="button" class="ovts-inline-back is-top" data-action="back-to-measurements">' +
         svgIcon("back") +
         'Back to measurements</button><div class="ovts-results-grid"><section class="ovts-hero-panel"><div class="ovts-panel-head"><div><h3>Virtual Try-On</h3><span class="ovts-powered">Powered by Optimo 4o</span></div></div><div class="ovts-tryon-preview">' +
         (mainImage
-          ? '<img src="' + escapeHtml(mainImage) + '" alt="Virtual try-on result" loading="lazy">'
+          ? '<img src="' + escapeHtml(mainImage) + '" alt="Virtual try-on result" loading="lazy" data-role="result-image">'
           : '<div class="ovts-image-placeholder">Generating your look...</div>') +
+        (this.state.imageLoadError ? '<p class="ovts-image-issue">' + escapeHtml(this.state.imageLoadError) + "</p>" : "") +
         '</div></section><section class="ovts-side-panel"><div class="ovts-studio-box"><div class="ovts-panel-head"><h4>Studio Shoots</h4></div><div class="ovts-studio-grid">' +
         this.renderStudioTiles() +
         '</div><div class="ovts-studio-actions"><button type="button" class="ovts-primary ovts-primary--small" data-action="submit-studio"' +
         (this.state.selectedStudioImageUrl ? "" : " disabled") +
         '>Submit</button><button type="button" class="ovts-secondary ovts-secondary--small" data-action="retry-studio"' +
         (this.state.currentStudioBackgroundId ? "" : " disabled") +
-        '>Retry</button></div><div class="ovts-share-box"><span>Share your look</span><div class="ovts-share-row">' +
-        this.renderShareButton("Instagram", "#ff4f75") +
-        this.renderShareButton("TikTok", "#111111") +
-        this.renderShareButton("Snapchat", "#ffdd00") +
-        this.renderShareButton("Facebook", "#4267B2") +
-        '</div></div></div></section><section class="ovts-heatmap-panel"><div class="ovts-panel-head"><div><h3>Heat Map</h3><span class="ovts-powered">Powered by Optimo 4o</span></div></div><div class="ovts-heatmap-visual"><div class="ovts-heatmap-body"><span class="ovts-heatmap-silhouette"></span><div class="ovts-heatmap-overlay">' +
+        '>Retry</button></div><div class="ovts-share-box"><span>Share your look</span>' +
+        this.renderShareActionButton() +
+        '<div class="ovts-share-icons" aria-hidden="true">' +
+        this.renderShareIcon("Instagram", "#E4405F") +
+        this.renderShareIcon("Facebook", "#1877F2") +
+        this.renderShareIcon("WhatsApp", "#25D366") +
+        this.renderShareIcon("TikTok", "#111111") +
+        "</div></div></div></section><section class=\"ovts-heatmap-panel\"><div class=\"ovts-panel-head\"><div><h3>Heat Map</h3><span class=\"ovts-powered\">Powered by Optimo 4o</span></div></div><div class=\"ovts-heatmap-visual\"><div class=\"ovts-heatmap-body\"><div class=\"ovts-heatmap-overlay\">" +
         heatmapSvg +
         "</div>" +
         heatmapTooltip +
@@ -1832,7 +2753,9 @@
         '" aria-hidden="true"></span>' +
         '</div><div class="ovts-heatmap-legend">' +
         heatmapLegend +
-        '</div><p>Tap a zone to see details.</p></div></section><section class="ovts-fit-panel"><div class="ovts-panel-head"><h3>Select Your Size</h3></div><div class="ovts-size-grid">' +
+        "</div>" +
+        heatmapCoverage +
+        '<p>Tap a zone to see details.</p></div></section><section class="ovts-fit-panel"><div class="ovts-panel-head"><h3>Select Your Size</h3></div><div class="ovts-size-grid">' +
         visibleSizes
           .map(
             (size) =>
@@ -1848,9 +2771,9 @@
           )
           .join("") +
         '</div><div class="ovts-fit-confidence"><div class="ovts-fit-confidence__head"><span>Fit Confidence</span><strong>' +
-        escapeHtml(String(this.state.fitScores[this.state.selectedSize] || this.state.recommendation.fit_score || 89)) +
+        escapeHtml(selectedScoreText) +
         '%</strong></div><div class="ovts-fit-bar"><span style="width:' +
-        escapeHtml(String(this.state.fitScores[this.state.selectedSize] || this.state.recommendation.fit_score || 89)) +
+        escapeHtml(selectedScore == null ? "0" : String(selectedScore)) +
         '%"></span></div></div><div class="ovts-fit-card"><div class="ovts-fit-row"><span>Recommended Size</span><strong>' +
         escapeHtml(this.state.recommendation.recommended_size) +
         '</strong></div><div class="ovts-fit-row"><span>Product</span><strong>' +
@@ -1863,13 +2786,18 @@
         escapeHtml(this.state.selectedSize) +
         '?</h4><p>' +
         escapeHtml(this.getSizeReasoning()) +
-        "</p></div></section></div></div>"
+        '</p></div>' +
+        (coverageNote ? '<p class="ovts-coverage-note">' + escapeHtml(coverageNote) + "</p>" : "") +
+        "</section></div></div>"
       );
     }
 
     renderStudioTiles() {
       if (!this.state.studioBackgrounds.length) {
-        return '<div class="ovts-empty-copy">Studio looks will appear here after your fit is ready.</div>';
+        if (this.state.studioBackgroundsError) {
+          return '<div class="ovts-empty-copy">Unable to load studio templates right now. Please retry in a moment.</div>';
+        }
+        return '<div class="ovts-empty-copy">No studio templates configured yet for this store.</div>';
       }
 
       return this.state.studioBackgrounds
@@ -1884,7 +2812,7 @@
             escapeHtml(background.id) +
             '">' +
             (image
-              ? '<img src="' + escapeHtml(image) + '" alt="Studio look option" loading="lazy">'
+              ? '<img src="' + escapeHtml(image) + '" alt="Studio look option" loading="lazy" data-role="studio-image">'
               : '<span class="ovts-studio-plus">+</span>') +
             (isLoading ? '<span class="ovts-studio-loading">Generating...</span>' : "") +
             "</button>"
@@ -1893,19 +2821,32 @@
         .join("");
     }
 
-    renderShareButton(label, color) {
-      return '<button type="button" class="ovts-share-chip" data-action="share-look" data-network="' + escapeHtml(label) + '" style="--share-color:' + escapeHtml(color) + '"><span>' + escapeHtml(label.slice(0, 2)) + "</span></button>";
+    renderShareActionButton() {
+      if (this.shouldUseNativeShare()) {
+        return '<button type="button" class="ovts-share-primary" data-action="share-look">Share</button>';
+      }
+      return '<button type="button" class="ovts-share-primary" data-action="download-look">Download Image</button>';
+    }
+
+    renderShareIcon(label, color) {
+      return (
+        '<span class="ovts-share-icon" style="--share-color:' +
+        escapeHtml(color) +
+        '">' +
+        escapeHtml(label.slice(0, 2).toUpperCase()) +
+        "</span>"
+      );
     }
 
     renderSuccess() {
-      const score = this.state.fitScores[this.state.selectedSize] || this.state.recommendation.fit_score || 89;
+      const score = this.getSelectedFitScore();
       return (
         '<div class="ovts-stage ovts-stage--center ovts-stage--success"><span class="ovts-check is-large">' +
         svgIcon("success") +
         "</span><h2>Perfect Fit Added</h2><p>Size " +
         escapeHtml(this.state.selectedSize) +
         " added to your cart with " +
-        escapeHtml(String(score)) +
+        escapeHtml(score == null ? "--" : String(score)) +
         '% confidence match.</p><button type="button" class="ovts-primary ovts-primary--wide" data-action="view-cart"><span class="ovts-btn-icon">' +
         svgIcon("cart") +
         '</span>View Cart</button><button type="button" class="ovts-secondary ovts-secondary--wide" data-action="continue-shopping">Continue Shopping</button><div class="ovts-delete-note">Your photo was deleted. We value your privacy.</div></div>'
@@ -1932,14 +2873,77 @@
         node.dataset.optimoVtsMounted = "true";
         widget.init();
       } catch (error) {
-        host.innerHTML = "";
+        if (isThemeEditorDesignMode()) {
+          host.innerHTML =
+            '<div class="optimo-vts-editor-placeholder">' +
+            "<strong>Optimo VTS Widget failed to initialize</strong>" +
+            "<span>" +
+            escapeHtml(error && error.message ? error.message : "Unknown initialization error") +
+            "</span>" +
+            "</div>";
+        } else {
+          host.innerHTML = "";
+        }
       }
     });
   }
 
+  let _initScheduled = false;
+  function scheduleInitWidgets() {
+    if (_initScheduled) {
+      return;
+    }
+    _initScheduled = true;
+    window.requestAnimationFrame(function () {
+      _initScheduled = false;
+      initWidgets();
+    });
+  }
+
+  function setupEditorLifecycleHooks() {
+    // Shopify Theme Editor often reloads sections dynamically after block add/remove.
+    // Re-run widget discovery so new app-block instances mount reliably.
+    document.addEventListener("shopify:section:load", scheduleInitWidgets);
+    document.addEventListener("shopify:section:reorder", scheduleInitWidgets);
+    document.addEventListener("shopify:block:select", scheduleInitWidgets);
+
+    if (!window.MutationObserver) {
+      return;
+    }
+
+    const observer = new MutationObserver(function (mutations) {
+      for (let i = 0; i < mutations.length; i += 1) {
+        const mutation = mutations[i];
+        for (let j = 0; j < mutation.addedNodes.length; j += 1) {
+          const node = mutation.addedNodes[j];
+          if (!(node instanceof Element)) {
+            continue;
+          }
+
+          if (
+            node.matches("script[data-optimo-vts-config]") ||
+            node.querySelector("script[data-optimo-vts-config]")
+          ) {
+            scheduleInitWidgets();
+            return;
+          }
+        }
+      }
+    });
+
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true
+    });
+  }
+
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initWidgets);
+    document.addEventListener("DOMContentLoaded", function () {
+      initWidgets();
+      setupEditorLifecycleHooks();
+    });
   } else {
     initWidgets();
+    setupEditorLifecycleHooks();
   }
 })();

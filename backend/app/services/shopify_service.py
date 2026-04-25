@@ -304,6 +304,141 @@ class ShopifyService:
         # TODO: Implement size chart saving
         pass
 
+    async def list_collections(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        search: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        List collections for the current shop via Shopify GraphQL.
+        """
+        capped_limit = max(1, min(int(limit), 250))
+        skip = max(int(offset), 0)
+
+        query = """
+        query ListCollections($first: Int!, $after: String, $query: String) {
+          collections(first: $first, after: $after, query: $query) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            edges {
+              node {
+                id
+                title
+                handle
+                image {
+                  url
+                }
+                productsCount {
+                  count
+                }
+              }
+            }
+          }
+        }
+        """
+
+        collected: List[Dict[str, Any]] = []
+        cursor: Optional[str] = None
+
+        while True:
+            variables = {
+                "first": 250,
+                "after": cursor,
+                "query": (search or "").strip() or None,
+            }
+            result = await self._graphql_request(query, variables)
+            payload = result.get("data", {}).get("collections", {})
+            edges = payload.get("edges", []) or []
+
+            for edge in edges:
+                node = (edge or {}).get("node", {}) or {}
+                collection_id = str(node.get("id") or "").strip()
+                if not collection_id:
+                    continue
+
+                products_count_raw = node.get("productsCount")
+                if isinstance(products_count_raw, dict):
+                    products_count_raw = products_count_raw.get("count")
+
+                products_count = None
+                if isinstance(products_count_raw, int):
+                    products_count = products_count_raw
+                elif isinstance(products_count_raw, str) and products_count_raw.isdigit():
+                    products_count = int(products_count_raw)
+
+                collected.append(
+                    {
+                        "id": collection_id,
+                        "title": str(node.get("title") or collection_id),
+                        "handle": node.get("handle"),
+                        "image_url": ((node.get("image") or {}).get("url") or None),
+                        "products_count": products_count,
+                    }
+                )
+
+            page_info = payload.get("pageInfo", {}) or {}
+            cursor = page_info.get("endCursor")
+            has_next = bool(page_info.get("hasNextPage"))
+            if not has_next or len(collected) >= (skip + capped_limit):
+                break
+
+        return collected[skip: skip + capped_limit]
+
+    async def get_product_collection_ids(self, *, shopify_product_gid: str) -> List[str]:
+        """
+        Fetch all collection GIDs that contain a given Shopify product.
+        """
+        query = """
+        query ProductCollections($id: ID!, $first: Int!, $after: String) {
+          product(id: $id) {
+            collections(first: $first, after: $after) {
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              edges {
+                node {
+                  id
+                }
+              }
+            }
+          }
+        }
+        """
+
+        collection_ids: List[str] = []
+        cursor: Optional[str] = None
+
+        while True:
+            variables = {
+                "id": shopify_product_gid,
+                "first": 250,
+                "after": cursor,
+            }
+            result = await self._graphql_request(query, variables)
+            product_node = result.get("data", {}).get("product")
+            if not product_node:
+                return []
+
+            collections = product_node.get("collections", {}) or {}
+            edges = collections.get("edges", []) or []
+            for edge in edges:
+                node = (edge or {}).get("node", {}) or {}
+                collection_id = str(node.get("id") or "").strip()
+                if collection_id:
+                    collection_ids.append(collection_id)
+
+            page_info = collections.get("pageInfo", {}) or {}
+            cursor = page_info.get("endCursor")
+            if not page_info.get("hasNextPage"):
+                break
+
+        return collection_ids
+
     async def install_script_tag(self, widget_url: str) -> Optional[str]:
         """
         Install script tag for widget on Shopify store
@@ -425,8 +560,10 @@ class ShopifyService:
                 {
                     "plan": {
                         "appRecurringPricingDetails": {
-                            "amount": price_usd,
-                            "currencyCode": "USD",
+                            "price": {
+                                "amount": price_usd,
+                                "currencyCode": "USD",
+                            },
                             "interval": shopify_interval,
                         }
                     }
@@ -639,7 +776,9 @@ class ShopifyService:
 
         Returns:
             {
-                "orders": [{"id", "customer_id", "total_price", "refunds", "created_at"}, ...],
+                "orders": [{
+                    "id", "customer_id", "total_price", "refunds", "created_at", "line_items"
+                }, ...],
                 "return_count": int   # orders that have at least one refund
             }
         """
@@ -653,7 +792,7 @@ class ShopifyService:
             f"?status=any"
             f"&created_at_min={since.isoformat()}Z"
             f"&limit=250"
-            f"&fields=id,customer,total_price,refunds,created_at"
+            f"&fields=id,customer,total_price,refunds,created_at,line_items"
         )
 
         all_orders: List[dict] = []
@@ -667,12 +806,45 @@ class ShopifyService:
 
                 for order in page_orders:
                     customer = order.get("customer") or {}
+                    normalized_line_items: List[dict] = []
+                    for line_item in order.get("line_items") or []:
+                        normalized_line_items.append(
+                            {
+                                "id": str(line_item.get("id", "")),
+                                "product_id": str(line_item.get("product_id", "")) if line_item.get("product_id") else None,
+                                "variant_id": str(line_item.get("variant_id", "")) if line_item.get("variant_id") else None,
+                                "title": line_item.get("title"),
+                                "price": line_item.get("price", "0.00"),
+                                "quantity": line_item.get("quantity", 0),
+                                "total_discount": line_item.get("total_discount", "0.00"),
+                            }
+                        )
+
+                    normalized_refunds: List[dict] = []
+                    for refund in order.get("refunds") or []:
+                        normalized_refunds.append(
+                            {
+                                "id": str(refund.get("id", "")),
+                                "refund_line_items": [
+                                    {
+                                        "line_item_id": str((refund_line_item or {}).get("line_item_id", "")) or None,
+                                        "quantity": int((refund_line_item or {}).get("quantity") or 0),
+                                        "line_item": {
+                                            "id": str((((refund_line_item or {}).get("line_item") or {}).get("id", "")) or ""),
+                                        },
+                                    }
+                                    for refund_line_item in (refund or {}).get("refund_line_items") or []
+                                ],
+                            }
+                        )
+
                     all_orders.append({
                         "id": str(order.get("id", "")),
                         "customer_id": str(customer.get("id", "")) if customer.get("id") else None,
                         "total_price": order.get("total_price", "0.00"),
-                        "refunds": order.get("refunds", []),
+                        "refunds": normalized_refunds,
                         "created_at": order.get("created_at"),
+                        "line_items": normalized_line_items,
                     })
 
                 # Paginate via Link header

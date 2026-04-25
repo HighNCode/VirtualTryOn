@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { EmbeddedLink, useEmbeddedRouter } from "../../_components/EmbeddedNavigation";
-import { getDefaultStoreId, getThemeStatus, updateThemeStatus } from "../../../lib/photoshootApi";
+import { getDefaultStoreId, getThemeStatus } from "../../../lib/photoshootApi";
 
 export default function StepFiveNotDetectedPage() {
   const router = useEmbeddedRouter();
@@ -23,13 +23,9 @@ export default function StepFiveNotDetectedPage() {
 
       try {
         const status = await getThemeStatus({ storeId });
-        setThemesUrl(status.themes_url);
+        setThemesUrl((status.add_to_theme_url ?? status.themes_url ?? "").trim());
 
         if (status.theme_extension_detected) {
-          if (markDetected) {
-            await updateThemeStatus({ storeId, detected: true });
-          }
-
           router.push("/step-5/detected");
           return;
         }

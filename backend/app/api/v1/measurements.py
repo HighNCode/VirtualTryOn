@@ -12,7 +12,8 @@ import logging
 from app.api.store_context import get_public_store
 from app.core.database import get_db
 from app.core.redis import get_redis
-from app.models.database import Store, Session, UserMeasurement
+from app.config import get_settings
+from app.models.database import Store, Session, UserMeasurement, PhotoValidationEvent
 from app.models.schemas import MeasurementResponse
 from app.services.image_validator import ImageValidator
 from app.services.measurement_service import MeasurementService
@@ -20,6 +21,7 @@ from app.services.cache_service import CacheService
 
 router = APIRouter(prefix="/measurements", tags=["Measurements"])
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
 async def get_session_from_header(
@@ -47,7 +49,8 @@ async def get_session_from_header(
 async def validate_image(
     image: UploadFile = File(...),
     pose_type: str = Form(...),
-    session: Session = Depends(get_session_from_header)
+    session: Session = Depends(get_session_from_header),
+    db: DBSession = Depends(get_db),
 ):
     """
     Validate image quality and pose
@@ -86,6 +89,13 @@ async def validate_image(
         validator = ImageValidator()
         result = await validator.validate_image(image_data, pose_type)
 
+        await _persist_validation_event(
+            db=db,
+            session=session,
+            pose_type=pose_type,
+            result=result,
+        )
+
         logger.info(f"Image validation: {pose_type}, valid={result['valid']}, confidence={result['confidence']}")
 
         return result
@@ -95,6 +105,51 @@ async def validate_image(
     except Exception as e:
         logger.error(f"Image validation error: {e}", exc_info=True)
         raise HTTPException(500, f"Validation failed: {str(e)}")
+
+
+async def _persist_validation_event(
+    *,
+    db: DBSession,
+    session: Session,
+    pose_type: str,
+    result: dict,
+) -> None:
+    """
+    Persist one audit row for each validation attempt.
+    Failures in audit logging must not block user flow.
+    """
+    try:
+        metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+        warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+        hard_failures = result.get("hard_failures") if isinstance(result.get("hard_failures"), list) else []
+
+        image_meta = {
+            "width": metrics.get("width"),
+            "height": metrics.get("height"),
+            "file_size_bytes": metrics.get("file_size_bytes"),
+            "mean_brightness": metrics.get("mean_brightness"),
+        }
+
+        event = PhotoValidationEvent(
+            store_id=session.store_id,
+            session_id=session.session_id,
+            pose_type=pose_type,
+            status=str(result.get("status") or ("accepted" if result.get("valid") else "rejected")),
+            valid=bool(result.get("valid")),
+            pose_accuracy=float(result.get("pose_accuracy") or 0.0),
+            confidence=str(result.get("confidence") or "low"),
+            reasons_json={
+                "warnings": warnings,
+                "hard_failures": hard_failures,
+            },
+            metrics_json=metrics,
+            image_meta_json=image_meta,
+        )
+        db.add(event)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.warning("Failed to persist photo validation audit event: %s", exc)
 
 
 @router.post("/extract", response_model=MeasurementResponse)
@@ -186,7 +241,7 @@ async def extract_measurements(
         if session.user_identifier:
             redis = get_redis()
             cache_key = f"user:{session.store_id}:{session.user_identifier}:measurement"
-            redis.set(cache_key, str(measurement.measurement_id), 86400)  # 24h TTL
+            redis.set(cache_key, str(measurement.measurement_id), settings.MEASUREMENT_CACHE_TTL_SECONDS)
 
             # Also rename images to measurement keys
             await cache_service.store_measurement_image(

@@ -115,8 +115,12 @@ async def generate_heatmap(
         return HeatmapResponse(
             heatmap_id=heatmap_id,
             size=result["size"],
+            category=result.get("category", product.category or "unknown"),
             overall_fit_score=result["overall_fit_score"],
             zones=result["zones"],
+            zone_deltas=result.get("zone_deltas", {}),
+            coverage_available=result.get("coverage_available", len(result["zones"])),
+            coverage_total=result.get("coverage_total", 15),
             legend=result["legend"],
         )
 

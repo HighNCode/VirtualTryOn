@@ -29,7 +29,14 @@ class Settings(BaseSettings):
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
     REDIS_MAX_CONNECTIONS: int = 50
-    IMAGE_CACHE_TTL: int = 86400  # 24 hours
+    # Deprecated compatibility key (kept to avoid env breakage in older setups)
+    IMAGE_CACHE_TTL: int = 86400
+    # Photos/front-side images in Redis
+    PHOTO_CACHE_TTL_SECONDS: int = 3600  # 1 hour
+    # Returning-user mapping and profile/measurement pointer cache
+    MEASUREMENT_CACHE_TTL_SECONDS: int = 86400  # 24 hours
+    # Generated try-on and studio results in Redis
+    TRYON_RESULT_TTL_SECONDS: int = 3600  # 1 hour
     STUDIO_CACHE_TTL: int = 3600  # 1 hour for studio look results
     SESSION_TTL: int = 86400  # 24 hours
 
@@ -64,9 +71,14 @@ class Settings(BaseSettings):
 
     # Usage Governance
     WEEKLY_TRYON_LIMIT_DEFAULT: int = 10
+    ANON_WEEKLY_TRYON_LIMIT: int = 1
     CREDITS_PER_GENERATION: int = 4
     # Fallback only when a plan row has no explicit overage_usd_per_tryon configured.
     OVERAGE_USD_PER_CREDIT: float = 0.035
+
+    # Storefront proxy trust-chain
+    WIDGET_PROXY_SHARED_SECRET: Optional[str] = None
+    WIDGET_PROXY_MAX_SKEW_SECONDS: int = 300
 
     # Security
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:8000"
@@ -76,6 +88,9 @@ class Settings(BaseSettings):
     # Rate Limiting
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_PER_MINUTE: int = 60
+    RATE_LIMIT_WIDGET_SESSIONS_PER_MINUTE: int = 30
+    RATE_LIMIT_TRYON_GENERATE_PER_MINUTE: int = 12
+    RATE_LIMIT_TRYON_STUDIO_PER_MINUTE: int = 8
 
     # Performance
     MEASUREMENT_TIMEOUT: int = 10  # seconds

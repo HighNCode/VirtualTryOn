@@ -42,7 +42,14 @@ class Store(Base, TimestampMixin):
     # values: 'welcome' | 'goals' | 'referral' | 'widget_scope' | 'theme_setup' | 'plan' | 'complete'
     onboarding_completed_at = Column(DateTime, nullable=True)
     plan_name = Column(String(50), default='free', nullable=False)
-    # values: 'free' | 'founding_trial' | 'starter' | 'growth'
+    # values: 'free' | 'free_trial' | 'founding_trial' | 'starter' | 'growth'
+    trial_mode = Column(String(20), nullable=False, default='none')
+    # values: 'none' | 'intro_free' | 'plan_trial'
+    has_used_intro_trial = Column(Boolean, nullable=False, default=False)
+    trial_end_reason = Column(String(40), nullable=True)
+    # values: 'time_expired' | 'credits_exhausted' | 'converted_to_plan' | 'manual'
+    billing_lock_reason = Column(String(60), nullable=True)
+    # values: 'trial_expired' | 'trial_credits_exhausted'
     plan_shopify_subscription_id = Column(String(255), nullable=True)
     plan_activated_at = Column(DateTime, nullable=True)
     credits_limit = Column(Integer, default=0, nullable=False)
@@ -63,6 +70,12 @@ class Store(Base, TimestampMixin):
     analytics_events = relationship("AnalyticsEvent", back_populates="store", cascade="all, delete-orphan")
     onboarding = relationship("MerchantOnboarding", back_populates="store", uselist=False, cascade="all, delete-orphan")
     widget_config = relationship("WidgetConfig", back_populates="store", uselist=False, cascade="all, delete-orphan")
+    dashboard_feedback = relationship(
+        "MerchantDashboardFeedback",
+        back_populates="store",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self):
         return f"<Store {self.shopify_domain}>"
@@ -148,8 +161,8 @@ class Session(Base, TimestampMixin):
     )
 
     session_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    store_id = Column(UUID(as_uuid=True), ForeignKey('stores.store_id'), nullable=False)
-    product_id = Column(UUID(as_uuid=True), ForeignKey('products.product_id'), nullable=False)
+    store_id = Column(UUID(as_uuid=True), ForeignKey('stores.store_id', ondelete='CASCADE'), nullable=False)
+    product_id = Column(UUID(as_uuid=True), ForeignKey('products.product_id', ondelete='CASCADE'), nullable=False)
     measurement_id = Column(UUID(as_uuid=True), nullable=True)  # Reference to measurement (no FK constraint to avoid circular dependency)
     user_identifier = Column(String(255), nullable=True)  # Browser fingerprint for returning users
     expires_at = Column(DateTime, default=lambda: datetime.utcnow() + timedelta(hours=24))
@@ -172,7 +185,7 @@ class UserMeasurement(Base, TimestampMixin):
     )
 
     measurement_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    session_id = Column(UUID(as_uuid=True), ForeignKey('sessions.session_id'), nullable=False)
+    session_id = Column(UUID(as_uuid=True), ForeignKey('sessions.session_id', ondelete='CASCADE'), nullable=False)
     measurements = Column(JSONB, nullable=False)
     """
     measurements format:
@@ -207,6 +220,39 @@ class UserMeasurement(Base, TimestampMixin):
 
     def __repr__(self):
         return f"<UserMeasurement {self.measurement_id}>"
+
+
+class PhotoValidationEvent(Base, TimestampMixin):
+    """
+    Audit trail for every pose validation attempt.
+    Stores decision outcome plus machine-readable diagnostics.
+    """
+    __tablename__ = "photo_validation_events"
+    __table_args__ = (
+        Index("idx_photo_validation_store_time", "store_id", "created_at"),
+        Index("idx_photo_validation_session_time", "session_id", "created_at"),
+        Index("idx_photo_validation_status", "status"),
+    )
+
+    event_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    store_id = Column(UUID(as_uuid=True), ForeignKey("stores.store_id", ondelete="CASCADE"), nullable=False)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("sessions.session_id", ondelete="CASCADE"), nullable=False)
+    pose_type = Column(String(10), nullable=False)  # front | side
+    status = Column(String(30), nullable=False)     # accepted | accepted_with_warnings | rejected
+    valid = Column(Boolean, nullable=False, default=False)
+    pose_accuracy = Column(Float, nullable=False, default=0.0)
+    confidence = Column(String(20), nullable=False, default="low")
+
+    # Structured diagnostics
+    reasons_json = Column(JSONB, nullable=False, default=dict)   # {warnings: [...], hard_failures: [...]}
+    metrics_json = Column(JSONB, nullable=False, default=dict)   # numeric observed metrics
+    image_meta_json = Column(JSONB, nullable=False, default=dict)  # width/height/file_size etc.
+
+    store = relationship("Store")
+    session = relationship("Session")
+
+    def __repr__(self):
+        return f"<PhotoValidationEvent {self.event_id} {self.pose_type} {self.status}>"
 
 
 class Plan(Base, TimestampMixin):
@@ -253,8 +299,8 @@ class TryOn(Base, TimestampMixin):
     )
 
     try_on_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    measurement_id = Column(UUID(as_uuid=True), ForeignKey('user_measurements.measurement_id'), nullable=True)
-    product_id = Column(UUID(as_uuid=True), ForeignKey('products.product_id'), nullable=False)
+    measurement_id = Column(UUID(as_uuid=True), ForeignKey('user_measurements.measurement_id', ondelete='CASCADE'), nullable=True)
+    product_id = Column(UUID(as_uuid=True), ForeignKey('products.product_id', ondelete='CASCADE'), nullable=False)
     processing_status = Column(String(20), default='queued')  # 'queued', 'processing', 'completed', 'failed'
     result_cache_key = Column(String(200))  # Redis key for result image
     processing_time_seconds = Column(Float)
@@ -264,7 +310,7 @@ class TryOn(Base, TimestampMixin):
     # Studio look fields
     # studio_background_id now references photoshoot_models.id (migrated from studio_backgrounds)
     studio_background_id = Column(UUID(as_uuid=True), ForeignKey('photoshoot_models.id'), nullable=True)
-    parent_try_on_id = Column(UUID(as_uuid=True), ForeignKey('try_ons.try_on_id'), nullable=True)
+    parent_try_on_id = Column(UUID(as_uuid=True), ForeignKey('try_ons.try_on_id', ondelete='CASCADE'), nullable=True)
 
     # Relationships
     measurement = relationship("UserMeasurement", back_populates="try_ons")
@@ -283,8 +329,8 @@ class SizeRecommendation(Base, TimestampMixin):
     __tablename__ = "size_recommendations"
 
     recommendation_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    measurement_id = Column(UUID(as_uuid=True), ForeignKey('user_measurements.measurement_id'), nullable=False)
-    product_id = Column(UUID(as_uuid=True), ForeignKey('products.product_id'), nullable=False)
+    measurement_id = Column(UUID(as_uuid=True), ForeignKey('user_measurements.measurement_id', ondelete='CASCADE'), nullable=False)
+    product_id = Column(UUID(as_uuid=True), ForeignKey('products.product_id', ondelete='CASCADE'), nullable=False)
     recommended_size = Column(String(20))
     confidence = Column(String(20))  # 'high', 'medium', 'low'
     fit_score = Column(Integer)  # 0-100
@@ -321,7 +367,7 @@ class AnalyticsEvent(Base, TimestampMixin):
     )
 
     event_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    store_id = Column(UUID(as_uuid=True), ForeignKey('stores.store_id'), nullable=False)
+    store_id = Column(UUID(as_uuid=True), ForeignKey('stores.store_id', ondelete='CASCADE'), nullable=False)
     session_id = Column(UUID(as_uuid=True))
     event_type = Column(String(50), nullable=False)
     """
@@ -500,6 +546,59 @@ class WidgetConfig(Base, TimestampMixin):
 
     def __repr__(self):
         return f"<WidgetConfig store={self.store_id} scope={self.scope_type}>"
+
+
+class MerchantDashboardFeedback(Base, TimestampMixin):
+    """
+    One-time merchant feedback submitted from the dashboard overview card.
+    One record per store (unique FK).
+    """
+    __tablename__ = "merchant_dashboard_feedback"
+    __table_args__ = (
+        UniqueConstraint("store_id", name="uq_merchant_dashboard_feedback_store"),
+        Index("idx_merchant_dashboard_feedback_store", "store_id"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    store_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("stores.store_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    rating = Column(Numeric(2, 1), nullable=False)
+    improvement_text = Column(Text, nullable=True)
+    submitted_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    store = relationship("Store", back_populates="dashboard_feedback")
+
+    def __repr__(self):
+        return f"<MerchantDashboardFeedback store={self.store_id} rating={self.rating}>"
+
+
+class StoreIdentityLink(Base, TimestampMixin):
+    """
+    Store-scoped link between anonymous browser identity and Shopify customer identity.
+    Used to migrate weekly usage and cached measurement pointers when login happens.
+    """
+    __tablename__ = "store_identity_links"
+    __table_args__ = (
+        UniqueConstraint("store_id", "anon_identifier", "customer_identifier", name="uq_store_identity_link"),
+        Index("idx_store_identity_links_store_customer", "store_id", "customer_identifier"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    store_id = Column(UUID(as_uuid=True), ForeignKey("stores.store_id", ondelete="CASCADE"), nullable=False)
+    anon_identifier = Column(String(255), nullable=False)
+    customer_identifier = Column(String(255), nullable=False)
+    last_migrated_week_start_utc = Column(DateTime, nullable=True)
+
+    store = relationship("Store")
+
+    def __repr__(self):
+        return (
+            f"<StoreIdentityLink store={self.store_id} anon={self.anon_identifier} "
+            f"customer={self.customer_identifier}>"
+        )
 
 
 class UsageEvent(Base, TimestampMixin):

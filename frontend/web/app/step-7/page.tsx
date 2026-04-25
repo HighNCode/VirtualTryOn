@@ -1,13 +1,15 @@
 ﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { EmbeddedLink, useEmbeddedRouter } from "../_components/EmbeddedNavigation";
+import { useEmbeddedRouter } from "../_components/EmbeddedNavigation";
 import {
   activateBillingPlan,
+  completeOnboardingFromBilling,
   createSubscription,
   getBillingPlans,
   getBillingStatus,
   getDefaultStoreId,
+  startIntroFreeTrial,
   type BillingStatusResponse,
   type PlanConfigResponse
 } from "../../lib/photoshootApi";
@@ -31,9 +33,15 @@ export default function StepSevenPage() {
   const [plans, setPlans] = useState<PlanConfigResponse[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [pendingPlanId, setPendingPlanId] = useState<string | null>(null);
+  const [isStartingTrial, setIsStartingTrial] = useState(false);
+  const [isCompletingOnboarding, setIsCompletingOnboarding] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
   const isAnnual = billingCycle === "annual";
+  const introTrialConsumed =
+    billingStatus?.plan_name === "free_trial" ||
+    billingStatus?.plan_name === "founding_trial" ||
+    billingStatus?.trial_mode === "intro_free";
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -68,6 +76,7 @@ export default function StepSevenPage() {
       billingInterval: interval,
       shopifySubscriptionId
     })
+      .then(() => completeOnboardingFromBilling({ storeId }))
       .then(() => router.push("/dashboard"))
       .catch((error: unknown) => {
         const msg = error instanceof Error ? error.message : "Failed to activate billing.";
@@ -137,7 +146,21 @@ export default function StepSevenPage() {
 
   const handlePlanSelect = async (plan: PlanConfigResponse) => {
     if (plan.name === billingStatus?.plan_name && billingStatus?.billing_interval === billingCycle) {
-      router.push("/dashboard");
+      if (!storeId) {
+        setErrorMessage("Open the app from Shopify Admin to continue onboarding.");
+        return;
+      }
+      setIsCompletingOnboarding(true);
+      setErrorMessage("");
+      try {
+        await completeOnboardingFromBilling({ storeId });
+        router.push("/dashboard");
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : "Failed to complete onboarding.";
+        setErrorMessage(message);
+      } finally {
+        setIsCompletingOnboarding(false);
+      }
       return;
     }
 
@@ -172,6 +195,44 @@ export default function StepSevenPage() {
       const message = error instanceof Error ? error.message : "Failed to start Shopify subscription.";
       setErrorMessage(message);
       setPendingPlanId(null);
+    }
+  };
+
+  const handleStartFreeTrial = async () => {
+    if (!storeId) {
+      setErrorMessage("Open the app from Shopify Admin to start your free trial.");
+      return;
+    }
+
+    setIsStartingTrial(true);
+    setErrorMessage("");
+    try {
+      await startIntroFreeTrial({ storeId });
+      router.push("/dashboard");
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Failed to start free trial.";
+      setErrorMessage(message);
+    } finally {
+      setIsStartingTrial(false);
+    }
+  };
+
+  const handleContinueCurrentSetup = async () => {
+    if (!storeId) {
+      setErrorMessage("Open the app from Shopify Admin to continue onboarding.");
+      return;
+    }
+
+    setIsCompletingOnboarding(true);
+    setErrorMessage("");
+    try {
+      await completeOnboardingFromBilling({ storeId });
+      router.push("/dashboard");
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Failed to complete onboarding.";
+      setErrorMessage(message);
+    } finally {
+      setIsCompletingOnboarding(false);
     }
   };
 
@@ -232,7 +293,7 @@ export default function StepSevenPage() {
 
               <div className="plan-credit-box">
                 <p>{plan.displayedCredits.toLocaleString()} credits included</p>
-                <p>{plan.trial_days ? `${plan.trial_days}-day trial available` : "No trial on this plan"}</p>
+                <p>{introTrialConsumed ? "Intro trial already used - plan starts immediately" : plan.trial_days ? `${plan.trial_days}-day trial available` : "No trial on this plan"}</p>
               </div>
 
               <h3 className="plan-feature-title">Features</h3>
@@ -266,7 +327,7 @@ export default function StepSevenPage() {
                 type="button"
                 className={`plan-select-button plan-select-button-advanced${plan.isCurrentSelection ? " plan-select-button-filled" : ""}`}
                 onClick={() => handlePlanSelect(plan)}
-                disabled={pendingPlanId === plan.id || isLoading}
+                disabled={pendingPlanId === plan.id || isLoading || isStartingTrial || isCompletingOnboarding}
               >
                 {plan.isCurrentSelection
                   ? "Current Plan"
@@ -291,14 +352,25 @@ export default function StepSevenPage() {
 
         <section className="free-plan-banner free-plan-banner-updated">
           <div>
-            <h2>Continue with current setup</h2>
-            <p>{billingStatus?.shopify_subscription_id ? "A Shopify subscription is already active for this store." : "Skip plan selection for now and finish onboarding."}</p>
+            <h2>Start Free Trial</h2>
+            <p>14 days free trial with 80 included credits. No Shopify charge approval required today.</p>
           </div>
-
-          <EmbeddedLink href="/dashboard" className="primary-action free-plan-cta">
-            Continue
-          </EmbeddedLink>
+          <button type="button" className="primary-action free-plan-cta" onClick={handleStartFreeTrial} disabled={isStartingTrial || isLoading || isCompletingOnboarding}>
+            {isStartingTrial ? "Starting..." : "Start Free Trial"}
+          </button>
         </section>
+
+        {billingStatus?.shopify_subscription_id || billingStatus?.plan_name === "free_trial" || billingStatus?.plan_name === "founding_trial" ? (
+          <section className="free-plan-banner free-plan-banner-updated">
+            <div>
+              <h2>Continue with current setup</h2>
+              <p>Use your already active setup and complete onboarding now.</p>
+            </div>
+            <button type="button" className="primary-action free-plan-cta" onClick={handleContinueCurrentSetup} disabled={isCompletingOnboarding || isLoading || isStartingTrial}>
+              {isCompletingOnboarding ? "Continuing..." : "Continue"}
+            </button>
+          </section>
+        ) : null}
 
         <p className="step7-powered-by">Powered by Shopify billing and Optimo plan configuration</p>
       </section>

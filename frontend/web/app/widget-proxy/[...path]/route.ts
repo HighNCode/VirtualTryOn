@@ -1,3 +1,4 @@
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 
 const FORWARDED_REQUEST_HEADERS = [
@@ -7,7 +8,9 @@ const FORWARDED_REQUEST_HEADERS = [
   "x-store-id",
   "x-shop-domain",
   "x-shopify-shop-domain",
-  "x-logged-in-customer-id"
+  "x-logged-in-customer-id",
+  "x-forwarded-for",
+  "x-real-ip"
 ] as const;
 
 const FORWARDED_RESPONSE_HEADERS = [
@@ -28,8 +31,27 @@ const SHOPIFY_PROXY_QUERY_KEYS = new Set([
   "timestamp"
 ]);
 
+const ANON_COOKIE_NAME = "optimo_vts_anon";
+const ANON_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 180;
+const DEFAULT_PROXY_MAX_SKEW_SECONDS = 300;
+
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+function getShopifyApiSecret(): string {
+  return (
+    process.env.SHOPIFY_API_SECRET?.trim() ||
+    process.env.SHOPIFY_API_SECRET_KEY?.trim() ||
+    ""
+  );
+}
+
+function getProxySharedSecret(): string {
+  return (
+    process.env.WIDGET_PROXY_SHARED_SECRET?.trim() ||
+    getShopifyApiSecret()
+  );
+}
 
 function getUpstreamBaseUrl(): string {
   const configuredUrl =
@@ -41,12 +63,143 @@ function getUpstreamBaseUrl(): string {
   return configuredUrl.replace(/\/+$/, "");
 }
 
+function getMaxProxySkewSeconds(): number {
+  const raw = process.env.WIDGET_PROXY_MAX_SKEW_SECONDS?.trim() || "";
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_PROXY_MAX_SKEW_SECONDS;
+  }
+  return Math.floor(parsed);
+}
+
 function normalizeShopDomain(value: string | null): string {
   return (value ?? "")
     .trim()
     .toLowerCase()
     .replace(/^https?:\/\//, "")
     .replace(/\/.*$/, "");
+}
+
+function canonicalizeProxyParams(searchParams: URLSearchParams): string {
+  const entries: Array<[string, string]> = [];
+  searchParams.forEach((value, key) => {
+    if (key === "hmac" || key === "signature") {
+      return;
+    }
+    entries.push([key, value]);
+  });
+
+  entries.sort((a, b) => {
+    const keyCmp = a[0].localeCompare(b[0]);
+    if (keyCmp !== 0) {
+      return keyCmp;
+    }
+    return a[1].localeCompare(b[1]);
+  });
+
+  return entries
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join("&");
+}
+
+function timingSafeHexEqual(expectedHex: string, providedHex: string): boolean {
+  if (!expectedHex || !providedHex) {
+    return false;
+  }
+
+  const expectedBuffer = Buffer.from(expectedHex, "hex");
+  const providedBuffer = Buffer.from(providedHex, "hex");
+  if (expectedBuffer.length !== providedBuffer.length || expectedBuffer.length === 0) {
+    return false;
+  }
+  return timingSafeEqual(expectedBuffer, providedBuffer);
+}
+
+function verifyShopifyAppProxySignature(request: NextRequest): { ok: true } | { ok: false; reason: string } {
+  const secret = getShopifyApiSecret();
+  if (!secret) {
+    return { ok: false, reason: "SHOPIFY_API_SECRET is not configured." };
+  }
+
+  const timestampRaw = request.nextUrl.searchParams.get("timestamp")?.trim() ?? "";
+  const timestamp = Number(timestampRaw);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    return { ok: false, reason: "Missing or invalid proxy timestamp." };
+  }
+
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const skewLimit = getMaxProxySkewSeconds();
+  if (Math.abs(nowSeconds - Math.floor(timestamp)) > skewLimit) {
+    return { ok: false, reason: "Proxy request timestamp is stale." };
+  }
+
+  const providedHmac = request.nextUrl.searchParams.get("hmac")?.trim().toLowerCase() ?? "";
+  const providedSignature = request.nextUrl.searchParams.get("signature")?.trim().toLowerCase() ?? "";
+  if (!providedHmac && !providedSignature) {
+    return { ok: false, reason: "Missing proxy signature." };
+  }
+
+  const canonical = canonicalizeProxyParams(request.nextUrl.searchParams);
+  const expected = createHmac("sha256", secret).update(canonical, "utf8").digest("hex");
+
+  const hmacValid = providedHmac ? timingSafeHexEqual(expected, providedHmac) : false;
+  const signatureValid = providedSignature ? timingSafeHexEqual(expected, providedSignature) : false;
+  if (!hmacValid && !signatureValid) {
+    return { ok: false, reason: "Invalid proxy signature." };
+  }
+
+  return { ok: true };
+}
+
+function signAnonIdentifier(secret: string, anonId: string): string {
+  return createHmac("sha256", secret).update(anonId, "utf8").digest("hex");
+}
+
+function parseSignedAnonCookie(secret: string, cookieValue: string): string {
+  const [anonId, providedSignature] = cookieValue.split(".", 2);
+  if (!anonId || !providedSignature) {
+    return "";
+  }
+
+  const normalizedAnonId = anonId.trim().toLowerCase();
+  if (!/^[a-f0-9-]{20,80}$/.test(normalizedAnonId)) {
+    return "";
+  }
+
+  const expected = signAnonIdentifier(secret, normalizedAnonId);
+  if (!timingSafeHexEqual(expected, providedSignature.trim().toLowerCase())) {
+    return "";
+  }
+
+  return normalizedAnonId;
+}
+
+function resolveAnonymousIdentifier(request: NextRequest, secret: string): {
+  anonId: string;
+  setCookie: boolean;
+  cookieValue: string;
+} {
+  const existingCookie = request.cookies.get(ANON_COOKIE_NAME)?.value ?? "";
+  const parsedExisting = existingCookie ? parseSignedAnonCookie(secret, existingCookie) : "";
+  if (parsedExisting) {
+    return {
+      anonId: parsedExisting,
+      setCookie: false,
+      cookieValue: existingCookie,
+    };
+  }
+
+  const anonId = randomUUID().toLowerCase();
+  const signedValue = `${anonId}.${signAnonIdentifier(secret, anonId)}`;
+  return {
+    anonId,
+    setCookie: true,
+    cookieValue: signedValue,
+  };
+}
+
+function buildBackendPath(path: string[]): string {
+  return `/api/v1/${path.join("/")}`;
 }
 
 function buildUpstreamUrl(request: NextRequest, path: string[], upstreamBaseUrl: string): string {
@@ -57,10 +210,40 @@ function buildUpstreamUrl(request: NextRequest, path: string[], upstreamBaseUrl:
   });
 
   const query = search.toString();
-  return `${upstreamBaseUrl}/api/v1/${path.join("/")}${query ? `?${query}` : ""}`;
+  return `${upstreamBaseUrl}${buildBackendPath(path)}${query ? `?${query}` : ""}`;
+}
+
+function buildProxySignaturePayload(args: {
+  ts: string;
+  method: string;
+  backendPath: string;
+  shopDomain: string;
+  loggedInCustomerId: string;
+  anonId: string;
+}): string {
+  return [
+    args.ts,
+    args.method.toUpperCase(),
+    args.backendPath,
+    args.shopDomain,
+    args.loggedInCustomerId,
+    args.anonId,
+  ].join("\n");
+}
+
+function signProxyPayload(secret: string, payload: string): string {
+  return createHmac("sha256", secret).update(payload, "utf8").digest("hex");
 }
 
 async function proxyRequest(request: NextRequest, path: string[]): Promise<NextResponse> {
+  const verifiedProxy = verifyShopifyAppProxySignature(request);
+  if (!verifiedProxy.ok) {
+    return NextResponse.json(
+      { error: verifiedProxy.reason },
+      { status: 401 },
+    );
+  }
+
   const upstreamBaseUrl = getUpstreamBaseUrl();
   if (!upstreamBaseUrl) {
     return NextResponse.json(
@@ -76,6 +259,26 @@ async function proxyRequest(request: NextRequest, path: string[]): Promise<NextR
   const proxyShop = normalizeShopDomain(request.nextUrl.searchParams.get("shop"));
   const proxySessionId = request.nextUrl.searchParams.get("session_id")?.trim() ?? "";
   const loggedInCustomerId = request.nextUrl.searchParams.get("logged_in_customer_id")?.trim() ?? "";
+  const sharedSecret = getProxySharedSecret();
+  if (!sharedSecret) {
+    return NextResponse.json(
+      { error: "WIDGET_PROXY_SHARED_SECRET is not configured." },
+      { status: 500 },
+    );
+  }
+  const { anonId, setCookie, cookieValue } = resolveAnonymousIdentifier(request, sharedSecret);
+
+  const backendPath = buildBackendPath(path);
+  const proxyTs = String(Math.floor(Date.now() / 1000));
+  const payload = buildProxySignaturePayload({
+    ts: proxyTs,
+    method: request.method,
+    backendPath,
+    shopDomain: proxyShop,
+    loggedInCustomerId,
+    anonId,
+  });
+  const proxySignature = signProxyPayload(sharedSecret, payload);
   const requestHeaders = new Headers();
 
   FORWARDED_REQUEST_HEADERS.forEach((headerName) => {
@@ -97,6 +300,9 @@ async function proxyRequest(request: NextRequest, path: string[]): Promise<NextR
   if (loggedInCustomerId) {
     requestHeaders.set("X-Logged-In-Customer-Id", loggedInCustomerId);
   }
+  requestHeaders.set("X-Optimo-Anon-Id", anonId);
+  requestHeaders.set("X-Optimo-Proxy-Ts", proxyTs);
+  requestHeaders.set("X-Optimo-Proxy-Sig", proxySignature);
 
   const init: RequestInit = {
     method: request.method,
@@ -133,10 +339,24 @@ async function proxyRequest(request: NextRequest, path: string[]): Promise<NextR
     }
   });
 
-  return new NextResponse(upstreamResponse.body, {
+  const nextResponse = new NextResponse(upstreamResponse.body, {
     status: upstreamResponse.status,
     headers: responseHeaders
   });
+
+  if (setCookie) {
+    nextResponse.cookies.set({
+      name: ANON_COOKIE_NAME,
+      value: cookieValue,
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      path: "/apps/optimo-vts",
+      maxAge: ANON_COOKIE_MAX_AGE_SECONDS,
+    });
+  }
+
+  return nextResponse;
 }
 
 type RouteContext = {

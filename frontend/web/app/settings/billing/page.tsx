@@ -240,6 +240,15 @@ export default function SettingsBillingPage() {
         ) : null}
         {isLoading ? <p className="ai-status-note">Loading billing...</p> : null}
         {errorMessage ? <p className="ai-error-note">{errorMessage}</p> : null}
+        {billingStatus?.billing_lock_reason ? (
+          <p className="ai-error-note">Trial ended. Select a plan to re-enable widget and customer try-ons.</p>
+        ) : null}
+        {billingStatus?.trial_end_reason === "credits_exhausted" && billingStatus?.trial_mode === "none" ? (
+          <p className="ai-status-note">Your trial credits were fully used early. Full plan entitlement is active now.</p>
+        ) : null}
+        {(billingStatus?.plan_name === "free_trial" || billingStatus?.plan_name === "founding_trial") ? (
+          <p className="ai-status-note">Intro trial has been used. Selecting a paid plan will start billing immediately without a second trial.</p>
+        ) : null}
 
         {isLegacySubscription ? (
           <p className="ai-error-note">

@@ -1,4 +1,10 @@
+"use client";
+
+import { useEffect, useMemo } from "react";
+import { usePathname } from "next/navigation";
 import { EmbeddedLink } from "./EmbeddedNavigation";
+import { useEmbeddedRouter } from "./EmbeddedNavigation";
+import { getDefaultStoreId, getOnboardingStatus } from "../../lib/photoshootApi";
 
 type MainSection = "overview" | "analytics" | "settings" | "ai";
 type SettingsSection = "custom" | "privacy" | "billing" | "support";
@@ -11,6 +17,33 @@ type PortalSidebarProps = {
 };
 
 export default function PortalSidebar({ activeMain, activeSettings, activeAi }: PortalSidebarProps) {
+  const router = useEmbeddedRouter();
+  const pathname = usePathname();
+  const storeId = useMemo(() => getDefaultStoreId(), []);
+
+  useEffect(() => {
+    if (!storeId) {
+      return;
+    }
+
+    if (pathname === "/settings/billing") {
+      return;
+    }
+
+    const controller = new AbortController();
+    getOnboardingStatus({ storeId, signal: controller.signal })
+      .then((status) => {
+        if (status.billing_lock_reason) {
+          router.replace("/settings/billing");
+        }
+      })
+      .catch(() => {
+        // Non-blocking for sidebar rendering
+      });
+
+    return () => controller.abort();
+  }, [pathname, router, storeId]);
+
   return (
     <aside className="portal-sidebar">
       <header className="portal-brand">

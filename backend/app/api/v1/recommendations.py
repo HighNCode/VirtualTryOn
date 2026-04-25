@@ -128,6 +128,9 @@ async def recommend_size(
             fit_analysis=result["fit_analysis"],
             alternative_sizes=result["alternative_sizes"],
             all_sizes=result["all_sizes"],
+            size_scores=result.get("size_scores", {}),
+            coverage_by_size=result.get("coverage_by_size", {}),
+            score_model_version=result.get("score_model_version"),
         )
 
     except HTTPException:

@@ -6,11 +6,15 @@
   box-sizing: border-box;
 }
 
+.optimo-vts-host {
+  --ovts-trigger-background: linear-gradient(90deg, #a50070 0%, #f1001f 100%);
+}
+
 .ovts-trigger {
   width: 100%;
   border: 0;
   border-radius: 14px;
-  background: linear-gradient(90deg, #a50070 0%, #f1001f 100%);
+  background: var(--ovts-trigger-background);
   color: #fff;
   display: inline-flex;
   align-items: center;
@@ -19,7 +23,39 @@
   padding: 14px 18px;
   font: 800 17px/1.1 "Manrope", "Helvetica Neue", Arial, sans-serif;
   cursor: pointer;
-  box-shadow: 0 14px 28px rgba(177, 0, 73, 0.22);
+  box-shadow: none;
+}
+
+/* Guard against theme-level button resets overriding app block visuals. */
+.optimo-vts-host .ovts-trigger:not([hidden]) {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 100% !important;
+  min-height: 52px !important;
+  padding: 14px 18px !important;
+  border: 0 !important;
+  border-radius: 14px !important;
+  background: var(--ovts-trigger-background) !important;
+  color: #ffffff !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  text-decoration: none !important;
+  box-shadow: none !important;
+}
+
+.optimo-vts-host .ovts-trigger[hidden] {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+}
+
+.optimo-vts-host .ovts-trigger__text,
+.optimo-vts-host .ovts-trigger__icon,
+.optimo-vts-host .ovts-trigger__arrow {
+  color: inherit !important;
 }
 
 .ovts-trigger__icon,
@@ -333,7 +369,6 @@
 .ovts-fit-confidence__head,
 .ovts-fit-row,
 .ovts-studio-actions,
-.ovts-share-row,
 .ovts-heatmap-legend,
 .ovts-size-grid,
 .ovts-measurement-grid,
@@ -594,6 +629,7 @@
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  position: relative;
 }
 
 .ovts-tryon-preview img {
@@ -607,6 +643,19 @@
   place-items: center;
   color: #685965;
   font-weight: 700;
+}
+
+.ovts-image-issue {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  margin: 0;
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: rgba(33, 17, 24, 0.82);
+  color: #fff;
+  font: 700 12px/1.35 "Manrope", "Helvetica Neue", Arial, sans-serif;
 }
 
 .ovts-studio-grid {
@@ -656,6 +705,16 @@
   background: #fff;
 }
 
+.ovts-coverage-note {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 1px solid #f0d8df;
+  border-radius: 12px;
+  background: #fff7fa;
+  color: #6a4450;
+  font: 700 12px/1.35 "Manrope", "Helvetica Neue", Arial, sans-serif;
+}
+
 .ovts-share-box > span,
 .ovts-size-why h4 {
   display: block;
@@ -664,30 +723,33 @@
   font-weight: 800;
 }
 
-.ovts-share-row {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.ovts-share-chip {
-  min-height: 36px;
-  border: 1px solid rgba(220, 27, 81, 0.16);
-  border-radius: 10px;
-  background: #fff6f8;
-  color: #1d1b1e;
-  font: 800 12px/1 "Manrope", "Helvetica Neue", Arial, sans-serif;
+.ovts-share-primary {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid rgba(220, 27, 81, 0.22);
+  border-radius: 12px;
+  background: linear-gradient(90deg, #b00077 0%, #f01f45 100%);
+  color: #fff;
+  font: 800 13px/1 "Manrope", "Helvetica Neue", Arial, sans-serif;
   cursor: pointer;
 }
 
-.ovts-share-chip span {
+.ovts-share-icons {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.ovts-share-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 24px;
-  min-height: 24px;
+  width: 28px;
+  height: 28px;
   border-radius: 999px;
   background: var(--share-color);
   color: #fff;
+  font: 800 10px/1 "Manrope", "Helvetica Neue", Arial, sans-serif;
 }
 
 .ovts-heatmap-visual {
@@ -697,58 +759,58 @@
 
 .ovts-heatmap-body {
   position: relative;
-  min-height: 330px;
+  min-height: 380px;
   border-radius: 24px;
   overflow: hidden;
-  background: linear-gradient(180deg, #d3d6dd 0%, #b9bdc7 100%);
+  background:
+    radial-gradient(circle at 35% 20%, #fff8fa 0%, #fdf3f6 42%, #f9e8ee 100%);
 }
 
-.ovts-heatmap-silhouette,
 .ovts-heatmap-overlay {
   position: absolute;
   inset: 0;
 }
 
-.ovts-heatmap-silhouette::before,
-.ovts-heatmap-silhouette::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(255, 255, 255, 0.22);
-}
-
-.ovts-heatmap-silhouette::before {
-  top: 24px;
-  width: 70px;
-  height: 70px;
-  border-radius: 50%;
-}
-
-.ovts-heatmap-silhouette::after {
-  top: 94px;
-  width: 130px;
-  height: 210px;
-  border-radius: 40px 40px 22px 22px;
-}
-
 .ovts-heatmap-overlay {
-  padding: 14px 26px 10px;
+  padding: 8px 12px 8px;
 }
 
 .ovts-heatmap-overlay svg {
   width: 100%;
   height: 100%;
   pointer-events: auto;
+  display: block;
+  margin: 0 auto;
 }
 
 .ovts-heatmap-overlay .ovts-heatmap-zones path[data-zone] {
   cursor: pointer;
-  transition: fill 0.25s cubic-bezier(0.19, 1, 0.22, 1), fill-opacity 0.25s cubic-bezier(0.19, 1, 0.22, 1);
+  transition:
+    fill 0.28s cubic-bezier(0.19, 1, 0.22, 1),
+    fill-opacity 0.28s cubic-bezier(0.19, 1, 0.22, 1),
+    stroke-width 0.28s cubic-bezier(0.19, 1, 0.22, 1);
 }
 
 .ovts-heatmap-overlay .ovts-heatmap-zones path[data-zone]:hover {
-  fill-opacity: 0.88;
+  fill-opacity: 0.98;
+  stroke-width: 3px !important;
+}
+
+.ovts-heatmap-coverage {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(36, 41, 55, 0.22);
+  background: rgba(255, 255, 255, 0.76);
+  color: #2a3344;
+  font: 700 12px/1.2 "Manrope", "Helvetica Neue", Arial, sans-serif;
+}
+
+.ovts-heatmap-coverage strong {
+  font-weight: 900;
 }
 
 .ovts-heatmap-tooltip {
@@ -967,7 +1029,4 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .ovts-share-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }

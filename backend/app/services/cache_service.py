@@ -21,7 +21,9 @@ class CacheService:
 
     def __init__(self):
         self.redis = get_redis()
-        self.ttl = settings.IMAGE_CACHE_TTL  # 24 hours
+        self.photo_ttl = settings.PHOTO_CACHE_TTL_SECONDS
+        self.measurement_ttl = settings.MEASUREMENT_CACHE_TTL_SECONDS
+        self.tryon_result_ttl = settings.TRYON_RESULT_TTL_SECONDS
 
     async def store_image(
         self,
@@ -30,7 +32,7 @@ class CacheService:
         image_data: bytes
     ) -> str:
         """
-        Store image in Redis with 24h TTL
+        Store image in Redis with configured photo TTL
 
         Args:
             session_id: Session UUID
@@ -46,7 +48,7 @@ class CacheService:
         compressed = self._compress_image(image_data)
 
         # Store in Redis with TTL
-        success = self.redis.set(cache_key, compressed, self.ttl)
+        success = self.redis.set(cache_key, compressed, self.photo_ttl)
 
         if success:
             logger.info(f"Image stored in cache: {cache_key}")
@@ -100,7 +102,7 @@ class CacheService:
         cache_key = f"img:measurement:{measurement_id}:{image_type}"
 
         compressed = self._compress_image(image_data)
-        success = self.redis.set(cache_key, compressed, self.ttl)
+        success = self.redis.set(cache_key, compressed, self.photo_ttl)
 
         if success:
             logger.info(f"Measurement image stored: {cache_key}")
@@ -136,11 +138,13 @@ class CacheService:
         cache_key = f"studio:{parent_try_on_id}:{studio_background_id}"
 
         compressed = self._compress_image(result_image)
-        success = self.redis.set(cache_key, compressed, settings.STUDIO_CACHE_TTL)
+        studio_ttl = settings.TRYON_RESULT_TTL_SECONDS or settings.STUDIO_CACHE_TTL
+        success = self.redis.set(cache_key, compressed, studio_ttl)
 
-        if success:
-            logger.info(f"Studio result cached: {cache_key} (TTL={settings.STUDIO_CACHE_TTL}s)")
+        if not success:
+            raise RuntimeError(f"Failed to cache studio result: {cache_key}")
 
+        logger.info(f"Studio result cached: {cache_key} (TTL={studio_ttl}s)")
         return cache_key
 
     async def get_studio_result(
@@ -175,11 +179,12 @@ class CacheService:
         cache_key = f"tryon:{try_on_id}"
 
         compressed = self._compress_image(result_image)
-        success = self.redis.set(cache_key, compressed, self.ttl)
+        success = self.redis.set(cache_key, compressed, self.tryon_result_ttl)
 
-        if success:
-            logger.info(f"Try-on result stored: {cache_key}")
+        if not success:
+            raise RuntimeError(f"Failed to cache try-on result: {cache_key}")
 
+        logger.info(f"Try-on result stored: {cache_key}")
         return cache_key
 
     async def get_tryon_result(self, try_on_id: str) -> Optional[bytes]:
@@ -198,7 +203,7 @@ class CacheService:
         result_image: bytes,
     ) -> str:
         """
-        Store AI photoshoot result image with 24h TTL.
+        Store AI photoshoot result image with configured try-on result TTL.
 
         Args:
             job_id: PhotoshootJob UUID
@@ -209,7 +214,7 @@ class CacheService:
         """
         cache_key = f"photoshoot:{job_id}"
         compressed = self._compress_image(result_image)
-        success = self.redis.set(cache_key, compressed, self.ttl)
+        success = self.redis.set(cache_key, compressed, self.tryon_result_ttl)
         if success:
             logger.info(f"Photoshoot result stored: {cache_key}")
         return cache_key

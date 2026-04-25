@@ -3,10 +3,13 @@ Shared store-resolution dependencies for merchant-facing routes.
 """
 
 import logging
+import hashlib
+import hmac
+import time
 from typing import Optional
 
 import httpx
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DBSession
@@ -17,6 +20,80 @@ from app.core.security import decrypt_token, maybe_verify_session_token
 from app.models.database import Store
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_proxy_shared_secret() -> str:
+    settings = get_settings()
+    return (
+        (settings.WIDGET_PROXY_SHARED_SECRET or "").strip()
+        or (settings.SHOPIFY_API_SECRET or "").strip()
+    )
+
+
+def _verify_storefront_proxy_signature(
+    *,
+    request: Request,
+    shop_domain: Optional[str],
+) -> None:
+    settings = get_settings()
+    env = (settings.APP_ENV or "").strip().lower()
+    if env == "development":
+        return
+
+    shared_secret = _resolve_proxy_shared_secret()
+    if not shared_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Storefront proxy verification is misconfigured.",
+        )
+
+    ts_raw = (request.headers.get("X-Optimo-Proxy-Ts") or "").strip()
+    sig = (request.headers.get("X-Optimo-Proxy-Sig") or "").strip().lower()
+    if not ts_raw or not sig:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing trusted storefront proxy signature.",
+        )
+
+    try:
+        ts = int(ts_raw)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid storefront proxy timestamp.",
+        )
+
+    max_skew_seconds = int(settings.WIDGET_PROXY_MAX_SKEW_SECONDS or 300)
+    now = int(time.time())
+    if abs(now - ts) > max_skew_seconds:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Storefront proxy signature is stale.",
+        )
+
+    logged_in_customer_id = (request.headers.get("X-Logged-In-Customer-Id") or "").strip()
+    anon_id = (request.headers.get("X-Optimo-Anon-Id") or "").strip()
+    payload = "\n".join(
+        [
+            str(ts),
+            request.method.upper(),
+            request.url.path,
+            (shop_domain or "").strip().lower(),
+            logged_in_customer_id,
+            anon_id,
+        ]
+    )
+    expected = hmac.new(
+        shared_secret.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+    if not hmac.compare_digest(expected, sig):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid trusted storefront proxy signature.",
+        )
 
 
 def _normalize_shop_domain(value: Optional[str]) -> Optional[str]:
@@ -39,6 +116,7 @@ def _get_store_by_id(store_id: str, db: DBSession) -> Optional[Store]:
 
 
 def get_public_store(
+    request: Request,
     x_shopify_shop_domain: Optional[str] = Header(None, alias="X-Shopify-Shop-Domain"),
     x_shop_domain: Optional[str] = Header(None, alias="X-Shop-Domain"),
     x_store_id: Optional[str] = Header(None, alias="X-Store-ID"),
@@ -53,6 +131,7 @@ def get_public_store(
     """
     header_shop_domain = _normalize_shop_domain(x_shopify_shop_domain) or _normalize_shop_domain(x_shop_domain)
     normalized_store_id = (x_store_id or "").strip()
+    _verify_storefront_proxy_signature(request=request, shop_domain=header_shop_domain)
 
     if header_shop_domain:
         store = _get_store_by_shop_domain(header_shop_domain, db)

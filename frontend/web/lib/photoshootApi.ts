@@ -42,6 +42,8 @@ export type OnboardingStatusResponse = {
   onboarding_step: string;
   onboarding_completed: boolean;
   plan_name: string;
+  billing_lock_reason?: string | null;
+  trial_mode?: string | null;
   goals?: string[] | null;
   referral_source?: string | null;
   referral_detail?: string | null;
@@ -65,17 +67,32 @@ export type WidgetScopeResponse = {
 export type ThemeStatusResponse = {
   theme_extension_detected: boolean;
   themes_url: string;
+  add_to_theme_url?: string;
 };
 
 export type DashboardOverviewResponse = {
   theme_extension_detected: boolean;
   themes_url: string;
+  add_to_theme_url: string;
   tryon_used_30d: number;
   credits_limit: number;
   plan_name: string;
   scope_type: string;
   enabled_collections_count: number;
   enabled_products_count: number;
+  feedback_submitted: boolean;
+  billing_lock_reason?: string | null;
+};
+
+export type DashboardFeedbackRequest = {
+  rating: number;
+  improvement_text?: string | null;
+};
+
+export type DashboardFeedbackResponse = {
+  saved: boolean;
+  rating: number;
+  submitted_at: string;
 };
 
 export type TopProductEntry = {
@@ -91,6 +108,20 @@ export type TrendEntry = {
   try_ons: number;
 };
 
+export type PerformanceTrendEntry = {
+  date: string;
+  try_on_sessions: number;
+};
+
+export type TopPerformingProductEntry = {
+  shopify_product_id: string;
+  title: string;
+  try_on_sessions: number;
+  conversion_rate: number | null;
+  return_rate: number | null;
+  revenue_impact: number | null;
+};
+
 export type StandardAnalyticsResponse = {
   period_days: number;
   period_start: string;
@@ -104,6 +135,13 @@ export type StandardAnalyticsResponse = {
   conversion_rate: number | null;
   revenue_impact: number | null;
   return_count: number | null;
+  return_reduction: number | null;
+  active_users: number;
+  anonymous_users: number;
+  try_on_sessions: number;
+  widget_click_rate: number | null;
+  performance_trend: PerformanceTrendEntry[];
+  top_performing_products: TopPerformingProductEntry[];
   top_products: TopProductEntry[];
   trend: TrendEntry[];
 };
@@ -113,6 +151,9 @@ export type BillingStatusResponse = {
   billing_interval: string | null;
   credits_limit: number;
   trial_ends_at: string | null;
+  trial_mode?: string | null;
+  trial_end_reason?: string | null;
+  billing_lock_reason?: string | null;
   plan_activated_at: string | null;
   shopify_subscription_id: string | null;
   subscription_status: string | null;
@@ -690,6 +731,24 @@ export async function updateThemeStatus(options: {
   });
 }
 
+export async function startIntroFreeTrial(options: {
+  storeId: string;
+}): Promise<OnboardingStepResponse> {
+  return requestJson<OnboardingStepResponse>("/api/v1/merchant/onboarding/start-free-trial", {
+    method: "POST",
+    storeId: options.storeId
+  });
+}
+
+export async function completeOnboardingFromBilling(options: {
+  storeId: string;
+}): Promise<OnboardingStepResponse> {
+  return requestJson<OnboardingStepResponse>("/api/v1/merchant/onboarding/complete-from-billing", {
+    method: "POST",
+    storeId: options.storeId
+  });
+}
+
 export async function getDashboardOverview(options: {
   storeId: string;
   signal?: AbortSignal;
@@ -698,6 +757,17 @@ export async function getDashboardOverview(options: {
     method: "GET",
     storeId: options.storeId,
     signal: options.signal
+  });
+}
+
+export async function submitDashboardFeedback(options: {
+  storeId: string;
+  payload: DashboardFeedbackRequest;
+}): Promise<DashboardFeedbackResponse> {
+  return requestJson<DashboardFeedbackResponse>("/api/v1/merchant/dashboard/feedback", {
+    method: "POST",
+    storeId: options.storeId,
+    body: options.payload
   });
 }
 

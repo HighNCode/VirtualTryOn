@@ -23,6 +23,9 @@ from app.models.database import (
     UsageCustomerWeek,
     UsageStoreCycle,
 )
+from app.services.customer_login_policy import (
+    customer_login_required_message,
+)
 from app.services.shopify_service import ShopifyService
 
 logger = logging.getLogger(__name__)
@@ -63,13 +66,6 @@ class UsageGovernanceService:
         await self._ensure_store_billing_synced(store)
         self._enforce_store_generation_allowed(store, now)
 
-        if enforce_weekly_limit and not customer_identifier:
-            self._raise_usage_error(
-                status_code=401,
-                code="CUSTOMER_LOGIN_REQUIRED",
-                message="Please log in to your store account to continue virtual try-on.",
-            )
-
         plan = self._get_active_plan(store)
         cycle_start_at, cycle_end_at = self._resolve_cycle_window(store, now)
         included_credits = self._resolve_included_credits(store, now, plan)
@@ -95,17 +91,61 @@ class UsageGovernanceService:
         else:
             cycle.included_credits = included_credits
 
+        # If paid-plan trial credits are exhausted before trial ends, end trial entitlement
+        # early and switch to full plan credits immediately (no hard lock).
+        if self._should_transition_plan_trial_on_credit_exhaustion(
+            store=store,
+            cycle=cycle,
+            included_credits=included_credits,
+            now=now,
+            plan=plan,
+        ):
+            included_credits = self._transition_plan_trial_to_full_plan(
+                store=store,
+                cycle=cycle,
+                plan=plan,
+                now=now,
+            )
+
+        # Intro/founding trial has no overage path; lock and require billing selection.
+        if (
+            store.trial_mode == "intro_free"
+            and cycle.consumed_credits >= included_credits
+        ):
+            self._lock_intro_trial_for_credit_exhaustion(store=store, now=now)
+            self.db.commit()
+            self._raise_usage_error(
+                status_code=402,
+                code="TRIAL_CREDITS_EXHAUSTED",
+                message="Trial ended. Select a plan to re-enable widget and customer try-ons.",
+            )
+
         week_start_utc = None
         weekly_counter = None
+        normalized_subject = (customer_identifier or "").strip()
+        is_logged_in_subject = normalized_subject.startswith("shopify:")
+        is_anonymous_subject = not is_logged_in_subject
+
+        if enforce_weekly_limit and not normalized_subject:
+            self._raise_usage_error(
+                status_code=401,
+                code="CUSTOMER_LOGIN_REQUIRED",
+                message=customer_login_required_message(),
+            )
+
         if enforce_weekly_limit:
             week_start_utc, week_end_utc, tz_name = self._resolve_week_window(store, now)
-            effective_limit = weekly_tryon_limit or settings.WEEKLY_TRYON_LIMIT_DEFAULT
+            effective_limit = (
+                int(settings.ANON_WEEKLY_TRYON_LIMIT)
+                if is_anonymous_subject
+                else int(weekly_tryon_limit or settings.WEEKLY_TRYON_LIMIT_DEFAULT)
+            )
 
             weekly_counter = (
                 self.db.query(UsageCustomerWeek)
                 .filter_by(
                     store_id=store.store_id,
-                    customer_identifier=customer_identifier,
+                    customer_identifier=normalized_subject,
                     week_start_utc=week_start_utc,
                 )
                 .with_for_update()
@@ -114,7 +154,7 @@ class UsageGovernanceService:
             if weekly_counter is None:
                 weekly_counter = UsageCustomerWeek(
                     store_id=store.store_id,
-                    customer_identifier=customer_identifier,
+                    customer_identifier=normalized_subject,
                     week_start_utc=week_start_utc,
                     week_end_utc=week_end_utc,
                     used_count=0,
@@ -124,6 +164,14 @@ class UsageGovernanceService:
 
             if weekly_counter.used_count + 1 > effective_limit:
                 reset_at = week_end_utc.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+                if is_anonymous_subject:
+                    self._raise_usage_error(
+                        status_code=401,
+                        code="CUSTOMER_LOGIN_REQUIRED",
+                        message=customer_login_required_message(),
+                        reset_at=reset_at,
+                        timezone=tz_name,
+                    )
                 self._raise_usage_error(
                     status_code=429,
                     code="WEEKLY_LIMIT_REACHED",
@@ -158,7 +206,7 @@ class UsageGovernanceService:
 
         event = UsageEvent(
             store_id=store.store_id,
-            customer_identifier=customer_identifier,
+            customer_identifier=normalized_subject or None,
             action_type=action_type,
             status="reserved",
             reserved_credits=credits_to_reserve,
@@ -391,15 +439,33 @@ class UsageGovernanceService:
                 message="A paid plan is required to use AI generation features.",
             )
 
+        if store.trial_mode == "intro_free":
+            if store.trial_ends_at and store.trial_ends_at < now:
+                store.billing_lock_reason = "trial_expired"
+                if not store.trial_end_reason:
+                    store.trial_end_reason = "time_expired"
+                self.db.commit()
+            if store.billing_lock_reason in {"trial_expired", "trial_credits_exhausted"}:
+                self._raise_usage_error(
+                    status_code=402,
+                    code="TRIAL_EXPIRED",
+                    message="Trial ended. Select a plan to re-enable widget and customer try-ons.",
+                )
+
         if (
-            store.plan_name == "founding_trial"
+            store.plan_name in {"founding_trial", "free_trial"}
             and store.trial_ends_at
             and store.trial_ends_at < now
         ):
+            if not store.billing_lock_reason:
+                store.billing_lock_reason = "trial_expired"
+            if not store.trial_end_reason:
+                store.trial_end_reason = "time_expired"
+            self.db.commit()
             self._raise_usage_error(
                 status_code=402,
                 code="TRIAL_EXPIRED",
-                message="Trial has ended. Please select a billing plan to continue AI generation.",
+                message="Trial ended. Select a plan to re-enable widget and customer try-ons.",
             )
 
         if store.plan_shopify_subscription_id:
@@ -451,6 +517,50 @@ class UsageGovernanceService:
             return int(plan.credits_monthly)
         return int(store.credits_limit or 0)
 
+    def _should_transition_plan_trial_on_credit_exhaustion(
+        self,
+        *,
+        store: Store,
+        cycle: UsageStoreCycle,
+        included_credits: int,
+        now: datetime,
+        plan: Plan | None,
+    ) -> bool:
+        if store.trial_mode != "plan_trial":
+            return False
+        if not store.trial_ends_at or store.trial_ends_at <= now:
+            return False
+        if not plan:
+            return False
+        if included_credits <= 0:
+            return False
+        return cycle.consumed_credits >= included_credits
+
+    def _transition_plan_trial_to_full_plan(
+        self,
+        *,
+        store: Store,
+        cycle: UsageStoreCycle,
+        plan: Plan | None,
+        now: datetime,
+    ) -> int:
+        if plan is None:
+            return cycle.included_credits
+
+        full_credits = int(plan.credits_annual if store.billing_interval == "annual" else plan.credits_monthly)
+        store.trial_ends_at = now
+        store.trial_mode = "none"
+        store.trial_end_reason = "credits_exhausted"
+        store.credits_limit = full_credits
+        cycle.included_credits = max(cycle.included_credits, full_credits)
+        return cycle.included_credits
+
+    def _lock_intro_trial_for_credit_exhaustion(self, *, store: Store, now: datetime) -> None:
+        store.billing_lock_reason = "trial_credits_exhausted"
+        store.trial_end_reason = "credits_exhausted"
+        if not store.trial_ends_at or store.trial_ends_at > now:
+            store.trial_ends_at = now
+
     def _resolve_overage_usd_per_tryon(self, plan: Plan | None) -> Decimal:
         if plan and plan.overage_usd_per_tryon is not None:
             value = Decimal(str(plan.overage_usd_per_tryon))
@@ -464,8 +574,10 @@ class UsageGovernanceService:
         try:
             tz = ZoneInfo(tz_name)
         except Exception:
+            # Windows environments may not have IANA tz data available (tzdata missing).
+            # Fall back to built-in UTC tzinfo so usage gating never hard-fails.
             tz_name = "UTC"
-            tz = ZoneInfo("UTC")
+            tz = timezone.utc
 
         now_local = now_utc.replace(tzinfo=timezone.utc).astimezone(tz)
         week_start_local = (now_local - timedelta(days=now_local.weekday())).replace(

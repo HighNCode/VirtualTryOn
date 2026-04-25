@@ -28,6 +28,8 @@ CATEGORY_WEIGHTS: Dict[str, Dict[str, float]] = {
     "unknown":   {"chest": 0.40, "waist": 0.30, "hip": 0.30},
 }
 
+SCORE_MODEL_VERSION = "unified_v1"
+
 
 class SizeMatcher:
     """
@@ -60,48 +62,32 @@ class SizeMatcher:
         if not size_chart:
             raise ValueError("No size chart data available for this product")
 
-        # Determine relevant measurements for this category
-        category_key = category if category in CATEGORY_MEASUREMENTS else "unknown"
-        relevant_keys = CATEGORY_MEASUREMENTS[category_key]
-        weights = CATEGORY_WEIGHTS[category_key]
+        category_key = self._normalize_category(category)
+        evaluated = self.evaluate_all_sizes(
+            user_measurements=user_measurements,
+            category=category_key,
+            size_chart=size_chart,
+        )
 
-        # Filter to available (non-null) measurements
-        available = {}
-        for key in relevant_keys:
-            val = user_measurements.get(key)
-            if val is not None:
-                available[key] = val
-
-        if not available:
+        scored_sizes = [
+            (size_name, payload["score"], payload["fit_analysis"])
+            for size_name, payload in evaluated.items()
+            if payload.get("score") is not None
+        ]
+        if not scored_sizes:
             raise ValueError(
                 "Insufficient measurement data for size recommendation. "
-                f"Need at least one of: {relevant_keys}"
+                f"Need at least one valid range in size chart for: {CATEGORY_MEASUREMENTS[category_key]}"
             )
 
-        # Score every size
-        scores: List[Tuple[str, int, Dict]] = []
-        for size_name, size_measurements in size_chart.items():
-            fit_score, fit_analysis = self._compute_size_fit(
-                available, size_measurements, weights
-            )
-            scores.append((size_name, fit_score, fit_analysis))
-
-        # Sort by fit_score descending
-        scores.sort(key=lambda x: x[1], reverse=True)
-
-        best_size, best_score, best_analysis = scores[0]
-
-        # Confidence level
-        if best_score >= 85:
-            confidence = "high"
-        elif best_score >= 70:
-            confidence = "medium"
-        else:
-            confidence = "low"
+        scored_sizes.sort(key=lambda x: x[1], reverse=True)
+        best_size, best_score, best_analysis = scored_sizes[0]
+        best_coverage = evaluated[best_size]["coverage"]
+        confidence = self._derive_confidence(best_score, best_coverage)
 
         # Build alternative sizes (exclude best, only include fit_score >= 40)
         alternatives = []
-        for size_name, score, analysis in scores[1:]:
+        for size_name, score, analysis in scored_sizes[1:]:
             if score < 40:
                 continue
             note = self._generate_note(best_size, size_name, best_analysis, analysis)
@@ -123,6 +109,9 @@ class SizeMatcher:
             f"confidence={confidence}, category={category}"
         )
 
+        size_scores = {size_name: payload["score"] for size_name, payload in evaluated.items()}
+        coverage_by_size = {size_name: payload["coverage"] for size_name, payload in evaluated.items()}
+
         return {
             "recommended_size": best_size,
             "confidence": confidence,
@@ -130,7 +119,46 @@ class SizeMatcher:
             "fit_analysis": best_analysis,
             "alternative_sizes": alternatives,
             "all_sizes": all_sizes,
+            "size_scores": size_scores,
+            "coverage_by_size": coverage_by_size,
+            "score_model_version": SCORE_MODEL_VERSION,
         }
+
+    def score_single_size(
+        self,
+        user_measurements: Dict[str, Optional[float]],
+        category: str,
+        size_measurements: Dict[str, Dict],
+    ) -> Dict:
+        category_key = self._normalize_category(category)
+        expected_keys = CATEGORY_MEASUREMENTS[category_key]
+        weights = CATEGORY_WEIGHTS[category_key]
+        return self._compute_size_fit_with_coverage(
+            user_measurements=user_measurements or {},
+            expected_keys=expected_keys,
+            size_measurements=size_measurements,
+            weights=weights,
+        )
+
+    def evaluate_all_sizes(
+        self,
+        user_measurements: Dict[str, Optional[float]],
+        category: str,
+        size_chart: Dict[str, Dict],
+    ) -> Dict[str, Dict]:
+        category_key = self._normalize_category(category)
+        expected_keys = CATEGORY_MEASUREMENTS[category_key]
+        weights = CATEGORY_WEIGHTS[category_key]
+
+        results: Dict[str, Dict] = {}
+        for size_name, size_measurements in size_chart.items():
+            results[size_name] = self._compute_size_fit_with_coverage(
+                user_measurements=user_measurements or {},
+                expected_keys=expected_keys,
+                size_measurements=size_measurements,
+                weights=weights,
+            )
+        return results
 
     def _build_size_chart(
         self, size_charts_db: list, category: str, gender: str
@@ -150,58 +178,100 @@ class SizeMatcher:
         # Fallback to standard charts
         return get_standard_size_charts(category, gender)
 
-    def _compute_size_fit(
+    def _compute_size_fit_with_coverage(
         self,
-        user_measurements: Dict[str, float],
+        user_measurements: Dict[str, Optional[float]],
+        expected_keys: List[str],
         size_measurements: Dict[str, Dict],
         weights: Dict[str, float],
-    ) -> Tuple[int, Dict]:
-        """
-        Compute fit score and per-region analysis for a single size.
-
-        Args:
-            user_measurements: Available user measurements {name: value_cm}
-            size_measurements: Size chart data {name: {"min": float, "max": float}}
-            weights: Importance weights {name: weight}
-
-        Returns:
-            (fit_score: int 0-100, fit_analysis: Dict)
-        """
+    ) -> Dict:
         fit_analysis = {}
         weighted_score = 0.0
         total_weight = 0.0
+        used_weight = 0.0
+        used_measurements = 0
 
-        for measurement_name, user_value in user_measurements.items():
+        for measurement_name in expected_keys:
+            user_value = user_measurements.get(measurement_name)
+            if user_value is None:
+                continue
+            try:
+                user_numeric = float(user_value)
+            except (TypeError, ValueError):
+                continue
+
             size_range = size_measurements.get(measurement_name)
             if size_range is None:
                 continue
 
-            min_val = size_range.get("min", 0)
-            max_val = size_range.get("max", 0)
-            if min_val == 0 and max_val == 0:
+            min_val = size_range.get("min")
+            max_val = size_range.get("max")
+            if min_val is None or max_val is None:
+                continue
+            try:
+                min_numeric = float(min_val)
+                max_numeric = float(max_val)
+            except (TypeError, ValueError):
                 continue
 
-            score, status, difference = self._region_score(user_value, min_val, max_val)
+            score, status, difference = self._region_score(user_numeric, min_numeric, max_numeric)
 
             fit_analysis[measurement_name] = {
                 "status": status,
-                "user_value": user_value,
-                "size_range": [min_val, max_val],
+                "user_value": round(user_numeric, 1),
+                "size_range": [round(min_numeric, 1), round(max_numeric, 1)],
                 "difference": difference,
             }
 
             w = weights.get(measurement_name, 0.0)
             weighted_score += score * w
             total_weight += w
+            used_weight += w
+            used_measurements += 1
 
-        if total_weight == 0:
-            return (0, fit_analysis)
+        coverage = {
+            "used_measurements": used_measurements,
+            "expected_measurements": len(expected_keys),
+            "used_weight": round(used_weight, 4),
+            "total_weight": round(sum(weights.get(key, 0.0) for key in expected_keys), 4),
+        }
 
-        # Renormalize weights if some measurements were missing from the size chart
+        if total_weight <= 0:
+            return {
+                "score": None,
+                "fit_analysis": fit_analysis,
+                "coverage": coverage,
+                "confidence": "insufficient_data",
+            }
+
         fit_score = round(weighted_score / total_weight)
         fit_score = max(0, min(100, fit_score))
+        confidence = self._derive_confidence(fit_score, coverage)
 
-        return (fit_score, fit_analysis)
+        return {
+            "score": fit_score,
+            "fit_analysis": fit_analysis,
+            "coverage": coverage,
+            "confidence": confidence,
+        }
+
+    @staticmethod
+    def _normalize_category(category: str) -> str:
+        normalized = (category or "").strip().lower()
+        return normalized if normalized in CATEGORY_MEASUREMENTS else "unknown"
+
+    @staticmethod
+    def _derive_confidence(score: Optional[int], coverage: Dict) -> str:
+        if score is None:
+            return "insufficient_data"
+        total_weight = float(coverage.get("total_weight") or 0.0)
+        used_weight = float(coverage.get("used_weight") or 0.0)
+        ratio = (used_weight / total_weight) if total_weight > 0 else 0.0
+        if score >= 85 and ratio >= 0.75:
+            return "high"
+        if score >= 70 and ratio >= 0.55:
+            return "medium"
+        return "low"
 
     @staticmethod
     def _region_score(

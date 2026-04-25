@@ -43,6 +43,11 @@ export default function Home() {
 
     getOnboardingStatus({ storeId })
       .then((status) => {
+        if (status.billing_lock_reason) {
+          router.replace("/settings/billing");
+          return;
+        }
+
         const route = STEP_ROUTES[status.onboarding_step];
         if (!route || route === "/step-2") {
           return;
