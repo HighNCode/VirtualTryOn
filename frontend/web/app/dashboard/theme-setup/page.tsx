@@ -4,17 +4,18 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { EmbeddedLink } from "../../_components/EmbeddedNavigation";
 import PortalSidebar from "../../_components/PortalSidebar";
 import {
-  getDashboardOverview,
   getDefaultStoreId,
-  type DashboardOverviewResponse
+  recheckDashboardThemeStatus,
+  type DashboardThemeStatusRecheckResponse
 } from "../../../lib/photoshootApi";
 
 export default function DashboardThemeSetupPage() {
   const storeId = useMemo(() => getDefaultStoreId(), []);
 
-  const [overview, setOverview] = useState<DashboardOverviewResponse | null>(null);
+  const [status, setStatus] = useState<DashboardThemeStatusRecheckResponse | null>(null);
   const [isChecking, setIsChecking] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [warningMessage, setWarningMessage] = useState("");
 
   const checkStatus = useCallback(
     async (showNotDetectedError: boolean) => {
@@ -24,12 +25,16 @@ export default function DashboardThemeSetupPage() {
 
       setIsChecking(true);
       setErrorMessage("");
+      setWarningMessage("");
 
       try {
-        const status = await getDashboardOverview({ storeId });
-        setOverview(status);
-        if (showNotDetectedError && !status.theme_extension_detected) {
+        const recheck = await recheckDashboardThemeStatus({ storeId });
+        setStatus(recheck);
+        if (showNotDetectedError && !recheck.theme_extension_detected) {
           setErrorMessage("Theme extension is still not detected. Save changes in Shopify theme editor and retry.");
+        }
+        if (recheck.detection_source === "runtime_flag" && recheck.message) {
+          setWarningMessage(recheck.message);
         }
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : "Failed to verify theme status.";
@@ -56,10 +61,10 @@ export default function DashboardThemeSetupPage() {
     };
   }, [checkStatus]);
 
-  const isDetected = Boolean(overview?.theme_extension_detected);
+  const isDetected = Boolean(status?.theme_extension_detected);
   const themeEditorUrl = isDetected
-    ? (overview?.themes_url || "").trim()
-    : (overview?.add_to_theme_url || overview?.themes_url || "").trim();
+    ? (status?.themes_url || "").trim()
+    : (status?.add_to_theme_url || status?.themes_url || "").trim();
 
   return (
     <main className="portal-shell">
@@ -121,6 +126,7 @@ export default function DashboardThemeSetupPage() {
           )}
 
           {!storeId ? <p className="ai-error-note">Open the app from Shopify Admin to verify theme extension status.</p> : null}
+          {warningMessage ? <p className="ai-error-note">{warningMessage}</p> : null}
           {errorMessage ? <p className="ai-error-note">{errorMessage}</p> : null}
 
           <div className="step5-primary-wrap">

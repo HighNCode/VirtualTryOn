@@ -5,6 +5,7 @@ Handles product sync, webhooks, and Shopify GraphQL API calls
 
 import httpx
 import logging
+import base64
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
@@ -60,6 +61,131 @@ class ShopifyService:
                 raise Exception(f"GraphQL error: {result['errors']}")
 
             return result
+
+    async def _rest_get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Make a REST GET request to Shopify Admin API.
+        """
+        headers = {
+            "X-Shopify-Access-Token": self.access_token,
+            "Content-Type": "application/json",
+        }
+        url = f"{self.rest_url}/{path.lstrip('/')}"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            return response.json()
+
+    async def get_active_theme_id(self) -> Optional[str]:
+        """
+        Resolve the currently active storefront theme ID.
+        """
+        payload = await self._rest_get("themes.json", params={"fields": "id,role"})
+        themes = payload.get("themes", []) or []
+
+        active_theme = next((item for item in themes if str(item.get("role", "")).lower() == "main"), None)
+        if active_theme is None and themes:
+            active_theme = themes[0]
+
+        if not active_theme:
+            return None
+        theme_id = active_theme.get("id")
+        return str(theme_id) if theme_id is not None else None
+
+    async def list_theme_asset_keys(self, *, theme_id: str) -> List[str]:
+        """
+        List asset keys for a theme.
+        """
+        payload = await self._rest_get(
+            f"themes/{theme_id}/assets.json",
+            params={"fields": "key"},
+        )
+        assets = payload.get("assets", []) or []
+        keys: List[str] = []
+        for item in assets:
+            key = str((item or {}).get("key") or "").strip()
+            if key:
+                keys.append(key)
+        return keys
+
+    async def get_theme_asset_value(self, *, theme_id: str, asset_key: str) -> str:
+        """
+        Fetch and decode a specific theme asset content.
+        """
+        payload = await self._rest_get(
+            f"themes/{theme_id}/assets.json",
+            params={"asset[key]": asset_key},
+        )
+        asset = payload.get("asset", {}) or {}
+        value = asset.get("value")
+        if isinstance(value, str):
+            return value
+
+        attachment = asset.get("attachment")
+        if isinstance(attachment, str) and attachment:
+            try:
+                decoded = base64.b64decode(attachment).decode("utf-8", errors="ignore")
+                return decoded
+            except Exception:
+                return ""
+        return ""
+
+    async def detect_optimo_theme_block(self) -> bool:
+        """
+        Detect whether the Optimo theme app block appears in active theme assets.
+        """
+        theme_id = await self.get_active_theme_id()
+        if not theme_id:
+            return False
+
+        keys = await self.list_theme_asset_keys(theme_id=theme_id)
+        if not keys:
+            return False
+
+        candidates: List[str] = []
+        seen: set[str] = set()
+
+        def _add_candidate(key: str) -> None:
+            normalized = key.strip()
+            if not normalized or normalized in seen:
+                return
+            seen.add(normalized)
+            candidates.append(normalized)
+
+        for key in keys:
+            lower = key.lower()
+            if lower == "config/settings_data.json":
+                _add_candidate(key)
+                continue
+            if lower.startswith("templates/") and lower.endswith(".json") and "product" in lower:
+                _add_candidate(key)
+                continue
+            if lower in {
+                "sections/main-product.liquid",
+                "sections/main-product.json",
+                "sections/product-template.liquid",
+                "sections/product.json",
+            }:
+                _add_candidate(key)
+
+        markers = [
+            "optimo_vts_widget",
+            "optimo-vts-widget",
+            "apps/optimo-vts",
+        ]
+
+        for asset_key in candidates:
+            try:
+                content = await self.get_theme_asset_value(theme_id=theme_id, asset_key=asset_key)
+            except Exception as exc:
+                logger.warning("Failed to read theme asset %s/%s: %s", theme_id, asset_key, exc)
+                continue
+
+            haystack = content.lower()
+            if any(marker in haystack for marker in markers):
+                return True
+
+        return False
 
     async def sync_all_products(self, db: Session, store_id: str) -> Dict:
         """

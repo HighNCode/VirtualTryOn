@@ -275,7 +275,8 @@
         customerLoggedIn: false,
         loginMessage: "",
         widgetColor: "",
-        productViewTracked: false
+        productViewTracked: false,
+        themeDetectionBackfillSent: false
       };
 
       this.handleHostClick = this.handleHostClick.bind(this);
@@ -307,12 +308,17 @@
     }
 
     notifyThemeDetected() {
+      if (this.state.themeDetectionBackfillSent) {
+        return;
+      }
+      this.state.themeDetectionBackfillSent = true;
       this.request("/widget/theme-detected", {
         method: "POST",
         withSession: false
       }).catch(function () {
+        this.state.themeDetectionBackfillSent = false;
         return null;
-      });
+      }.bind(this));
     }
 
     renderHost() {
@@ -360,6 +366,7 @@
         const response = await this.request(this.buildCheckEnabledPath(), { withSession: false });
         this.applyEligibilityResponse(response);
         this.state.isVisible = Boolean(response && response.enabled);
+        this.notifyThemeDetected();
       } catch (error) {
         this.state.isVisible = false;
       } finally {
