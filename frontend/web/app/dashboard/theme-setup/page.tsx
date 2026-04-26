@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { EmbeddedLink } from "../../_components/EmbeddedNavigation";
 import PortalSidebar from "../../_components/PortalSidebar";
 import {
@@ -10,7 +10,7 @@ import {
 } from "../../../lib/photoshootApi";
 
 export default function DashboardThemeSetupPage() {
-  const storeId = useMemo(() => getDefaultStoreId(), []);
+  const [storeId, setStoreId] = useState("");
 
   const [status, setStatus] = useState<DashboardThemeStatusRecheckResponse | null>(null);
   const [isChecking, setIsChecking] = useState(false);
@@ -19,7 +19,9 @@ export default function DashboardThemeSetupPage() {
 
   const checkStatus = useCallback(
     async (showNotDetectedError: boolean) => {
-      if (!storeId) {
+      const resolvedStoreId = getDefaultStoreId();
+      setStoreId(resolvedStoreId);
+      if (!resolvedStoreId) {
         return;
       }
 
@@ -28,7 +30,7 @@ export default function DashboardThemeSetupPage() {
       setWarningMessage("");
 
       try {
-        const recheck = await recheckDashboardThemeStatus({ storeId });
+        const recheck = await recheckDashboardThemeStatus({ storeId: resolvedStoreId });
         setStatus(recheck);
         if (showNotDetectedError && !recheck.theme_extension_detected) {
           setErrorMessage("Theme extension is still not detected. Save changes in Shopify theme editor and retry.");
@@ -43,10 +45,11 @@ export default function DashboardThemeSetupPage() {
         setIsChecking(false);
       }
     },
-    [storeId]
+    []
   );
 
   useEffect(() => {
+    setStoreId(getDefaultStoreId());
     void checkStatus(false);
   }, [checkStatus]);
 
