@@ -441,6 +441,15 @@ class DashboardOverviewResponse(BaseModel):
     billing_lock_reason: Optional[str] = None
 
 
+class DashboardThemeStatusRecheckResponse(BaseModel):
+    """Dashboard theme status recheck response with detection source metadata."""
+    theme_extension_detected: bool
+    detection_source: str  # 'admin_theme_scan' | 'runtime_flag' | 'none'
+    message: Optional[str] = None
+    themes_url: str
+    add_to_theme_url: str
+
+
 class DashboardFeedbackRequest(BaseModel):
     """Submit one-time merchant feedback from the dashboard overview screen."""
     rating: HalfStarRating

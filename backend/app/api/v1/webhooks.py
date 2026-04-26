@@ -7,6 +7,7 @@ from fastapi import APIRouter, Request, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 import logging
+from typing import Optional
 
 from app.core.database import get_db
 from app.core.security import verify_webhook, decrypt_token
@@ -22,6 +23,104 @@ async def verify_webhook_signature(request: Request):
     if not verify_webhook(request):
         raise HTTPException(401, "Invalid webhook signature")
     return True
+
+
+def _extract_shop_domain(request: Request, payload: dict) -> str:
+    shop_domain = str(payload.get("shop_domain") or "").strip().lower()
+    if shop_domain:
+        return shop_domain
+    return str(request.headers.get("x-shopify-shop-domain") or "").strip().lower()
+
+
+@router.post("/shop/update")
+async def handle_shop_update(
+    request: Request,
+    verified: bool = Depends(verify_webhook_signature),
+    db: Session = Depends(get_db),
+):
+    """
+    Handle shop/update webhook with lightweight store metadata sync.
+    """
+    try:
+        data = await request.json()
+        shop_domain = _extract_shop_domain(request, data)
+        if not shop_domain:
+            return {"status": "success", "message": "shop_domain missing; nothing to update"}
+
+        store = db.query(Store).filter_by(shopify_domain=shop_domain).first()
+        if not store:
+            return {"status": "success", "message": "Store not found; ignored"}
+
+        store_name = str(data.get("name") or "").strip()
+        email = str(data.get("email") or "").strip()
+        timezone = str(data.get("iana_timezone") or data.get("timezone") or "").strip()
+
+        if store_name:
+            store.store_name = store_name
+        if email:
+            store.email = email
+        if timezone:
+            store.store_timezone = timezone
+
+        db.commit()
+        logger.info("Shop update webhook processed for %s", shop_domain)
+        return {"status": "success", "message": "Shop metadata updated"}
+    except Exception as e:
+        logger.error(f"Shop update webhook error: {e}", exc_info=True)
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+
+
+@router.post("/app_subscriptions/update")
+async def handle_app_subscriptions_update(
+    request: Request,
+    verified: bool = Depends(verify_webhook_signature),
+    db: Session = Depends(get_db),
+):
+    """
+    Handle app_subscriptions/update webhook with lightweight billing status sync.
+    """
+    try:
+        data = await request.json()
+        shop_domain = _extract_shop_domain(request, data)
+        if not shop_domain:
+            return {"status": "success", "message": "shop_domain missing; nothing to update"}
+
+        store = db.query(Store).filter_by(shopify_domain=shop_domain).first()
+        if not store:
+            return {"status": "success", "message": "Store not found; ignored"}
+
+        subscription_payload = data.get("app_subscription")
+        if not isinstance(subscription_payload, dict):
+            subscription_payload = {}
+
+        raw_status: Optional[str] = None
+        if isinstance(data.get("status"), str):
+            raw_status = data.get("status")
+        elif isinstance(subscription_payload.get("status"), str):
+            raw_status = subscription_payload.get("status")
+
+        raw_gid = (
+            subscription_payload.get("admin_graphql_api_id")
+            or data.get("admin_graphql_api_id")
+            or subscription_payload.get("id")
+            or data.get("id")
+        )
+        subscription_gid = str(raw_gid or "").strip()
+
+        if raw_status:
+            store.subscription_status = str(raw_status).strip().upper()
+        if subscription_gid and subscription_gid.startswith("gid://shopify/AppSubscription/"):
+            store.plan_shopify_subscription_id = subscription_gid
+
+        store.billing_status_synced_at = datetime.utcnow()
+        db.commit()
+        logger.info("App subscription update webhook processed for %s", shop_domain)
+        return {"status": "success", "message": "Subscription status synced"}
+    except Exception as e:
+        logger.error(f"App subscription update webhook error: {e}", exc_info=True)
+        db.rollback()
+        return {"status": "error", "message": str(e)}
 
 
 @router.post("/products/create")

@@ -49,6 +49,7 @@ from app.models.schemas import (
     PlanResponse,
     WidgetCheckResponse,
     DashboardOverviewResponse,
+    DashboardThemeStatusRecheckResponse,
     DashboardFeedbackRequest,
     DashboardFeedbackResponse,
     MerchantCollectionResponse,
@@ -223,6 +224,22 @@ def _billing_lock_message(lock_reason: Optional[str]) -> Optional[str]:
     if lock_reason == "trial_credits_exhausted":
         return "Trial credits are exhausted. Select a plan to re-enable widget and customer try-ons."
     return None
+
+
+def _theme_recheck_fallback_response(
+    *,
+    detected: bool,
+    themes_url: str,
+    add_to_theme_url: str,
+    message: Optional[str],
+) -> DashboardThemeStatusRecheckResponse:
+    return DashboardThemeStatusRecheckResponse(
+        theme_extension_detected=detected,
+        detection_source="runtime_flag" if detected else "none",
+        message=message,
+        themes_url=themes_url,
+        add_to_theme_url=add_to_theme_url,
+    )
 
 
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -949,6 +966,59 @@ def get_dashboard_overview(
         enabled_products_count=enabled_products_count,
         feedback_submitted=feedback_submitted,
         billing_lock_reason=store.billing_lock_reason,
+    )
+
+
+@merchant_router.post("/dashboard/theme-status/recheck", response_model=DashboardThemeStatusRecheckResponse)
+async def recheck_dashboard_theme_status(
+    store: Store = Depends(get_current_merchant_store),
+    db: DBSession = Depends(get_db),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
+):
+    """
+    Recheck theme-extension detection for dashboard Theme Setup flow.
+
+    Attempts an Admin API theme asset scan (preferred). If unavailable
+    (missing scope, auth issue, transient API error), gracefully falls back
+    to the stored runtime detection flag.
+    """
+    wc = store.widget_config
+    detected_from_runtime = wc.theme_extension_detected if wc else False
+    themes_url, add_to_theme_url = _build_theme_editor_urls(store.shopify_domain)
+
+    try:
+        access_token = await resolve_merchant_shopify_access_token(
+            store,
+            credentials,
+            action_label="theme status recheck",
+        )
+        svc = ShopifyService(store.shopify_domain, access_token)
+        detected_from_scan = await svc.detect_optimo_theme_block()
+    except Exception as exc:
+        logger.warning(
+            "Theme status recheck fallback to runtime flag for store %s: %s",
+            store.store_id,
+            exc,
+        )
+        return _theme_recheck_fallback_response(
+            detected=detected_from_runtime,
+            themes_url=themes_url,
+            add_to_theme_url=add_to_theme_url,
+            message="Backend theme scan unavailable. Showing runtime detection status.",
+        )
+
+    if wc is None:
+        wc = WidgetConfig(store_id=store.store_id)
+        db.add(wc)
+    wc.theme_extension_detected = bool(detected_from_scan)
+    db.commit()
+
+    return DashboardThemeStatusRecheckResponse(
+        theme_extension_detected=bool(detected_from_scan),
+        detection_source="admin_theme_scan",
+        message=None,
+        themes_url=themes_url,
+        add_to_theme_url=add_to_theme_url,
     )
 
 

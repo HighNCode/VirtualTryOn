@@ -84,6 +84,14 @@ export type DashboardOverviewResponse = {
   billing_lock_reason?: string | null;
 };
 
+export type DashboardThemeStatusRecheckResponse = {
+  theme_extension_detected: boolean;
+  detection_source: "admin_theme_scan" | "runtime_flag" | "none";
+  message?: string | null;
+  themes_url: string;
+  add_to_theme_url: string;
+};
+
 export type DashboardFeedbackRequest = {
   rating: number;
   improvement_text?: string | null;
@@ -755,6 +763,17 @@ export async function getDashboardOverview(options: {
 }): Promise<DashboardOverviewResponse> {
   return requestJson<DashboardOverviewResponse>("/api/v1/merchant/dashboard/overview", {
     method: "GET",
+    storeId: options.storeId,
+    signal: options.signal
+  });
+}
+
+export async function recheckDashboardThemeStatus(options: {
+  storeId: string;
+  signal?: AbortSignal;
+}): Promise<DashboardThemeStatusRecheckResponse> {
+  return requestJson<DashboardThemeStatusRecheckResponse>("/api/v1/merchant/dashboard/theme-status/recheck", {
+    method: "POST",
     storeId: options.storeId,
     signal: options.signal
   });
