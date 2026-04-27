@@ -21,16 +21,13 @@ export default function DashboardThemeSetupPage() {
     async (showNotDetectedError: boolean) => {
       const resolvedStoreId = getDefaultStoreId();
       setStoreId(resolvedStoreId);
-      if (!resolvedStoreId) {
-        return;
-      }
 
       setIsChecking(true);
       setErrorMessage("");
       setWarningMessage("");
 
       try {
-        const recheck = await recheckDashboardThemeStatus({ storeId: resolvedStoreId });
+        const recheck = await recheckDashboardThemeStatus({ storeId: resolvedStoreId || "" });
         setStatus(recheck);
         if (showNotDetectedError && !recheck.theme_extension_detected) {
           setErrorMessage("Theme extension is still not detected. Save changes in Shopify theme editor and retry.");
@@ -40,7 +37,11 @@ export default function DashboardThemeSetupPage() {
         }
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : "Failed to verify theme status.";
-        setErrorMessage(message);
+        if (!resolvedStoreId) {
+          setErrorMessage("Shop context is missing in this embedded view. Reopen the app from Shopify Admin and retry.");
+        } else {
+          setErrorMessage(message);
+        }
       } finally {
         setIsChecking(false);
       }
