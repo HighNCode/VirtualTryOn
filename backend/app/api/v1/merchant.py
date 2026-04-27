@@ -242,6 +242,53 @@ def _theme_recheck_fallback_response(
     )
 
 
+async def _perform_theme_status_recheck(
+    *,
+    store: Store,
+    db: DBSession,
+    credentials: Optional[HTTPAuthorizationCredentials],
+    action_label: str,
+) -> DashboardThemeStatusRecheckResponse:
+    wc = store.widget_config
+    detected_from_runtime = wc.theme_extension_detected if wc else False
+    themes_url, add_to_theme_url = _build_theme_editor_urls(store.shopify_domain)
+
+    try:
+        access_token = await resolve_merchant_shopify_access_token(
+            store,
+            credentials,
+            action_label=action_label,
+        )
+        svc = ShopifyService(store.shopify_domain, access_token)
+        detected_from_scan = await svc.detect_optimo_theme_block()
+    except Exception as exc:
+        logger.warning(
+            "Theme status recheck fallback to runtime flag for store %s: %s",
+            store.store_id,
+            exc,
+        )
+        return _theme_recheck_fallback_response(
+            detected=detected_from_runtime,
+            themes_url=themes_url,
+            add_to_theme_url=add_to_theme_url,
+            message="Backend theme scan unavailable. Showing runtime detection status.",
+        )
+
+    if wc is None:
+        wc = WidgetConfig(store_id=store.store_id)
+        db.add(wc)
+    wc.theme_extension_detected = bool(detected_from_scan)
+    db.commit()
+
+    return DashboardThemeStatusRecheckResponse(
+        theme_extension_detected=bool(detected_from_scan),
+        detection_source="admin_theme_scan",
+        message=None,
+        themes_url=themes_url,
+        add_to_theme_url=add_to_theme_url,
+    )
+
+
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Onboarding â€” Status
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -446,6 +493,23 @@ def get_theme_status(store: Store = Depends(get_current_merchant_store)):
         theme_extension_detected=detected,
         themes_url=theme_editor_url,
         add_to_theme_url=add_to_theme_url,
+    )
+
+
+@merchant_router.post("/onboarding/theme-status/recheck", response_model=DashboardThemeStatusRecheckResponse)
+async def recheck_onboarding_theme_status(
+    store: Store = Depends(get_current_merchant_store),
+    db: DBSession = Depends(get_db),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
+):
+    """
+    Recheck theme-extension detection during onboarding step 5.
+    """
+    return await _perform_theme_status_recheck(
+        store=store,
+        db=db,
+        credentials=credentials,
+        action_label="onboarding theme status recheck",
     )
 
 
@@ -982,43 +1046,11 @@ async def recheck_dashboard_theme_status(
     (missing scope, auth issue, transient API error), gracefully falls back
     to the stored runtime detection flag.
     """
-    wc = store.widget_config
-    detected_from_runtime = wc.theme_extension_detected if wc else False
-    themes_url, add_to_theme_url = _build_theme_editor_urls(store.shopify_domain)
-
-    try:
-        access_token = await resolve_merchant_shopify_access_token(
-            store,
-            credentials,
-            action_label="theme status recheck",
-        )
-        svc = ShopifyService(store.shopify_domain, access_token)
-        detected_from_scan = await svc.detect_optimo_theme_block()
-    except Exception as exc:
-        logger.warning(
-            "Theme status recheck fallback to runtime flag for store %s: %s",
-            store.store_id,
-            exc,
-        )
-        return _theme_recheck_fallback_response(
-            detected=detected_from_runtime,
-            themes_url=themes_url,
-            add_to_theme_url=add_to_theme_url,
-            message="Backend theme scan unavailable. Showing runtime detection status.",
-        )
-
-    if wc is None:
-        wc = WidgetConfig(store_id=store.store_id)
-        db.add(wc)
-    wc.theme_extension_detected = bool(detected_from_scan)
-    db.commit()
-
-    return DashboardThemeStatusRecheckResponse(
-        theme_extension_detected=bool(detected_from_scan),
-        detection_source="admin_theme_scan",
-        message=None,
-        themes_url=themes_url,
-        add_to_theme_url=add_to_theme_url,
+    return await _perform_theme_status_recheck(
+        store=store,
+        db=db,
+        credentials=credentials,
+        action_label="theme status recheck",
     )
 
 

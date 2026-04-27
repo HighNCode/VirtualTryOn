@@ -1,49 +1,59 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { EmbeddedLink, useEmbeddedRouter } from "../../_components/EmbeddedNavigation";
-import { getDefaultStoreId, getThemeStatus } from "../../../lib/photoshootApi";
+import { getDefaultStoreId, recheckOnboardingThemeStatus } from "../../../lib/photoshootApi";
 
 export default function StepFiveNotDetectedPage() {
   const router = useEmbeddedRouter();
-  const storeId = useMemo(() => getDefaultStoreId(), []);
+  const [storeId, setStoreId] = useState("");
 
   const [themesUrl, setThemesUrl] = useState("");
   const [isChecking, setIsChecking] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [warningMessage, setWarningMessage] = useState("");
 
   const checkStatus = useCallback(
     async (markDetected: boolean) => {
-      if (!storeId) {
-        return;
-      }
+      const resolvedStoreId = getDefaultStoreId();
+      setStoreId(resolvedStoreId);
 
       setIsChecking(true);
       setErrorMessage("");
+      setWarningMessage("");
 
       try {
-        const status = await getThemeStatus({ storeId });
-        setThemesUrl((status.add_to_theme_url ?? status.themes_url ?? "").trim());
+        const status = await recheckOnboardingThemeStatus({ storeId: resolvedStoreId || "" });
+        setThemesUrl((status.add_to_theme_url || status.themes_url || "").trim());
 
         if (status.theme_extension_detected) {
           router.push("/step-5/detected");
           return;
         }
 
+        if (status.detection_source === "runtime_flag" && status.message) {
+          setWarningMessage(status.message);
+        }
+
         if (markDetected) {
           setErrorMessage("Theme extension is still not detected. Save changes in Shopify theme editor and retry.");
         }
       } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : "Failed to verify theme status.";
-        setErrorMessage(message);
+        if (!resolvedStoreId) {
+          setErrorMessage("Shop context is missing in this embedded view. Reopen the app from Shopify Admin and retry.");
+        } else {
+          const message = error instanceof Error ? error.message : "Failed to verify theme status.";
+          setErrorMessage(message);
+        }
       } finally {
         setIsChecking(false);
       }
     },
-    [router, storeId]
+    [router]
   );
 
   useEffect(() => {
+    setStoreId(getDefaultStoreId());
     void checkStatus(false);
   }, [checkStatus]);
 
@@ -85,6 +95,7 @@ export default function StepFiveNotDetectedPage() {
         </p>
 
         {!storeId ? <p className="ai-error-note">Open the app from Shopify Admin to verify theme extension status.</p> : null}
+        {warningMessage ? <p className="ai-error-note">{warningMessage}</p> : null}
         {errorMessage ? <p className="ai-error-note">{errorMessage}</p> : null}
 
         <div className="step5-primary-wrap">

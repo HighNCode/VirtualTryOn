@@ -726,6 +726,17 @@ export async function getThemeStatus(options: {
   });
 }
 
+export async function recheckOnboardingThemeStatus(options: {
+  storeId: string;
+  signal?: AbortSignal;
+}): Promise<DashboardThemeStatusRecheckResponse> {
+  return requestJson<DashboardThemeStatusRecheckResponse>("/api/v1/merchant/onboarding/theme-status/recheck", {
+    method: "POST",
+    storeId: options.storeId,
+    signal: options.signal
+  });
+}
+
 export async function updateThemeStatus(options: {
   storeId: string;
   detected: boolean;

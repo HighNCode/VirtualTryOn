@@ -1,25 +1,30 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { EmbeddedLink, useEmbeddedRouter } from "../../_components/EmbeddedNavigation";
-import { getDefaultStoreId, getThemeStatus, updateThemeStatus } from "../../../lib/photoshootApi";
+import { getDefaultStoreId, recheckOnboardingThemeStatus, updateThemeStatus } from "../../../lib/photoshootApi";
 
 export default function StepFiveDetectedPage() {
   const router = useEmbeddedRouter();
-  const storeId = useMemo(() => getDefaultStoreId(), []);
+  const [storeId, setStoreId] = useState("");
 
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
   useEffect(() => {
-    if (!storeId) {
-      return;
-    }
-
     const controller = new AbortController();
     let active = true;
+    const resolvedStoreId = getDefaultStoreId();
+    setStoreId(resolvedStoreId);
 
-    getThemeStatus({ storeId, signal: controller.signal })
+    if (!resolvedStoreId) {
+      return () => {
+        active = false;
+        controller.abort();
+      };
+    }
+
+    recheckOnboardingThemeStatus({ storeId: resolvedStoreId, signal: controller.signal })
       .then((status) => {
         if (!active) {
           return;
@@ -37,10 +42,12 @@ export default function StepFiveDetectedPage() {
       active = false;
       controller.abort();
     };
-  }, [storeId, router]);
+  }, [router]);
 
   const enableTryOn = async () => {
-    if (!storeId) {
+    const resolvedStoreId = getDefaultStoreId();
+    setStoreId(resolvedStoreId);
+    if (!resolvedStoreId) {
       router.push("/step-7");
       return;
     }
@@ -49,7 +56,7 @@ export default function StepFiveDetectedPage() {
     setErrorMessage("");
 
     try {
-      await updateThemeStatus({ storeId, detected: true });
+      await updateThemeStatus({ storeId: resolvedStoreId, detected: true });
       router.push("/step-7");
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Failed to save theme status.";
