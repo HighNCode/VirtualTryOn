@@ -72,6 +72,41 @@ function getMaxProxySkewSeconds(): number {
   return Math.floor(parsed);
 }
 
+function isProxySignatureDebugEnabled(): boolean {
+  const raw = process.env.WIDGET_PROXY_DEBUG_SIGNATURE?.trim().toLowerCase() ?? "";
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
+function toPrefix(value: string, length = 8): string {
+  return (value || "").slice(0, length);
+}
+
+function logProxySignatureFailure(args: {
+  reason: "missing" | "stale" | "invalid";
+  request: NextRequest;
+  timestampRaw: string;
+  nowSeconds: number;
+  providedHmac?: string;
+  providedSignature?: string;
+  expected?: string;
+}): void {
+  if (!isProxySignatureDebugEnabled()) {
+    return;
+  }
+
+  const shop = normalizeShopDomain(args.request.nextUrl.searchParams.get("shop"));
+  console.warn("Widget proxy signature verification failed", {
+    reason: args.reason,
+    shop,
+    path: args.request.nextUrl.pathname,
+    timestamp_raw: args.timestampRaw,
+    now_seconds: args.nowSeconds,
+    provided_hmac_prefix: toPrefix((args.providedHmac || "").toLowerCase()),
+    provided_signature_prefix: toPrefix((args.providedSignature || "").toLowerCase()),
+    expected_prefix: toPrefix((args.expected || "").toLowerCase()),
+  });
+}
+
 function normalizeShopDomain(value: string | null): string {
   return (value ?? "")
     .trim()
@@ -117,25 +152,58 @@ function timingSafeHexEqual(expectedHex: string, providedHex: string): boolean {
 
 function verifyShopifyAppProxySignature(request: NextRequest): { ok: true } | { ok: false; reason: string } {
   const secret = getShopifyApiSecret();
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const timestampRaw = request.nextUrl.searchParams.get("timestamp")?.trim() ?? "";
+  const providedHmac = request.nextUrl.searchParams.get("hmac")?.trim().toLowerCase() ?? "";
+  const providedSignature = request.nextUrl.searchParams.get("signature")?.trim().toLowerCase() ?? "";
+
   if (!secret) {
+    logProxySignatureFailure({
+      reason: "invalid",
+      request,
+      timestampRaw,
+      nowSeconds,
+      providedHmac,
+      providedSignature,
+    });
     return { ok: false, reason: "SHOPIFY_API_SECRET is not configured." };
   }
 
-  const timestampRaw = request.nextUrl.searchParams.get("timestamp")?.trim() ?? "";
   const timestamp = Number(timestampRaw);
   if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    logProxySignatureFailure({
+      reason: "missing",
+      request,
+      timestampRaw,
+      nowSeconds,
+      providedHmac,
+      providedSignature,
+    });
     return { ok: false, reason: "Missing or invalid proxy timestamp." };
   }
 
-  const nowSeconds = Math.floor(Date.now() / 1000);
   const skewLimit = getMaxProxySkewSeconds();
   if (Math.abs(nowSeconds - Math.floor(timestamp)) > skewLimit) {
+    logProxySignatureFailure({
+      reason: "stale",
+      request,
+      timestampRaw,
+      nowSeconds,
+      providedHmac,
+      providedSignature,
+    });
     return { ok: false, reason: "Proxy request timestamp is stale." };
   }
 
-  const providedHmac = request.nextUrl.searchParams.get("hmac")?.trim().toLowerCase() ?? "";
-  const providedSignature = request.nextUrl.searchParams.get("signature")?.trim().toLowerCase() ?? "";
   if (!providedHmac && !providedSignature) {
+    logProxySignatureFailure({
+      reason: "missing",
+      request,
+      timestampRaw,
+      nowSeconds,
+      providedHmac,
+      providedSignature,
+    });
     return { ok: false, reason: "Missing proxy signature." };
   }
 
@@ -145,6 +213,15 @@ function verifyShopifyAppProxySignature(request: NextRequest): { ok: true } | { 
   const hmacValid = providedHmac ? timingSafeHexEqual(expected, providedHmac) : false;
   const signatureValid = providedSignature ? timingSafeHexEqual(expected, providedSignature) : false;
   if (!hmacValid && !signatureValid) {
+    logProxySignatureFailure({
+      reason: "invalid",
+      request,
+      timestampRaw,
+      nowSeconds,
+      providedHmac,
+      providedSignature,
+      expected,
+    });
     return { ok: false, reason: "Invalid proxy signature." };
   }
 
