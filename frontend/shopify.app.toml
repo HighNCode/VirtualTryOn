@@ -26,9 +26,9 @@ embedded_app_direct_api_access = true
 scopes = "read_products,read_themes,write_app_proxy,write_products,write_script_tags"
 
 [auth]
-redirect_urls = [ "https://optimo-virtual-try-on.vercel.app/api/auth/callback" ]
+redirect_urls = [ "https://optimo-virtual-try-on-rose.vercel.app/api/auth/callback" ]
 
 [app_proxy]
-url = "https://optimo-virtual-try-on.vercel.app/widget-proxy"
+url = "https://optimo-virtual-try-on-rose.vercel.app/widget-proxy"
 subpath = "optimo-vts"
 prefix = "apps"
