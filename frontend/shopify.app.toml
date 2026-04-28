@@ -3,7 +3,7 @@
 client_id = "e3359f9d4bf2ec792a2665e0ccf4b93f"
 web_directories = [ "web" ]
 name = "Optimo VTS Dev"
-application_url = "https://optimo-virtual-try-on.vercel.app"
+application_url = "https://optimo-virtual-try-on-rose.vercel.app"
 embedded = true
 
 [build]
