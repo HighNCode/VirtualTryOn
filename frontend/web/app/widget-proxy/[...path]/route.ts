@@ -88,7 +88,7 @@ function logProxySignatureFailure(args: {
   nowSeconds: number;
   providedHmac?: string;
   providedSignature?: string;
-  expected?: string;
+  expectedCandidates?: string[];
 }): void {
   if (!isProxySignatureDebugEnabled()) {
     return;
@@ -103,7 +103,9 @@ function logProxySignatureFailure(args: {
     now_seconds: args.nowSeconds,
     provided_hmac_prefix: toPrefix((args.providedHmac || "").toLowerCase()),
     provided_signature_prefix: toPrefix((args.providedSignature || "").toLowerCase()),
-    expected_prefix: toPrefix((args.expected || "").toLowerCase()),
+    expected_prefixes: (args.expectedCandidates ?? []).map((value) =>
+      toPrefix((value || "").toLowerCase()),
+    ),
   });
 }
 
@@ -115,11 +117,14 @@ function normalizeShopDomain(value: string | null): string {
     .replace(/\/.*$/, "");
 }
 
-function canonicalizeProxyParams(searchParams: URLSearchParams): string {
+function canonicalizeAppProxyParams(
+  searchParams: URLSearchParams,
+  excludedKeys: ReadonlySet<string>,
+): string {
   const grouped = new Map<string, string[]>();
 
   searchParams.forEach((value, key) => {
-    if (key === "hmac" || key === "signature") {
+    if (excludedKeys.has(key)) {
       return;
     }
 
@@ -137,6 +142,56 @@ function canonicalizeProxyParams(searchParams: URLSearchParams): string {
     .map(([key, values]) => `${key}=${values.join(",")}`)
     .sort()
     .join("");
+}
+
+function canonicalizeOauthStyleParams(searchParams: URLSearchParams): string {
+  const entries: Array<[string, string]> = [];
+  searchParams.forEach((value, key) => {
+    if (key === "hmac" || key === "signature") {
+      return;
+    }
+    entries.push([key, value]);
+  });
+
+  entries.sort((a, b) => {
+    const keyCmp = a[0].localeCompare(b[0]);
+    if (keyCmp !== 0) {
+      return keyCmp;
+    }
+    return a[1].localeCompare(b[1]);
+  });
+
+  return entries
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join("&");
+}
+
+function computeExpectedProxyDigests(secret: string, searchParams: URLSearchParams): string[] {
+  const candidates = new Set<string>();
+
+  // Shopify app-proxy format: remove `signature`, keep any other params, sort, concat.
+  const appProxyCanonical = canonicalizeAppProxyParams(
+    searchParams,
+    new Set(["signature"]),
+  );
+  candidates.add(createHmac("sha256", secret).update(appProxyCanonical, "utf8").digest("hex"));
+
+  // Back-compat with previous proxy implementations that removed both keys.
+  const appProxyLegacyCanonical = canonicalizeAppProxyParams(
+    searchParams,
+    new Set(["signature", "hmac"]),
+  );
+  candidates.add(
+    createHmac("sha256", secret).update(appProxyLegacyCanonical, "utf8").digest("hex"),
+  );
+
+  // Compatibility with OAuth-style HMAC canonicalization when `hmac` is present.
+  const oauthCanonical = canonicalizeOauthStyleParams(searchParams);
+  if (oauthCanonical) {
+    candidates.add(createHmac("sha256", secret).update(oauthCanonical, "utf8").digest("hex"));
+  }
+
+  return Array.from(candidates);
 }
 
 function timingSafeHexEqual(expectedHex: string, providedHex: string): boolean {
@@ -209,11 +264,13 @@ function verifyShopifyAppProxySignature(request: NextRequest): { ok: true } | { 
     return { ok: false, reason: "Missing proxy signature." };
   }
 
-  const canonical = canonicalizeProxyParams(request.nextUrl.searchParams);
-  const expected = createHmac("sha256", secret).update(canonical, "utf8").digest("hex");
-
-  const hmacValid = providedHmac ? timingSafeHexEqual(expected, providedHmac) : false;
-  const signatureValid = providedSignature ? timingSafeHexEqual(expected, providedSignature) : false;
+  const expectedCandidates = computeExpectedProxyDigests(secret, request.nextUrl.searchParams);
+  const hmacValid = providedHmac
+    ? expectedCandidates.some((expected) => timingSafeHexEqual(expected, providedHmac))
+    : false;
+  const signatureValid = providedSignature
+    ? expectedCandidates.some((expected) => timingSafeHexEqual(expected, providedSignature))
+    : false;
   if (!hmacValid && !signatureValid) {
     logProxySignatureFailure({
       reason: "invalid",
@@ -222,7 +279,7 @@ function verifyShopifyAppProxySignature(request: NextRequest): { ok: true } | { 
       nowSeconds,
       providedHmac,
       providedSignature,
-      expected,
+      expectedCandidates,
     });
     return { ok: false, reason: "Invalid proxy signature." };
   }
