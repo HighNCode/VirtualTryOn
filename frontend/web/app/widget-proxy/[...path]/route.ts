@@ -116,25 +116,27 @@ function normalizeShopDomain(value: string | null): string {
 }
 
 function canonicalizeProxyParams(searchParams: URLSearchParams): string {
-  const entries: Array<[string, string]> = [];
+  const grouped = new Map<string, string[]>();
+
   searchParams.forEach((value, key) => {
     if (key === "hmac" || key === "signature") {
       return;
     }
-    entries.push([key, value]);
-  });
 
-  entries.sort((a, b) => {
-    const keyCmp = a[0].localeCompare(b[0]);
-    if (keyCmp !== 0) {
-      return keyCmp;
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.push(value);
+      return;
     }
-    return a[1].localeCompare(b[1]);
+    grouped.set(key, [value]);
   });
 
-  return entries
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
-    .join("&");
+  // Shopify app-proxy signatures are built from unencoded key=value parts,
+  // sorted and concatenated without separators.
+  return Array.from(grouped.entries())
+    .map(([key, values]) => `${key}=${values.join(",")}`)
+    .sort()
+    .join("");
 }
 
 function timingSafeHexEqual(expectedHex: string, providedHex: string): boolean {
