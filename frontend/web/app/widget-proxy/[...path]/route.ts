@@ -69,13 +69,25 @@ function getProxySharedSecret(): string {
 }
 
 function getUpstreamBaseUrl(): string {
-  const configuredUrl =
-    process.env.API_BASE_URL?.trim() ||
-    process.env.BACKEND_URL?.trim() ||
-    process.env.NEXT_PUBLIC_API_BASE_URL?.trim() ||
-    "";
+  return resolveUpstreamBaseUrl().value;
+}
 
-  return configuredUrl.replace(/\/+$/, "");
+type UpstreamResolution = {
+  value: string;
+  source: "API_BASE_URL" | "BACKEND_URL" | "NEXT_PUBLIC_API_BASE_URL" | "none";
+};
+
+function resolveUpstreamBaseUrl(): UpstreamResolution {
+  const configuredUrl =
+    process.env.API_BASE_URL?.trim() ? { value: process.env.API_BASE_URL.trim(), source: "API_BASE_URL" as const }
+      : process.env.BACKEND_URL?.trim() ? { value: process.env.BACKEND_URL.trim(), source: "BACKEND_URL" as const }
+        : process.env.NEXT_PUBLIC_API_BASE_URL?.trim() ? { value: process.env.NEXT_PUBLIC_API_BASE_URL.trim(), source: "NEXT_PUBLIC_API_BASE_URL" as const }
+          : { value: "", source: "none" as const };
+
+  return {
+    value: configuredUrl.value.replace(/\/+$/, ""),
+    source: configuredUrl.source,
+  };
 }
 
 function getMaxProxySkewSeconds(): number {
@@ -535,15 +547,24 @@ async function proxyRequest(request: NextRequest, path: string[]): Promise<NextR
     );
   }
 
-  const upstreamBaseUrl = getUpstreamBaseUrl();
+  const exposeDebug = shouldExposeProxyDebug(request);
+  const upstreamResolution = resolveUpstreamBaseUrl();
+  const upstreamBaseUrl = upstreamResolution.value;
   if (!upstreamBaseUrl) {
+    const body: Record<string, unknown> = {
+      error: "API_BASE_URL is not configured.",
+    };
+    if (exposeDebug) {
+      body.debug = {
+        upstream_source: upstreamResolution.source,
+        api_base_url_set: Boolean(process.env.API_BASE_URL?.trim()),
+        backend_url_set: Boolean(process.env.BACKEND_URL?.trim()),
+        next_public_api_base_url_set: Boolean(process.env.NEXT_PUBLIC_API_BASE_URL?.trim()),
+      };
+    }
     return NextResponse.json(
-      {
-        error: "API_BASE_URL is not configured."
-      },
-      {
-        status: 500
-      }
+      body,
+      { status: 500 }
     );
   }
 
@@ -607,17 +628,25 @@ async function proxyRequest(request: NextRequest, path: string[]): Promise<NextR
 
   let upstreamResponse: Response;
 
+  const upstreamUrl = buildUpstreamUrl(request, path, upstreamBaseUrl);
   try {
-    upstreamResponse = await fetch(buildUpstreamUrl(request, path, upstreamBaseUrl), init);
+    upstreamResponse = await fetch(upstreamUrl, init);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown upstream fetch error";
+    const body: Record<string, unknown> = {
+      error: `Failed to reach upstream API: ${message}`
+    };
+    if (exposeDebug) {
+      body.debug = {
+        upstream_source: upstreamResolution.source,
+        upstream_base_url: upstreamBaseUrl,
+        upstream_url: upstreamUrl,
+        method: request.method,
+      };
+    }
     return NextResponse.json(
-      {
-        error: `Failed to reach upstream API: ${message}`
-      },
-      {
-        status: 502
-      }
+      body,
+      { status: 502 }
     );
   }
 
