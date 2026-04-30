@@ -1,8 +1,8 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "b04a4ca34b41318b2c1a92fb5f427563"
+client_id = "e3359f9d4bf2ec792a2665e0ccf4b93f"
 web_directories = [ "web" ]
-name = "Optimo-Virtual Try-On"
+name = "Optimo VTS Dev"
 application_url = "https://optimo-virtual-try-on-rose.vercel.app"
 embedded = true
 
