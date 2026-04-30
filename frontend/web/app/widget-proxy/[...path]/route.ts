@@ -81,6 +81,36 @@ function toPrefix(value: string, length = 8): string {
   return (value || "").slice(0, length);
 }
 
+function buildProxyVerificationDebug(args: {
+  request: NextRequest;
+  timestampRaw: string;
+  nowSeconds: number;
+  providedHmac?: string;
+  providedSignature?: string;
+  expectedCandidates?: string[];
+}): Record<string, unknown> {
+  const queryKeys = Array.from(args.request.nextUrl.searchParams.keys()).sort();
+  const timestamp = Number(args.timestampRaw);
+  const skewSeconds = Number.isFinite(timestamp) ? args.nowSeconds - Math.floor(timestamp) : null;
+
+  return {
+    method: args.request.method,
+    path: args.request.nextUrl.pathname,
+    shop: normalizeShopDomain(args.request.nextUrl.searchParams.get("shop")),
+    query_keys: queryKeys,
+    timestamp_raw: args.timestampRaw,
+    now_seconds: args.nowSeconds,
+    skew_seconds: skewSeconds,
+    has_hmac: Boolean(args.providedHmac),
+    has_signature: Boolean(args.providedSignature),
+    provided_hmac_prefix: toPrefix((args.providedHmac || "").toLowerCase()),
+    provided_signature_prefix: toPrefix((args.providedSignature || "").toLowerCase()),
+    expected_prefixes: (args.expectedCandidates ?? []).map((value) =>
+      toPrefix((value || "").toLowerCase()),
+    ),
+  };
+}
+
 function logProxySignatureFailure(args: {
   reason: "missing" | "stale" | "invalid";
   request: NextRequest;
@@ -207,7 +237,9 @@ function timingSafeHexEqual(expectedHex: string, providedHex: string): boolean {
   return timingSafeEqual(expectedBuffer, providedBuffer);
 }
 
-function verifyShopifyAppProxySignature(request: NextRequest): { ok: true } | { ok: false; reason: string } {
+function verifyShopifyAppProxySignature(request: NextRequest):
+  | { ok: true }
+  | { ok: false; reason: string; debug?: Record<string, unknown> } {
   const secret = getShopifyApiSecret();
   const nowSeconds = Math.floor(Date.now() / 1000);
   const timestampRaw = request.nextUrl.searchParams.get("timestamp")?.trim() ?? "";
@@ -223,7 +255,19 @@ function verifyShopifyAppProxySignature(request: NextRequest): { ok: true } | { 
       providedHmac,
       providedSignature,
     });
-    return { ok: false, reason: "SHOPIFY_API_SECRET is not configured." };
+    return {
+      ok: false,
+      reason: "SHOPIFY_API_SECRET is not configured.",
+      debug: isProxySignatureDebugEnabled()
+        ? buildProxyVerificationDebug({
+            request,
+            timestampRaw,
+            nowSeconds,
+            providedHmac,
+            providedSignature,
+          })
+        : undefined,
+    };
   }
 
   const timestamp = Number(timestampRaw);
@@ -236,7 +280,19 @@ function verifyShopifyAppProxySignature(request: NextRequest): { ok: true } | { 
       providedHmac,
       providedSignature,
     });
-    return { ok: false, reason: "Missing or invalid proxy timestamp." };
+    return {
+      ok: false,
+      reason: "Missing or invalid proxy timestamp.",
+      debug: isProxySignatureDebugEnabled()
+        ? buildProxyVerificationDebug({
+            request,
+            timestampRaw,
+            nowSeconds,
+            providedHmac,
+            providedSignature,
+          })
+        : undefined,
+    };
   }
 
   const skewLimit = getMaxProxySkewSeconds();
@@ -249,7 +305,19 @@ function verifyShopifyAppProxySignature(request: NextRequest): { ok: true } | { 
       providedHmac,
       providedSignature,
     });
-    return { ok: false, reason: "Proxy request timestamp is stale." };
+    return {
+      ok: false,
+      reason: "Proxy request timestamp is stale.",
+      debug: isProxySignatureDebugEnabled()
+        ? buildProxyVerificationDebug({
+            request,
+            timestampRaw,
+            nowSeconds,
+            providedHmac,
+            providedSignature,
+          })
+        : undefined,
+    };
   }
 
   if (!providedHmac && !providedSignature) {
@@ -261,7 +329,19 @@ function verifyShopifyAppProxySignature(request: NextRequest): { ok: true } | { 
       providedHmac,
       providedSignature,
     });
-    return { ok: false, reason: "Missing proxy signature." };
+    return {
+      ok: false,
+      reason: "Missing proxy signature.",
+      debug: isProxySignatureDebugEnabled()
+        ? buildProxyVerificationDebug({
+            request,
+            timestampRaw,
+            nowSeconds,
+            providedHmac,
+            providedSignature,
+          })
+        : undefined,
+    };
   }
 
   const expectedCandidates = computeExpectedProxyDigests(secret, request.nextUrl.searchParams);
@@ -281,7 +361,20 @@ function verifyShopifyAppProxySignature(request: NextRequest): { ok: true } | { 
       providedSignature,
       expectedCandidates,
     });
-    return { ok: false, reason: "Invalid proxy signature." };
+    return {
+      ok: false,
+      reason: "Invalid proxy signature.",
+      debug: isProxySignatureDebugEnabled()
+        ? buildProxyVerificationDebug({
+            request,
+            timestampRaw,
+            nowSeconds,
+            providedHmac,
+            providedSignature,
+            expectedCandidates,
+          })
+        : undefined,
+    };
   }
 
   return { ok: true };
@@ -374,8 +467,12 @@ function signProxyPayload(secret: string, payload: string): string {
 async function proxyRequest(request: NextRequest, path: string[]): Promise<NextResponse> {
   const verifiedProxy = verifyShopifyAppProxySignature(request);
   if (!verifiedProxy.ok) {
+    const body: Record<string, unknown> = { error: verifiedProxy.reason };
+    if (verifiedProxy.debug) {
+      body.debug = verifiedProxy.debug;
+    }
     return NextResponse.json(
-      { error: verifiedProxy.reason },
+      body,
       { status: 401 },
     );
   }
