@@ -38,12 +38,27 @@ const DEFAULT_PROXY_MAX_SKEW_SECONDS = 300;
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+type SecretResolution = {
+  value: string;
+  source: "SHOPIFY_API_SECRET" | "SHOPIFY_API_SECRET_KEY" | "none";
+};
+
+function resolveShopifyApiSecret(): SecretResolution {
+  const primary = process.env.SHOPIFY_API_SECRET?.trim() || "";
+  if (primary) {
+    return { value: primary, source: "SHOPIFY_API_SECRET" };
+  }
+
+  const fallback = process.env.SHOPIFY_API_SECRET_KEY?.trim() || "";
+  if (fallback) {
+    return { value: fallback, source: "SHOPIFY_API_SECRET_KEY" };
+  }
+
+  return { value: "", source: "none" };
+}
+
 function getShopifyApiSecret(): string {
-  return (
-    process.env.SHOPIFY_API_SECRET?.trim() ||
-    process.env.SHOPIFY_API_SECRET_KEY?.trim() ||
-    ""
-  );
+  return resolveShopifyApiSecret().value;
 }
 
 function getProxySharedSecret(): string {
@@ -77,6 +92,14 @@ function isProxySignatureDebugEnabled(): boolean {
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
+function shouldExposeProxyDebug(request: NextRequest): boolean {
+  if (isProxySignatureDebugEnabled()) {
+    return true;
+  }
+  const raw = request.nextUrl.searchParams.get("optimo_debug_proxy")?.trim().toLowerCase() ?? "";
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
 function toPrefix(value: string, length = 8): string {
   return (value || "").slice(0, length);
 }
@@ -88,6 +111,10 @@ function buildProxyVerificationDebug(args: {
   providedHmac?: string;
   providedSignature?: string;
   expectedCandidates?: string[];
+  secretSource: SecretResolution["source"];
+  secretConfigured: boolean;
+  debugRequestedViaQuery: boolean;
+  debugRequestedViaEnv: boolean;
 }): Record<string, unknown> {
   const queryKeys = Array.from(args.request.nextUrl.searchParams.keys()).sort();
   const timestamp = Number(args.timestampRaw);
@@ -108,6 +135,10 @@ function buildProxyVerificationDebug(args: {
     expected_prefixes: (args.expectedCandidates ?? []).map((value) =>
       toPrefix((value || "").toLowerCase()),
     ),
+    secret_configured: args.secretConfigured,
+    secret_source: args.secretSource,
+    debug_requested_via_query: args.debugRequestedViaQuery,
+    debug_requested_via_env: args.debugRequestedViaEnv,
   };
 }
 
@@ -240,7 +271,14 @@ function timingSafeHexEqual(expectedHex: string, providedHex: string): boolean {
 function verifyShopifyAppProxySignature(request: NextRequest):
   | { ok: true }
   | { ok: false; reason: string; debug?: Record<string, unknown> } {
-  const secret = getShopifyApiSecret();
+  const secretResolution = resolveShopifyApiSecret();
+  const secret = secretResolution.value;
+  const debugViaEnv = isProxySignatureDebugEnabled();
+  const debugViaQuery = (() => {
+    const raw = request.nextUrl.searchParams.get("optimo_debug_proxy")?.trim().toLowerCase() ?? "";
+    return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+  })();
+  const exposeDebug = shouldExposeProxyDebug(request);
   const nowSeconds = Math.floor(Date.now() / 1000);
   const timestampRaw = request.nextUrl.searchParams.get("timestamp")?.trim() ?? "";
   const providedHmac = request.nextUrl.searchParams.get("hmac")?.trim().toLowerCase() ?? "";
@@ -258,13 +296,17 @@ function verifyShopifyAppProxySignature(request: NextRequest):
     return {
       ok: false,
       reason: "SHOPIFY_API_SECRET is not configured.",
-      debug: isProxySignatureDebugEnabled()
+      debug: exposeDebug
         ? buildProxyVerificationDebug({
             request,
             timestampRaw,
             nowSeconds,
             providedHmac,
             providedSignature,
+            secretSource: secretResolution.source,
+            secretConfigured: Boolean(secret),
+            debugRequestedViaQuery: debugViaQuery,
+            debugRequestedViaEnv: debugViaEnv,
           })
         : undefined,
     };
@@ -283,13 +325,17 @@ function verifyShopifyAppProxySignature(request: NextRequest):
     return {
       ok: false,
       reason: "Missing or invalid proxy timestamp.",
-      debug: isProxySignatureDebugEnabled()
+      debug: exposeDebug
         ? buildProxyVerificationDebug({
             request,
             timestampRaw,
             nowSeconds,
             providedHmac,
             providedSignature,
+            secretSource: secretResolution.source,
+            secretConfigured: Boolean(secret),
+            debugRequestedViaQuery: debugViaQuery,
+            debugRequestedViaEnv: debugViaEnv,
           })
         : undefined,
     };
@@ -308,13 +354,17 @@ function verifyShopifyAppProxySignature(request: NextRequest):
     return {
       ok: false,
       reason: "Proxy request timestamp is stale.",
-      debug: isProxySignatureDebugEnabled()
+      debug: exposeDebug
         ? buildProxyVerificationDebug({
             request,
             timestampRaw,
             nowSeconds,
             providedHmac,
             providedSignature,
+            secretSource: secretResolution.source,
+            secretConfigured: Boolean(secret),
+            debugRequestedViaQuery: debugViaQuery,
+            debugRequestedViaEnv: debugViaEnv,
           })
         : undefined,
     };
@@ -332,13 +382,17 @@ function verifyShopifyAppProxySignature(request: NextRequest):
     return {
       ok: false,
       reason: "Missing proxy signature.",
-      debug: isProxySignatureDebugEnabled()
+      debug: exposeDebug
         ? buildProxyVerificationDebug({
             request,
             timestampRaw,
             nowSeconds,
             providedHmac,
             providedSignature,
+            secretSource: secretResolution.source,
+            secretConfigured: Boolean(secret),
+            debugRequestedViaQuery: debugViaQuery,
+            debugRequestedViaEnv: debugViaEnv,
           })
         : undefined,
     };
@@ -364,7 +418,7 @@ function verifyShopifyAppProxySignature(request: NextRequest):
     return {
       ok: false,
       reason: "Invalid proxy signature.",
-      debug: isProxySignatureDebugEnabled()
+      debug: exposeDebug
         ? buildProxyVerificationDebug({
             request,
             timestampRaw,
@@ -372,6 +426,10 @@ function verifyShopifyAppProxySignature(request: NextRequest):
             providedHmac,
             providedSignature,
             expectedCandidates,
+            secretSource: secretResolution.source,
+            secretConfigured: Boolean(secret),
+            debugRequestedViaQuery: debugViaQuery,
+            debugRequestedViaEnv: debugViaEnv,
           })
         : undefined,
     };
