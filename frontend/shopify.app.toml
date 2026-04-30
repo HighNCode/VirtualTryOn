@@ -1,8 +1,8 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "e3359f9d4bf2ec792a2665e0ccf4b93f"
+client_id = "b04a4ca34b41318b2c1a92fb5f427563"
 web_directories = [ "web" ]
-name = "Optimo VTS Dev"
+name = "Optimo-Virtual Try-On"
 application_url = "https://optimo-virtual-try-on-rose.vercel.app"
 embedded = true
 
@@ -13,7 +13,7 @@ automatically_update_urls_on_dev = true
 api_version = "2026-01"
 
   [[webhooks.subscriptions]]
-  topics = [ "app/uninstalled", "shop/update", "app_subscriptions/update" ]
+  topics = [ "app_subscriptions/update", "shop/update", "app/uninstalled" ]
   uri = "/api/webhooks"
   compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
 
@@ -26,7 +26,9 @@ embedded_app_direct_api_access = true
 scopes = "read_products,read_themes,write_app_proxy,write_products,write_script_tags"
 
 [auth]
-redirect_urls = [ "https://optimo-virtual-try-on-rose.vercel.app/api/auth/callback" ]
+redirect_urls = [
+  "https://optimo-virtual-try-on-rose.vercel.app/api/auth/callback"
+]
 
 [app_proxy]
 url = "https://optimo-virtual-try-on-rose.vercel.app/widget-proxy"
