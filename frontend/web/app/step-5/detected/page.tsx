@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useState } from "react";
 import { EmbeddedLink, useEmbeddedRouter } from "../../_components/EmbeddedNavigation";
@@ -48,7 +48,7 @@ export default function StepFiveDetectedPage() {
     const resolvedStoreId = getDefaultStoreId();
     setStoreId(resolvedStoreId);
     if (!resolvedStoreId) {
-      router.push("/step-7");
+      router.push("/step-6");
       return;
     }
 
@@ -57,7 +57,7 @@ export default function StepFiveDetectedPage() {
 
     try {
       await updateThemeStatus({ storeId: resolvedStoreId, detected: true });
-      router.push("/step-7");
+      router.push("/step-6");
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Failed to save theme status.";
       setErrorMessage(message);
@@ -71,7 +71,7 @@ export default function StepFiveDetectedPage() {
       <section className="welcome-card step5-card step5-detected-card">
         <header className="topline">
           <p className="screen-title">Welcome to Optimo VTS</p>
-          <p className="step">Step 5 of 7</p>
+          <p className="step">Step 5 of 6</p>
         </header>
 
         <div className="progress-track" aria-hidden>
@@ -115,3 +115,5 @@ export default function StepFiveDetectedPage() {
     </main>
   );
 }
+
+

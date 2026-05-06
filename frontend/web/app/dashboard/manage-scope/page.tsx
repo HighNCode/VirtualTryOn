@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { EmbeddedLink } from "../../_components/EmbeddedNavigation";
 import PortalSidebar from "../../_components/PortalSidebar";
+import PortalTopbar from "../../_components/PortalTopbar";
 import {
   getDefaultStoreId,
   getWidgetConfig,
@@ -134,10 +135,10 @@ export default function DashboardManageScopePage() {
       <PortalSidebar activeMain="overview" />
 
       <section className="portal-main">
-        <header className="portal-main-header">
-          <h2>Manage Enabled Products &amp; Collections</h2>
-          <p>Control where your storefront try-on widget appears.</p>
-        </header>
+        <PortalTopbar
+          title="Manage Products & Collections"
+          subtitle="Control where your storefront try-on widget appears."
+        />
 
         <section className="welcome-card">
           <div className="step4-heading-row step4-heading-row-configured">

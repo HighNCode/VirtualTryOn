@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { EmbeddedLink, useEmbeddedRouter } from "../_components/EmbeddedNavigation";
@@ -155,7 +155,7 @@ export default function StepTwoPage() {
       <section className="welcome-card">
         <header className="topline">
           <p className="screen-title">Welcome to Optimo VTS</p>
-          <p className="step">Step 2 of 7</p>
+          <p className="step">Step 2 of 6</p>
         </header>
 
         <div className="progress-track" aria-hidden>
@@ -214,3 +214,4 @@ export default function StepTwoPage() {
     </main>
   );
 }
+

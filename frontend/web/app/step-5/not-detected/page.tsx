@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useState } from "react";
 import { EmbeddedLink, useEmbeddedRouter } from "../../_components/EmbeddedNavigation";
@@ -62,7 +62,7 @@ export default function StepFiveNotDetectedPage() {
       <section className="welcome-card step5-card">
         <header className="topline">
           <p className="screen-title">Welcome to Optimo VTS</p>
-          <p className="step">Step 5 of 7</p>
+          <p className="step">Step 5 of 6</p>
         </header>
 
         <div className="progress-track" aria-hidden>
@@ -137,7 +137,7 @@ export default function StepFiveNotDetectedPage() {
         </section>
 
         <div className="step5-actions">
-          <EmbeddedLink href="/step-7" className="secondary-action">
+          <EmbeddedLink href="/step-6" className="secondary-action">
             Skip for now
           </EmbeddedLink>
           <button type="button" className="retry-action" onClick={() => checkStatus(true)} disabled={isChecking}>
@@ -152,3 +152,5 @@ export default function StepFiveNotDetectedPage() {
     </main>
   );
 }
+
+

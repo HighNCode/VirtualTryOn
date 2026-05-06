@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import PortalSidebar from "../_components/PortalSidebar";
+import PortalTopbar from "../_components/PortalTopbar";
 import {
   getDefaultStoreId,
   getStandardAnalytics,
@@ -111,10 +112,7 @@ export default function AnalyticsPage() {
       <PortalSidebar activeMain="analytics" />
 
       <section className="portal-main">
-        <header className="portal-main-header">
-          <h2>Analytics</h2>
-          <p>Track your Virtual Fit Studio performance and ROI</p>
-        </header>
+        <PortalTopbar title="Analytics" subtitle="Performance insights for your store" />
 
         {!storeId ? <p className="ai-error-note">Open the app from Shopify Admin to load analytics.</p> : null}
         {isLoading ? <p className="ai-status-note">Loading analytics...</p> : null}

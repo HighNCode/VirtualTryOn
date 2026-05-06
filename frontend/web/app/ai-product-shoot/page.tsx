@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import PortalSidebar from "../_components/PortalSidebar";
+import PortalTopbar from "../_components/PortalTopbar";
+import SubTabNav from "../_components/SubTabNav";
 
 const styleTemplates = [
   { id: "white-sweater", label: "White Sweater", tone: "template-tone-light" },
@@ -21,16 +23,19 @@ const resultCards = [
 export default function AiProductShootPage() {
   const [generated, setGenerated] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState(styleTemplates[0].id);
+  const aiTabs = [
+    { href: "/ai-product-shoot", label: "Ghost Mannequin" },
+    { href: "/ai-product-shoot/model-try-on", label: "Model Try-on" },
+    { href: "/ai-product-shoot/model-swap", label: "Model Swap" }
+  ];
 
   return (
     <main className="portal-shell">
       <PortalSidebar activeMain="ai" activeAi="ghost" />
 
       <section className="portal-main">
-        <header className="portal-main-header">
-          <h2>AI Product Shoots</h2>
-          <p>Generate professional studio shoots in seconds</p>
-        </header>
+        <PortalTopbar title="AI Product Shoot" subtitle="Remove mannequin and enhance your product images" />
+        <SubTabNav tabs={aiTabs} />
 
         {!generated ? (
           <section className="ai-stage-upload">

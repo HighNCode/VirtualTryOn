@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useMemo, useState } from "react";
 import { EmbeddedLink, useEmbeddedRouter } from "../_components/EmbeddedNavigation";
@@ -52,7 +52,7 @@ export default function StepFourPage() {
       <section className="welcome-card">
         <header className="topline">
           <p className="screen-title">Welcome to Optimo VTS</p>
-          <p className="step">Step 4 of 7</p>
+          <p className="step">Step 4 of 6</p>
         </header>
 
         <div className="progress-track" aria-hidden>
@@ -92,7 +92,7 @@ export default function StepFourPage() {
         </ul>
 
         <div className="step4-actions">
-          <EmbeddedLink href="/step-7" className="secondary-action">
+          <EmbeddedLink href="/step-6" className="secondary-action">
             Skip for now
           </EmbeddedLink>
           <button type="button" className="primary-action" onClick={handleContinue} disabled={isSaving}>
@@ -107,3 +107,5 @@ export default function StepFourPage() {
     </main>
   );
 }
+
+

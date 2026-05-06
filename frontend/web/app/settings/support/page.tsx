@@ -1,5 +1,14 @@
-import { EmbeddedLink } from "../../_components/EmbeddedNavigation";
+﻿import { EmbeddedLink } from "../../_components/EmbeddedNavigation";
 import PortalSidebar from "../../_components/PortalSidebar";
+import PortalTopbar from "../../_components/PortalTopbar";
+import SubTabNav from "../../_components/SubTabNav";
+
+const settingsTabs = [
+  { href: "/settings", label: "Custom" },
+  { href: "/settings/privacy", label: "Privacy" },
+  { href: "/settings/billing", label: "Billing" },
+  { href: "/settings/support", label: "Support" }
+];
 
 export default function SettingsSupportPage() {
   return (
@@ -7,10 +16,8 @@ export default function SettingsSupportPage() {
       <PortalSidebar activeMain="settings" activeSettings="support" />
 
       <section className="portal-main">
-        <header className="portal-main-header">
-          <h2>Settings</h2>
-          <p>Manage your Virtual Try-on Studio preferences</p>
-        </header>
+        <PortalTopbar title="Settings" subtitle="Get help and contact our team" />
+        <SubTabNav tabs={settingsTabs} />
 
         <section className="support-wrap">
           <div className="support-hero">

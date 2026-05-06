@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import PortalSidebar from "../../_components/PortalSidebar";
+import PortalTopbar from "../../_components/PortalTopbar";
+import SubTabNav from "../../_components/SubTabNav";
 import {
   activateBillingPlan,
   cancelSubscription,
@@ -35,6 +37,12 @@ function formatMoney(value: number | null, currencyCode: string): string {
 
 export default function SettingsBillingPage() {
   const storeId = useMemo(() => getDefaultStoreId(), []);
+  const settingsTabs = [
+    { href: "/settings", label: "Custom" },
+    { href: "/settings/privacy", label: "Privacy" },
+    { href: "/settings/billing", label: "Billing" },
+    { href: "/settings/support", label: "Support" }
+  ];
 
   const [billingCycle, setBillingCycle] = useState<BillingCycle>("monthly");
   const [plans, setPlans] = useState<PlanConfigResponse[]>([]);
@@ -230,10 +238,8 @@ export default function SettingsBillingPage() {
       <PortalSidebar activeMain="settings" activeSettings="billing" />
 
       <section className="portal-main">
-        <header className="portal-main-header">
-          <h2>Billing</h2>
-          <p>Shopify subscription status, cycle usage, and plan switching</p>
-        </header>
+        <PortalTopbar title="Settings" subtitle="Manage your plan and billing" />
+        <SubTabNav tabs={settingsTabs} />
 
         {hasBillingReturn && billingStatus?.shopify_subscription_id ? (
           <p className="ai-status-note">Shopify redirected back after charge approval. The latest subscription is shown below.</p>
@@ -256,22 +262,22 @@ export default function SettingsBillingPage() {
           </p>
         ) : null}
 
-        <div className="step7-billing-toggle" role="group" aria-label="Billing cycle">
-          <button type="button" className={`step7-toggle-label${!isAnnual ? " is-active" : ""}`} onClick={() => setBillingCycle("monthly")}>
+        <div className="step6-billing-toggle" role="group" aria-label="Billing cycle">
+          <button type="button" className={`step6-toggle-label${!isAnnual ? " is-active" : ""}`} onClick={() => setBillingCycle("monthly")}>
             Monthly
           </button>
           <button
             type="button"
-            className={`step7-toggle-switch${isAnnual ? " is-annual" : ""}`}
+            className={`step6-toggle-switch${isAnnual ? " is-annual" : ""}`}
             aria-label={isAnnual ? "Switch to monthly billing" : "Switch to annual billing"}
             onClick={() => setBillingCycle(isAnnual ? "monthly" : "annual")}
           >
             <span />
           </button>
-          <button type="button" className={`step7-toggle-label${isAnnual ? " is-active" : ""}`} onClick={() => setBillingCycle("annual")}>
+          <button type="button" className={`step6-toggle-label${isAnnual ? " is-active" : ""}`} onClick={() => setBillingCycle("annual")}>
             Annual
           </button>
-          <span className="step7-save-tag">SAVE</span>
+          <span className="step6-save-tag">SAVE</span>
         </div>
 
         <section className="billing-grid billing-grid-top">
@@ -395,3 +401,4 @@ export default function SettingsBillingPage() {
     </main>
   );
 }
+

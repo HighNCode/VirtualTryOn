@@ -1,4 +1,6 @@
 import PortalSidebar from "../../_components/PortalSidebar";
+import PortalTopbar from "../../_components/PortalTopbar";
+import SubTabNav from "../../_components/SubTabNav";
 
 const privacyRows = [
   {
@@ -29,15 +31,20 @@ const privacyRows = [
 ];
 
 export default function SettingsPrivacyPage() {
+  const settingsTabs = [
+    { href: "/settings", label: "Custom" },
+    { href: "/settings/privacy", label: "Privacy" },
+    { href: "/settings/billing", label: "Billing" },
+    { href: "/settings/support", label: "Support" }
+  ];
+
   return (
     <main className="portal-shell">
       <PortalSidebar activeMain="settings" activeSettings="privacy" />
 
       <section className="portal-main">
-        <header className="portal-main-header">
-          <h2>Settings</h2>
-          <p>Manage your Virtual Try-on Studio preferences</p>
-        </header>
+        <PortalTopbar title="Settings" subtitle="Data privacy and security features" />
+        <SubTabNav tabs={settingsTabs} />
 
         <section className="settings-card">
           <h3>Privacy &amp; Data Protection</h3>

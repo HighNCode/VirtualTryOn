@@ -1,12 +1,6 @@
 import type { Metadata } from "next";
-import { Manrope } from "next/font/google";
 import { EmbeddedNavigationBootstrap } from "./_components/EmbeddedNavigation";
 import "./globals.css";
-
-const manrope = Manrope({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700", "800"]
-});
 
 export const metadata: Metadata = {
   title: "Optimo VTS AI",
@@ -31,7 +25,7 @@ export default function RootLayout({
         {/* eslint-disable-next-line @next/next/no-sync-scripts */}
         <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js" data-api-key={shopifyApiKey} />
       </head>
-      <body className={manrope.className}>
+      <body>
         <EmbeddedNavigationBootstrap />
         {children}
       </body>

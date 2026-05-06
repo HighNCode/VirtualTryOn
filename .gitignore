@@ -86,3 +86,5 @@ shapy_service/__pycache__/
 
 # SHAPY / SMPL model assets and checkpoints (local, large, licensed)
 backend/data/
+
+VTS/

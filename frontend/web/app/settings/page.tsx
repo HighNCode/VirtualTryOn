@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import PortalSidebar from "../_components/PortalSidebar";
+import PortalTopbar from "../_components/PortalTopbar";
+import SubTabNav from "../_components/SubTabNav";
 import {
   getDefaultStoreId,
   getWidgetConfig,
@@ -167,16 +169,20 @@ export default function SettingsPage() {
   };
 
   const previewBackground = useDefaultWidgetColor ? DEFAULT_WIDGET_BACKGROUND : appliedWidgetColor;
+  const settingsTabs = [
+    { href: "/settings", label: "Custom" },
+    { href: "/settings/privacy", label: "Privacy" },
+    { href: "/settings/billing", label: "Billing" },
+    { href: "/settings/support", label: "Support" }
+  ];
 
   return (
     <main className="portal-shell">
       <PortalSidebar activeMain="settings" activeSettings="custom" />
 
       <section className="portal-main">
-        <header className="portal-main-header">
-          <h2>Settings</h2>
-          <p>Manage your Virtual Try-on Studio preferences</p>
-        </header>
+        <PortalTopbar title="Settings" subtitle="Manage your Virtual Fit Studio configuration" />
+        <SubTabNav tabs={settingsTabs} />
 
         {!storeId ? <p className="ai-error-note">Open the app from Shopify Admin to load settings.</p> : null}
         {isLoading ? <p className="ai-status-note">Loading widget settings...</p> : null}
