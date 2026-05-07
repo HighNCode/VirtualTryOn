@@ -1,6 +1,7 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { Check, ChevronLeft, ChevronRight, Download, RefreshCw, Sparkles } from "lucide-react";
 import PortalSidebar from "../../_components/PortalSidebar";
 import PortalTopbar from "../../_components/PortalTopbar";
 import SubTabNav from "../../_components/SubTabNav";
@@ -231,7 +232,10 @@ export default function ModelSwapPage() {
             </article>
 
             <aside className="ai-upload-panel">
-              <p className="ai-upgrade-banner">✦ Upgrade Your Visuals Now</p>
+              <p className="ai-upgrade-banner">
+                <Sparkles size={12} />
+                <span>Upgrade Your Visuals Now</span>
+              </p>
 
               <div className="ai-upload-drop" aria-hidden>
                 <svg viewBox="0 0 24 24" role="img">
@@ -309,7 +313,7 @@ export default function ModelSwapPage() {
                   <span>Choose from the Optimo face library</span>
                 </span>
                 <span className="ai-swap-chevron" aria-hidden>
-                  ›
+                  <ChevronRight size={16} />
                 </span>
               </button>
 
@@ -326,8 +330,8 @@ export default function ModelSwapPage() {
                 <section className="ai-swap-picker">
                   <header className="ai-swap-picker-head">
                     <button type="button" className="ai-swap-picker-back" onClick={closePicker} aria-label="Back">
-                    ‹
-                  </button>
+                      <ChevronLeft size={16} />
+                    </button>
                   <div>
                     <h3>Select face model</h3>
                     <p>Optimo face library</p>
@@ -376,7 +380,11 @@ export default function ModelSwapPage() {
                           aria-label={face.id}
                         >
                           <span style={imageTileStyle(face.image_url)} />
-                          {selectedFaceId === face.id ? <i className="ai-swap-face-check" aria-hidden>✓</i> : null}
+                          {selectedFaceId === face.id ? (
+                            <i className="ai-swap-face-check" aria-hidden>
+                              <Check size={10} />
+                            </i>
+                          ) : null}
                         </button>
                       ))}
                     </div>
@@ -390,8 +398,12 @@ export default function ModelSwapPage() {
                         <p>{card.title}</p>
                         {card.enhanced ? (
                           <div className="ai-result-actions" aria-hidden>
-                            <button type="button">↓</button>
-                            <button type="button">↻</button>
+                            <button type="button">
+                              <Download size={11} />
+                            </button>
+                            <button type="button">
+                              <RefreshCw size={11} />
+                            </button>
                           </div>
                         ) : null}
                       </header>
@@ -441,3 +453,4 @@ export default function ModelSwapPage() {
     </main>
   );
 }
+

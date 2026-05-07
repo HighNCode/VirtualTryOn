@@ -66,7 +66,7 @@ export default function Home() {
         router.replace(route);
       })
       .catch(() => {
-        // If status check fails, stay on step 1 â€“ user will continue normally
+        // If status check fails, stay on step 1 and let the user continue normally.
       });
   }, [router, storeId]);
 

@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { Camera, ArrowRight } from "./icons";
+import { Camera, ArrowRight } from "lucide-react";
 
 type Props = { onClick: () => void };
 
@@ -17,3 +17,4 @@ export function WidgetButton({ onClick }: Props) {
     </button>
   );
 }
+

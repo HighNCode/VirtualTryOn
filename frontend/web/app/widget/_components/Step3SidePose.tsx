@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import { useRef } from "react";
-import { Camera, Upload } from "./icons";
+import { Camera, Upload } from "lucide-react";
 
 type Props = { onNext: () => void };
 
@@ -57,3 +57,4 @@ export function Step3SidePose({ onNext }: Props) {
     </div>
   );
 }
+

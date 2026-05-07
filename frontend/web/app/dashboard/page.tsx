@@ -1,6 +1,7 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { Star } from "lucide-react";
 import { EmbeddedLink, useEmbeddedRouter } from "../_components/EmbeddedNavigation";
 import PortalSidebar from "../_components/PortalSidebar";
 import PortalTopbar from "../_components/PortalTopbar";
@@ -14,7 +15,7 @@ import {
   type DashboardOverviewResponse
 } from "../../lib/photoshootApi";
 
-const FEEDBACK_OPTIONS = Array.from({ length: 10 }, (_, index) => (index + 1) / 2);
+const FEEDBACK_OPTIONS = [1, 2, 3, 4, 5];
 
 function clampPercent(value: number): number {
   if (!Number.isFinite(value)) {
@@ -192,11 +193,16 @@ export default function DashboardPage() {
                   <button
                     key={value}
                     type="button"
-                    className={`portal-feedback-option${feedbackRating === value ? " is-active" : ""}`}
+                    className={`portal-feedback-option portal-feedback-star${feedbackRating === value ? " is-active" : ""}`}
                     onClick={() => setFeedbackRating(value)}
                     aria-pressed={feedbackRating === value}
+                    aria-label={`Rate ${value} out of 5`}
                   >
-                    {value.toFixed(1)} ★
+                    <Star
+                      size={18}
+                      strokeWidth={1.8}
+                      fill={feedbackRating !== null && value <= feedbackRating ? "currentColor" : "none"}
+                    />
                   </button>
                 ))}
               </div>
@@ -256,3 +262,4 @@ export default function DashboardPage() {
     </main>
   );
 }
+

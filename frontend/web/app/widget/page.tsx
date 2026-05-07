@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import { useCallback, useState } from "react";
-import { Search, User, ShoppingBag, Minus, Plus } from "./_components/icons";
+import { Search, User, ShoppingBag, Minus, Plus } from "lucide-react";
 import { WidgetButton } from "./_components/WidgetButton";
 import { WidgetShell } from "./_components/WidgetShell";
 import { Step1Setup } from "./_components/Step1Setup";
@@ -111,3 +111,4 @@ export default function WidgetPage() {
     </div>
   );
 }
+

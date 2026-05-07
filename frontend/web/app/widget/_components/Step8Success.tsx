@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { CheckCircle2, ShoppingBag, Lock } from "./icons";
+import { CheckCircle2, ShoppingCart, Lock } from "lucide-react";
 
 type Props = { onClose: () => void };
 
@@ -24,7 +24,7 @@ export function Step8Success({ onClose }: Props) {
           className="w-full py-3.5 rounded-[12px] text-white text-sm font-bold flex items-center justify-center gap-2"
           style={{ background: "linear-gradient(135deg, #7E0175 0%, #BC174A 55%, #E40206 100%)" }}
         >
-          <ShoppingBag size={17} />
+          <ShoppingCart size={17} />
           View Cart
         </button>
 
@@ -44,3 +44,4 @@ export function Step8Success({ onClose }: Props) {
     </div>
   );
 }
+

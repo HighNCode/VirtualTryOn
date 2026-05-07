@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import type { ReactNode } from "react";
-import { X } from "./icons";
+import { X } from "lucide-react";
 
 type Props = { children: ReactNode; onClose: () => void; wide?: boolean };
 
@@ -23,3 +23,4 @@ export function WidgetShell({ children, onClose, wide }: Props) {
     </div>
   );
 }
+

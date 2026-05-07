@@ -14,11 +14,14 @@ type SubTabNavProps = {
 
 export default function SubTabNav({ tabs }: SubTabNavProps) {
   const pathname = usePathname();
+  const activeHref = tabs
+    .filter((tab) => pathname === tab.href || pathname.startsWith(`${tab.href}/`))
+    .sort((a, b) => b.href.length - a.href.length)[0]?.href;
 
   return (
     <nav className="portal-subtabs" aria-label="Section tabs">
       {tabs.map((tab) => {
-        const isActive = pathname === tab.href || pathname.startsWith(`${tab.href}/`);
+        const isActive = tab.href === activeHref;
         return (
           <EmbeddedLink key={tab.href} href={tab.href} className={`portal-subtab-item${isActive ? " is-active" : ""}`}>
             {tab.label}

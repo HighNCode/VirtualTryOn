@@ -1,6 +1,7 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { ChevronLeft, ChevronRight, Download, RefreshCw } from "lucide-react";
 import PortalSidebar from "../../_components/PortalSidebar";
 import PortalTopbar from "../../_components/PortalTopbar";
 import SubTabNav from "../../_components/SubTabNav";
@@ -276,7 +277,7 @@ export default function ModelTryOnPage() {
                 <span>{selectedModel ? "Click to edit selection" : "Choose model, pose, and background style"}</span>
               </span>
               <span className="ai-tryon-chevron" aria-hidden>
-                ›
+                <ChevronRight size={16} />
               </span>
             </button>
 
@@ -293,7 +294,7 @@ export default function ModelTryOnPage() {
               <section className="ai-tryon-picker">
                 <header className="ai-tryon-picker-head">
                   <button type="button" className="ai-tryon-picker-back" onClick={closePicker} aria-label="Back">
-                    ‹
+                    <ChevronLeft size={16} />
                   </button>
                   <div>
                     <h3>Select Try on model</h3>
@@ -363,8 +364,12 @@ export default function ModelTryOnPage() {
                       <p>{card.title}</p>
                       {card.enhanced ? (
                         <div className="ai-result-actions" aria-hidden>
-                          <button type="button">↓</button>
-                          <button type="button">↻</button>
+                          <button type="button">
+                            <Download size={11} />
+                          </button>
+                          <button type="button">
+                            <RefreshCw size={11} />
+                          </button>
                         </div>
                       ) : null}
                     </header>
@@ -413,3 +418,4 @@ export default function ModelTryOnPage() {
     </main>
   );
 }
+
