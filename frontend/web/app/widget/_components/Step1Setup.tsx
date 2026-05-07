@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import { useState } from "react";
-import { Camera, Square, PersonStanding, Maximize2, Sun } from "./icons";
+import { Camera, Square, PersonStanding, Maximize2, Sun } from "lucide-react";
 
 type Props = { onNext: () => void };
 
@@ -111,3 +111,4 @@ export function Step1Setup({ onNext }: Props) {
     </div>
   );
 }
+

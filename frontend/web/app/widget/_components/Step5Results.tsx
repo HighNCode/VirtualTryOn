@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { CheckCircle2, X, RotateCcw, TrendingUp, Ruler, Sparkles } from "./icons";
+import { CheckCircle2, X, RotateCcw, TrendingUp, Ruler, Sparkles } from "lucide-react";
 
 type Props = { onNext: () => void; confidence?: number };
 
@@ -129,3 +129,4 @@ export function Step5Results({ onNext, confidence = 86 }: Props) {
     </div>
   );
 }
+

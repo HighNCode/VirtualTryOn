@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import { useState } from "react";
-import { ArrowLeft, Plus, RotateCcw, HelpCircle } from "./icons";
+import { ArrowLeft, Plus, RotateCcw, HelpCircle } from "lucide-react";
 
 type Props = { onNext: () => void; onBack: () => void };
 
@@ -211,3 +211,4 @@ export function Step7TryOn({ onNext, onBack }: Props) {
     </div>
   );
 }
+

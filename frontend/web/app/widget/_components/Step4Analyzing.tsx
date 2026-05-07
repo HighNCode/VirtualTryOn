@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2, Circle } from "./icons";
+import { CheckCircle2, Circle } from "lucide-react";
 
 type Props = { onNext: () => void };
 
@@ -74,3 +74,4 @@ export function Step4Analyzing({ onNext }: Props) {
     </div>
   );
 }
+

@@ -1,6 +1,7 @@
 ﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { Camera, Mail, TrendingDown, TrendingUp, type LucideIcon } from "lucide-react";
 import { EmbeddedLink, useEmbeddedRouter } from "../_components/EmbeddedNavigation";
 import { getDefaultStoreId, getOnboardingStatus, saveOnboardingGoals } from "../../lib/photoshootApi";
 
@@ -8,7 +9,7 @@ type GoalOption = {
   id: string;
   title: string;
   description: string;
-  icon: JSX.Element;
+  icon: LucideIcon;
 };
 
 const goals: GoalOption[] = [
@@ -16,62 +17,25 @@ const goals: GoalOption[] = [
     id: "conversion",
     title: "Improve conversion rates",
     description: "Help customers make faster purchasing decisions",
-    icon: (
-      <svg viewBox="0 0 24 24" role="img">
-        <path d="M14 3L14.8 5.6L17.4 6.4L14.8 7.2L14 9.8L13.2 7.2L10.6 6.4L13.2 5.6L14 3Z" fill="currentColor" />
-        <path d="M7 7L7.6 8.9L9.5 9.5L7.6 10.1L7 12L6.4 10.1L4.5 9.5L6.4 8.9L7 7Z" fill="currentColor" />
-        <circle cx="9.2" cy="15.2" r="5.4" fill="none" stroke="currentColor" strokeWidth="1.9" />
-        <path d="M14.8 19.4L19 15.2" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.9" />
-      </svg>
-    )
+    icon: TrendingUp
   },
   {
     id: "returns",
     title: "Reduce return rates",
     description: "Minimize returns due to sizing or fit issues",
-    icon: (
-      <svg viewBox="0 0 24 24" role="img">
-        <path d="M4 6H10V12" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
-        <path d="M5 11L10 6L14 10L20 4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
-        <path d="M14 14H20V20H14Z" fill="currentColor" />
-      </svg>
-    )
+    icon: TrendingDown
   },
   {
     id: "emails",
     title: "Collect customer emails",
     description: "Build your email list through the try-on button",
-    icon: (
-      <svg viewBox="0 0 24 24" role="img">
-        <path
-          d="M17.8 10.4C17.8 6.9 15.1 4.2 11.6 4.2C8.1 4.2 5.4 6.9 5.4 10.4C5.4 13.9 8.1 16.6 11.6 16.6H13.2C15.1 16.6 16.7 18.2 16.7 20.1C16.7 22 15.1 23.6 13.2 23.6H6.2"
-          fill="none"
-          stroke="currentColor"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth="1.9"
-          transform="translate(0 -2)"
-        />
-        <circle cx="9.6" cy="10.7" r="2.4" fill="none" stroke="currentColor" strokeWidth="1.9" />
-      </svg>
-    )
+    icon: Mail
   },
   {
     id: "content",
     title: "Create marketing content",
     description: "Use AI Studio to generate on-model photos for ads",
-    icon: (
-      <svg viewBox="0 0 24 24" role="img">
-        <path
-          d="M6 7.5C6 5.6 7.6 4 9.5 4H15.5C17.4 4 19 5.6 19 7.5V16.5C19 18.4 17.4 20 15.5 20H9.5C7.6 20 6 18.4 6 16.5V7.5Z"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.9"
-        />
-        <path d="M10 9.5H15M10 12H15M10 14.5H13" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.9" />
-        <path d="M4 9.5V16.5C4 19.5 6.5 22 9.5 22H15.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.9" />
-      </svg>
-    )
+    icon: Camera
   }
 ];
 
@@ -190,7 +154,7 @@ export default function StepTwoPage() {
                     onChange={() => toggleGoal(goal.id)}
                   />
                   <span className="goal-icon" aria-hidden>
-                    {goal.icon}
+                    <goal.icon size={20} strokeWidth={1.9} />
                   </span>
                   <span className="goal-copy">
                     <strong>{goal.title}:</strong>

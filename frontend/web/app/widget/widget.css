@@ -247,3 +247,17 @@ a {
     grid-template-columns: 1fr;
   }
 }
+
+@keyframes widget-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin {
+  animation: widget-spin 1s linear infinite;
+}

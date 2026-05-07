@@ -1,7 +1,8 @@
 ﻿"use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
+import { BarChart3, Camera, LayoutDashboard, Settings, Sparkles } from "lucide-react";
 import { EmbeddedLink, useEmbeddedRouter } from "./EmbeddedNavigation";
 import { getDefaultStoreId, getOnboardingStatus } from "../../lib/photoshootApi";
 
@@ -19,6 +20,7 @@ export default function PortalSidebar({ activeMain }: PortalSidebarProps) {
   const router = useEmbeddedRouter();
   const pathname = usePathname();
   const storeId = useMemo(() => getDefaultStoreId(), []);
+  const [showLogoFallback, setShowLogoFallback] = useState(false);
 
   useEffect(() => {
     if (!storeId) {
@@ -46,10 +48,15 @@ export default function PortalSidebar({ activeMain }: PortalSidebarProps) {
   return (
     <aside className="portal-sidebar">
       <header className="portal-brand">
-        <div className="portal-brand-logo" aria-hidden>
-          <svg viewBox="0 0 24 24" role="img">
-            <path d="M12 2L15.2 8.8L22 12L15.2 15.2L12 22L8.8 15.2L2 12L8.8 8.8L12 2Z" />
-          </svg>
+        <img
+          src="/vts-logo.png"
+          alt="VTS"
+          className="portal-brand-image"
+          onError={() => setShowLogoFallback(true)}
+          style={showLogoFallback ? { display: "none" } : undefined}
+        />
+        <div className="portal-brand-logo" aria-hidden style={showLogoFallback ? undefined : { display: "none" }}>
+          <Sparkles size={15} color="#fff" />
         </div>
         <div className="portal-brand-copy">
           <h1>Virtual Tryon Studio</h1>
@@ -60,45 +67,28 @@ export default function PortalSidebar({ activeMain }: PortalSidebarProps) {
       <nav aria-label="Primary">
         <EmbeddedLink href="/dashboard" className={`portal-nav-item${activeMain === "overview" ? " is-active" : ""}`}>
           <span aria-hidden className="portal-nav-icon">
-            <svg viewBox="0 0 24 24" role="img">
-              <rect x="3.5" y="3.5" width="7" height="7" rx="1.6" />
-              <rect x="13.5" y="3.5" width="7" height="7" rx="1.6" />
-              <rect x="3.5" y="13.5" width="7" height="7" rx="1.6" />
-              <rect x="13.5" y="13.5" width="7" height="7" rx="1.6" />
-            </svg>
+            <LayoutDashboard size={17} />
           </span>
           <span>Overview</span>
         </EmbeddedLink>
 
         <EmbeddedLink href="/analytics" className={`portal-nav-item${activeMain === "analytics" ? " is-active" : ""}`}>
           <span aria-hidden className="portal-nav-icon">
-            <svg viewBox="0 0 24 24" role="img">
-              <path d="M4 18.5H20" />
-              <path d="M7 15V9.5" />
-              <path d="M12 15V6" />
-              <path d="M17 15V11.5" />
-            </svg>
+            <BarChart3 size={17} />
           </span>
           <span>Analytics</span>
         </EmbeddedLink>
 
         <EmbeddedLink href="/settings" className={`portal-nav-item${activeMain === "settings" ? " is-active" : ""}`}>
           <span aria-hidden className="portal-nav-icon">
-            <svg viewBox="0 0 24 24" role="img">
-              <path d="M12 8.2A3.8 3.8 0 1 0 12 15.8A3.8 3.8 0 1 0 12 8.2Z" />
-              <path d="M19.3 15.1L21 16.1L19.4 18.9L17.5 18.2C16.9 18.8 16.2 19.3 15.4 19.6L15.1 21.6H8.9L8.6 19.6C7.8 19.3 7.1 18.8 6.5 18.2L4.6 18.9L3 16.1L4.7 15.1C4.6 14.7 4.5 14.3 4.5 13.8C4.5 13.3 4.6 12.9 4.7 12.5L3 11.5L4.6 8.7L6.5 9.4C7.1 8.8 7.8 8.3 8.6 8L8.9 6H15.1L15.4 8C16.2 8.3 16.9 8.8 17.5 9.4L19.4 8.7L21 11.5L19.3 12.5C19.4 12.9 19.5 13.3 19.5 13.8C19.5 14.3 19.4 14.7 19.3 15.1Z" />
-            </svg>
+            <Settings size={17} />
           </span>
           <span>Settings</span>
         </EmbeddedLink>
 
         <EmbeddedLink href="/ai-product-shoot" className={`portal-nav-item portal-ai-item${activeMain === "ai" ? " is-active" : ""}`}>
           <span aria-hidden className="portal-nav-icon">
-            <svg viewBox="0 0 24 24" role="img">
-              <path d="M4 8.2C4 7 5 6 6.2 6H17.8C19 6 20 7 20 8.2V15.8C20 17 19 18 17.8 18H6.2C5 18 4 17 4 15.8V8.2Z" />
-              <circle cx="12" cy="12" r="2.7" />
-              <path d="M8.1 6L9.2 4.2H14.8L15.9 6" />
-            </svg>
+            <Camera size={17} />
           </span>
           <span>AI Product Shoot</span>
         </EmbeddedLink>
