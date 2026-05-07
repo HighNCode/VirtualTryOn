@@ -6301,3 +6301,201 @@ body {
 .progress-step6 {
   width: 100%;
 }
+
+/* Merchant parity hardening overrides (final authoritative block) */
+.step3-referral-option {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  min-height: 50px;
+}
+
+.step3-referral-copy {
+  min-width: 0;
+  display: block;
+}
+
+.step3-referral-label {
+  display: block;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: clamp(0.95rem, 1.2vw, 1.04rem);
+  line-height: 1.25;
+}
+
+.portal-shell {
+  align-items: stretch;
+}
+
+.portal-sidebar {
+  min-height: 100dvh;
+  max-height: 100dvh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0;
+}
+
+.portal-brand {
+  padding: 18px 16px 14px;
+}
+
+.portal-sidebar nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.portal-nav-icon svg {
+  stroke-width: 1.9;
+  vector-effect: non-scaling-stroke;
+}
+
+.portal-subtab-item:visited {
+  color: var(--vts-muted);
+}
+
+.portal-subtab-item.is-active:visited {
+  color: var(--vts-brand-primary);
+}
+
+.billing-card p,
+.billing-history-list span,
+.billing-payment-text {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.billing-offer {
+  display: grid;
+  gap: 6px;
+}
+
+.billing-offer strong {
+  position: static;
+  transform: none;
+  display: block;
+  margin-top: 2px;
+  font-size: 1.05rem;
+  line-height: 1.25;
+  color: #c5003b;
+}
+
+.billing-upgrade-button {
+  margin-top: 8px;
+}
+
+.billing-row-head {
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.billing-row-head button {
+  flex-shrink: 0;
+}
+
+.primary-action,
+.secondary-action,
+.retry-action {
+  min-height: 44px;
+  padding: 0 20px;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.primary-action {
+  box-shadow: none;
+}
+
+.secondary-action,
+.retry-action {
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #374151;
+}
+
+.secondary-action:hover,
+.retry-action:hover {
+  transform: none;
+  border-color: #9ca3af;
+  background: #f9fafb;
+}
+
+.step2-footer,
+.step4-actions,
+.step5-actions {
+  gap: 12px;
+  align-items: center;
+}
+
+.step2-footer .primary-action,
+.step4-actions .primary-action,
+.step4-actions .secondary-action,
+.step5-actions .secondary-action,
+.step5-actions .retry-action,
+.step5-primary-button,
+.free-plan-cta {
+  min-width: 176px;
+}
+
+@media (max-width: 1200px) and (min-width: 981px) {
+  .portal-shell {
+    flex-direction: row;
+  }
+
+  .portal-sidebar {
+    position: sticky;
+    top: 0;
+    width: 200px;
+    height: 100dvh;
+    border-right: 1px solid var(--vts-border);
+    border-bottom: 0;
+    padding: 0;
+  }
+
+  .portal-sidebar nav {
+    overflow-x: visible;
+  }
+
+  .portal-sidebar-footer {
+    display: grid;
+  }
+}
+
+@media (max-width: 980px) {
+  .portal-sidebar {
+    min-height: 0;
+    max-height: none;
+    overflow: visible;
+  }
+}
+
+@media (max-width: 760px) {
+  .step3-referral-option {
+    min-height: 46px;
+    padding: 10px 12px;
+  }
+
+  .step3-referral-label {
+    font-size: 0.95rem;
+  }
+
+  .step2-footer,
+  .step4-actions,
+  .step5-actions {
+    flex-direction: column;
+  }
+
+  .step2-footer .primary-action,
+  .step4-actions .primary-action,
+  .step4-actions .secondary-action,
+  .step5-actions .secondary-action,
+  .step5-actions .retry-action,
+  .step5-primary-button,
+  .free-plan-cta {
+    width: 100%;
+    max-width: 280px;
+  }
+}
