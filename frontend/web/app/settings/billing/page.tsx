@@ -35,6 +35,34 @@ function formatMoney(value: number | null, currencyCode: string): string {
   }).format(value);
 }
 
+const PLAN_LABEL_OVERRIDES: Record<string, string> = {
+  free_plan: "Free Plan",
+  free_trial: "Free Trial",
+  founding_trial: "Founding Trial"
+};
+
+function formatPlanLabel(value: string | null | undefined): string {
+  if (!value) {
+    return "-";
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return "-";
+  }
+
+  const override = PLAN_LABEL_OVERRIDES[normalized];
+  if (override) {
+    return override;
+  }
+
+  return normalized
+    .split(/[_-]+/g)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 export default function SettingsBillingPage() {
   const storeId = useMemo(() => getDefaultStoreId(), []);
   const settingsTabs = [
@@ -146,6 +174,18 @@ export default function SettingsBillingPage() {
 
     return plans.find((p) => p.name === billingStatus.plan_name) ?? plans.find((p) => p.is_current) ?? null;
   }, [billingStatus, plans]);
+
+  const displayCurrentPlanName = useMemo(() => {
+    if (currentPlan?.display_name) {
+      return currentPlan.display_name;
+    }
+
+    if (!billingStatus?.plan_name) {
+      return "No active subscription";
+    }
+
+    return formatPlanLabel(billingStatus.plan_name);
+  }, [billingStatus?.plan_name, currentPlan?.display_name]);
 
   const renderedPlans = useMemo(
     () =>
@@ -283,7 +323,7 @@ export default function SettingsBillingPage() {
         <section className="billing-grid billing-grid-top">
           <article className="settings-card billing-card">
             <h3>Your Plan</h3>
-            <p className="billing-pay-label">{billingStatus?.plan_name ?? "No active subscription"}</p>
+            <p className="billing-pay-label">{displayCurrentPlanName}</p>
             <p>Billing interval: {billingStatus?.billing_interval ?? "-"}</p>
             <p>Subscription status: {billingStatus?.subscription_status ?? "Not linked"}</p>
             <p>Plan price: {formatMoney(recurringPrice, "USD")}</p>
@@ -360,7 +400,7 @@ export default function SettingsBillingPage() {
               <li>
                 <span>Plan activated</span>
                 <span>{formatDateTime(billingStatus?.plan_activated_at ?? null)}</span>
-                <span>{billingStatus?.plan_name ?? "-"}</span>
+                <span>{formatPlanLabel(billingStatus?.plan_name)}</span>
               </li>
               <li>
                 <span>Cycle start</span>

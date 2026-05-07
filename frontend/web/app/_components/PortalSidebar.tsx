@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
-import { BarChart3, Camera, LayoutDashboard, Settings, Sparkles } from "lucide-react";
+import { BarChart3, Camera, LayoutDashboard, Settings2, Sparkles } from "lucide-react";
 import { EmbeddedLink, useEmbeddedRouter } from "./EmbeddedNavigation";
 import { getDefaultStoreId, getOnboardingStatus } from "../../lib/photoshootApi";
 
@@ -81,7 +81,7 @@ export default function PortalSidebar({ activeMain }: PortalSidebarProps) {
 
         <EmbeddedLink href="/settings" className={`portal-nav-item${activeMain === "settings" ? " is-active" : ""}`}>
           <span aria-hidden className="portal-nav-icon">
-            <Settings size={17} />
+            <Settings2 size={17} />
           </span>
           <span>Settings</span>
         </EmbeddedLink>

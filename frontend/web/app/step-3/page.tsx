@@ -123,10 +123,10 @@ export default function StepThreePage() {
         {isLoading ? <p className="ai-status-note">Loading current selection...</p> : null}
         {errorMessage ? <p className="ai-error-note">{errorMessage}</p> : null}
 
-        <ul className="goal-list">
+        <ul className="goal-list step3-referral-list">
           {referralOptions.map((option) => (
-            <li key={option.id}>
-              <label className="goal-option">
+            <li key={option.id} className="step3-referral-item">
+              <label className="goal-option step3-referral-option">
                   <input
                     type="radio"
                     name="referral"
@@ -137,8 +137,8 @@ export default function StepThreePage() {
                       setErrorMessage("");
                     }}
                   />
-                <span className="goal-copy">
-                  <strong>{option.label}</strong>
+                <span className="goal-copy step3-referral-copy">
+                  <strong className="step3-referral-label">{option.label}</strong>
                 </span>
               </label>
             </li>
