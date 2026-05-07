@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { EmbeddedLink, useEmbeddedRouter } from "../_components/EmbeddedNavigation";
 import PortalSidebar from "../_components/PortalSidebar";
+import PortalTopbar from "../_components/PortalTopbar";
 import {
   getBillingStatus,
   getBillingUsageSummary,
@@ -135,10 +136,7 @@ export default function DashboardPage() {
       <PortalSidebar activeMain="overview" />
 
       <section className="portal-main">
-        <header className="portal-main-header">
-          <h2>Overview</h2>
-          <p>Set up Optimo Try-on Button</p>
-        </header>
+        <PortalTopbar title="Overview" subtitle="Welcome back to Virtual Fit Studio" />
 
         {!storeId ? <p className="ai-error-note">Open the app from Shopify Admin to load dashboard data.</p> : null}
         {isLoading ? <p className="ai-status-note">Loading dashboard...</p> : null}

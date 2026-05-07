@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo } from "react";
 import { EmbeddedLink, useEmbeddedRouter } from "./_components/EmbeddedNavigation";
@@ -30,7 +30,7 @@ const STEP_ROUTES: Record<string, string> = {
   referral: "/step-3",
   widget_scope: "/step-4",
   theme_setup: "/step-5/not-detected",
-  plan: "/step-7",
+  plan: "/step-6",
   complete: "/dashboard"
 };
 
@@ -66,7 +66,7 @@ export default function Home() {
         router.replace(route);
       })
       .catch(() => {
-        // If status check fails, stay on step 1 – user will continue normally
+        // If status check fails, stay on step 1 â€“ user will continue normally
       });
   }, [router, storeId]);
 
@@ -75,7 +75,7 @@ export default function Home() {
       <section className="welcome-card">
         <header className="topline">
           <p className="screen-title">Welcome to Optimo VTS</p>
-          <p className="step">Step 1 of 7</p>
+          <p className="step">Step 1 of 6</p>
         </header>
 
         <div className="progress-track" aria-hidden>
@@ -135,3 +135,5 @@ export default function Home() {
     </main>
   );
 }
+
+

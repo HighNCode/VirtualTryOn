@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { EmbeddedLink } from "../../_components/EmbeddedNavigation";
 import PortalSidebar from "../../_components/PortalSidebar";
+import PortalTopbar from "../../_components/PortalTopbar";
 import {
   getDefaultStoreId,
   recheckDashboardThemeStatus,
@@ -75,10 +76,7 @@ export default function DashboardThemeSetupPage() {
       <PortalSidebar activeMain="overview" />
 
       <section className="portal-main">
-        <header className="portal-main-header">
-          <h2>Theme Setup</h2>
-          <p>Add Optimo VTS to your Shopify product template.</p>
-        </header>
+        <PortalTopbar title="Theme Setup" subtitle="Add Optimo VTS to your Shopify product template." />
 
         <section className="welcome-card step5-card">
           <div className="step5-head-row">

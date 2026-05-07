@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import PortalSidebar from "../../_components/PortalSidebar";
+import PortalTopbar from "../../_components/PortalTopbar";
+import SubTabNav from "../../_components/SubTabNav";
 import {
   buildJobResultUrl,
   getDefaultProductGid,
@@ -57,6 +59,11 @@ export default function ModelTryOnPage() {
     () => models.find((model) => model.id === selectedModelId) ?? null,
     [models, selectedModelId]
   );
+  const aiTabs = [
+    { href: "/ai-product-shoot", label: "Ghost Mannequin" },
+    { href: "/ai-product-shoot/model-try-on", label: "Model Try-on" },
+    { href: "/ai-product-shoot/model-swap", label: "Model Swap" }
+  ];
 
   const resultCards: ResultCard[] = [
     { id: "original", title: "Original", enhanced: false, variant: "original", imageUrl: productImageUrl || null },
@@ -207,10 +214,8 @@ export default function ModelTryOnPage() {
       <PortalSidebar activeMain="ai" activeAi="model-try-on" />
 
       <section className="portal-main">
-        <header className="portal-main-header">
-          <h2>AI Product Shoots</h2>
-          <p>Generate professional studio shoots in seconds</p>
-        </header>
+        <PortalTopbar title="AI Product Shoot" subtitle="Place your product on a real model" />
+        <SubTabNav tabs={aiTabs} />
 
         <section className="ai-stage-model-tryon">
           <aside className="ai-tryon-panel">
