@@ -67,7 +67,7 @@ export default function StepFiveDetectedPage() {
   };
 
   return (
-    <main className="shell">
+    <main className="shell onboarding-shell">
       <section className="welcome-card step5-card step5-detected-card">
         <header className="topline">
           <p className="screen-title">Welcome to Optimo VTS</p>
@@ -106,10 +106,15 @@ export default function StepFiveDetectedPage() {
         {!storeId ? <p className="ai-error-note">Open the app from Shopify Admin to persist onboarding progress.</p> : null}
         {errorMessage ? <p className="ai-error-note">{errorMessage}</p> : null}
 
-        <div className="step5-primary-wrap step5-primary-wrap-detected">
-          <button type="button" className="primary-action step5-primary-button step5-detected-button" onClick={enableTryOn} disabled={isSaving}>
-            {isSaving ? "Saving..." : "Enable Try-on"}
-          </button>
+        <div className="onboarding-cta-row">
+          <p className="support-link support-inline onboarding-support-link">
+            <EmbeddedLink href="/settings/support">Need help? Contact our support team</EmbeddedLink>
+          </p>
+          <div className="onboarding-actions">
+            <button type="button" className="primary-action step5-primary-button step5-detected-button" onClick={enableTryOn} disabled={isSaving}>
+              {isSaving ? "Saving..." : "Enable Try-on"}
+            </button>
+          </div>
         </div>
       </section>
     </main>

@@ -58,7 +58,7 @@ export default function StepFiveNotDetectedPage() {
   }, [checkStatus]);
 
   return (
-    <main className="shell">
+    <main className="shell onboarding-shell">
       <section className="welcome-card step5-card">
         <header className="topline">
           <p className="screen-title">Welcome to Optimo VTS</p>
@@ -136,18 +136,19 @@ export default function StepFiveNotDetectedPage() {
           </ol>
         </section>
 
-        <div className="step5-actions">
-          <EmbeddedLink href="/step-6" className="secondary-action">
-            Skip for now
-          </EmbeddedLink>
-          <button type="button" className="retry-action" onClick={() => checkStatus(true)} disabled={isChecking}>
-            {isChecking ? "Checking..." : "Retry"}
-          </button>
+        <div className="step5-actions onboarding-cta-row">
+          <p className="support-link support-inline onboarding-support-link">
+            <EmbeddedLink href="/settings/support">Need help? Contact our support team</EmbeddedLink>
+          </p>
+          <div className="onboarding-actions">
+            <EmbeddedLink href="/step-6" className="secondary-action">
+              Skip for now
+            </EmbeddedLink>
+            <button type="button" className="retry-action" onClick={() => checkStatus(true)} disabled={isChecking}>
+              {isChecking ? "Checking..." : "Retry"}
+            </button>
+          </div>
         </div>
-
-        <p className="support-link">
-          <EmbeddedLink href="/settings/support">Need help? Contact our support team</EmbeddedLink>
-        </p>
       </section>
     </main>
   );

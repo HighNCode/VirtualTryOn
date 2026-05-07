@@ -6394,50 +6394,31 @@ body {
   flex-shrink: 0;
 }
 
-.primary-action,
-.secondary-action,
-.retry-action {
-  min-height: 44px;
-  padding: 0 20px;
-  border-radius: 10px;
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1;
-}
-
-.primary-action {
-  box-shadow: none;
-}
-
-.secondary-action,
-.retry-action {
-  border: 1px solid #d1d5db;
-  background: #fff;
-  color: #374151;
-}
-
-.secondary-action:hover,
-.retry-action:hover {
-  transform: none;
-  border-color: #9ca3af;
-  background: #f9fafb;
-}
-
-.step2-footer,
-.step4-actions,
-.step5-actions {
-  gap: 12px;
+.onboarding-shell .onboarding-cta-row {
+  margin-top: 28px;
+  display: flex;
+  gap: 20px;
+  justify-content: flex-end;
   align-items: center;
 }
 
-.step2-footer .primary-action,
-.step4-actions .primary-action,
-.step4-actions .secondary-action,
-.step5-actions .secondary-action,
-.step5-actions .retry-action,
-.step5-primary-button,
-.free-plan-cta {
-  min-width: 176px;
+.onboarding-shell .onboarding-support-link {
+  margin: 0 auto 0 0;
+  text-align: left;
+}
+
+.onboarding-shell .onboarding-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.onboarding-shell .onboarding-cta-row .primary-action,
+.onboarding-shell .onboarding-cta-row .secondary-action,
+.onboarding-shell .onboarding-cta-row .retry-action {
+  min-width: 170px;
 }
 
 @media (max-width: 1200px) and (min-width: 981px) {
@@ -6482,19 +6463,26 @@ body {
     font-size: 0.95rem;
   }
 
-  .step2-footer,
-  .step4-actions,
-  .step5-actions {
+  .onboarding-shell .onboarding-cta-row {
     flex-direction: column;
+    gap: 12px;
+    justify-content: center;
   }
 
-  .step2-footer .primary-action,
-  .step4-actions .primary-action,
-  .step4-actions .secondary-action,
-  .step5-actions .secondary-action,
-  .step5-actions .retry-action,
-  .step5-primary-button,
-  .free-plan-cta {
+  .onboarding-shell .onboarding-support-link {
+    width: 100%;
+    margin: 0;
+    text-align: center;
+  }
+
+  .onboarding-shell .onboarding-actions {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .onboarding-shell .onboarding-cta-row .primary-action,
+  .onboarding-shell .onboarding-cta-row .secondary-action,
+  .onboarding-shell .onboarding-cta-row .retry-action {
     width: 100%;
     max-width: 280px;
   }

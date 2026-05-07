@@ -115,7 +115,7 @@ export default function StepTwoPage() {
   };
 
   return (
-    <main className="shell">
+    <main className="shell onboarding-shell">
       <section className="welcome-card">
         <header className="topline">
           <p className="screen-title">Welcome to Optimo VTS</p>
@@ -166,13 +166,15 @@ export default function StepTwoPage() {
           </ul>
         </form>
 
-        <div className="step2-footer">
-          <p className="support-link support-inline">
+        <div className="step2-footer onboarding-cta-row">
+          <p className="support-link support-inline onboarding-support-link">
             <EmbeddedLink href="/settings/support">Need help? Contact our support team</EmbeddedLink>
           </p>
-          <button type="button" className="primary-action" onClick={handleContinue} disabled={isSaving}>
-            {isSaving ? "Saving..." : "Continue"}
-          </button>
+          <div className="onboarding-actions">
+            <button type="button" className="primary-action" onClick={handleContinue} disabled={isSaving}>
+              {isSaving ? "Saving..." : "Continue"}
+            </button>
+          </div>
         </div>
       </section>
     </main>

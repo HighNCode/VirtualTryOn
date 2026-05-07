@@ -48,7 +48,7 @@ export default function StepFourPage() {
   };
 
   return (
-    <main className="shell">
+    <main className="shell onboarding-shell">
       <section className="welcome-card">
         <header className="topline">
           <p className="screen-title">Welcome to Optimo VTS</p>
@@ -91,18 +91,19 @@ export default function StepFourPage() {
           ))}
         </ul>
 
-        <div className="step4-actions">
-          <EmbeddedLink href="/step-6" className="secondary-action">
-            Skip for now
-          </EmbeddedLink>
-          <button type="button" className="primary-action" onClick={handleContinue} disabled={isSaving}>
-            {isSaving ? "Saving..." : "Continue"}
-          </button>
+        <div className="step4-actions onboarding-cta-row">
+          <p className="support-link support-inline onboarding-support-link">
+            <EmbeddedLink href="/settings/support">Need help? Contact our support team</EmbeddedLink>
+          </p>
+          <div className="onboarding-actions">
+            <EmbeddedLink href="/step-6" className="secondary-action">
+              Skip for now
+            </EmbeddedLink>
+            <button type="button" className="primary-action" onClick={handleContinue} disabled={isSaving}>
+              {isSaving ? "Saving..." : "Continue"}
+            </button>
+          </div>
         </div>
-
-        <p className="support-link">
-          <EmbeddedLink href="/settings/support">Need help? Contact our support team</EmbeddedLink>
-        </p>
       </section>
     </main>
   );
