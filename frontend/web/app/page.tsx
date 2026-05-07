@@ -71,7 +71,7 @@ export default function Home() {
   }, [router, storeId]);
 
   return (
-    <main className="shell">
+    <main className="shell onboarding-shell">
       <section className="welcome-card">
         <header className="topline">
           <p className="screen-title">Welcome to Optimo VTS</p>
@@ -122,15 +122,16 @@ export default function Home() {
           </ul>
         </section>
 
-        <div className="action-wrap">
-          <EmbeddedLink href="/step-2" className="primary-action">
-            Continue
-          </EmbeddedLink>
+        <div className="onboarding-cta-row">
+          <p className="support-link support-inline onboarding-support-link">
+            <EmbeddedLink href="/settings/support">Need help? Contact our support team</EmbeddedLink>
+          </p>
+          <div className="onboarding-actions">
+            <EmbeddedLink href="/step-2" className="primary-action">
+              Continue
+            </EmbeddedLink>
+          </div>
         </div>
-
-        <p className="support-link">
-          <EmbeddedLink href="/settings/support">Need help? Contact our support team</EmbeddedLink>
-        </p>
       </section>
     </main>
   );

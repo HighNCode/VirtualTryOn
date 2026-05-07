@@ -103,7 +103,7 @@ export default function StepFourConfiguredPage() {
   );
 
   return (
-    <main className="shell">
+    <main className="shell onboarding-shell">
       <section className="welcome-card">
         <header className="topline">
           <p className="screen-title">Welcome to Optimo VTS</p>
@@ -232,18 +232,19 @@ export default function StepFourConfiguredPage() {
           <p>The virtual try-on button scope is active for {selectedProducts.length} product(s) and {selectedCollections.length} collection(s).</p>
         </section>
 
-        <div className="configured-actions">
-          <EmbeddedLink href="/step-6" className="secondary-action">
-            Skip for now
-          </EmbeddedLink>
-          <EmbeddedLink href="/step-5/not-detected" className="primary-action">
-            Enable Try-on
-          </EmbeddedLink>
+        <div className="configured-actions onboarding-cta-row">
+          <p className="support-link support-inline onboarding-support-link">
+            <EmbeddedLink href="/settings/support">Need help? Contact our support team</EmbeddedLink>
+          </p>
+          <div className="onboarding-actions">
+            <EmbeddedLink href="/step-6" className="secondary-action">
+              Skip for now
+            </EmbeddedLink>
+            <EmbeddedLink href="/step-5/not-detected" className="primary-action">
+              Enable Try-on
+            </EmbeddedLink>
+          </div>
         </div>
-
-        <p className="support-link">
-          <EmbeddedLink href="/settings/support">Need help? Contact our support team</EmbeddedLink>
-        </p>
       </section>
     </main>
   );
