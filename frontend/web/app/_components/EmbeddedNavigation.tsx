@@ -112,13 +112,13 @@ type EmbeddedLinkProps = Omit<ComponentProps<typeof Link>, "href"> & {
   href: string;
 };
 
-export function EmbeddedLink({ href, ...props }: EmbeddedLinkProps) {
+export function EmbeddedLink({ href, style, ...props }: EmbeddedLinkProps) {
   const resolvedHref = buildEmbeddedHref(
     href,
     typeof window !== "undefined" ? window.location.search.replace(/^\?/, "") : ""
   );
 
-  return <Link href={resolvedHref} {...props} />;
+  return <Link href={resolvedHref} style={{ ...style, textDecoration: "none" }} {...props} />;
 }
 
 export function useEmbeddedRouter() {

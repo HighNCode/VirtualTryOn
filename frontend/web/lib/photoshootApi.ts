@@ -520,6 +520,14 @@ function isStoreNotFoundPayload(payload: unknown): boolean {
 }
 
 function readErrorMessage(status: number, payload: unknown): string {
+  if (status === 503) {
+    return "Backend service is temporarily unavailable. Keep the local Shopify dev server running and verify the configured API_BASE_URL backend is healthy.";
+  }
+
+  if (status === 502) {
+    return "Frontend proxy could not reach the backend API. Verify API_BASE_URL and your network connection.";
+  }
+
   if (payload && typeof payload === "object") {
     const detail = getErrorDetail(payload);
     if (detail) {

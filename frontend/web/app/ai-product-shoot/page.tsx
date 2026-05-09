@@ -1,6 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { Sparkles, Download, RefreshCw } from "lucide-react";
+import { motion } from "framer-motion";
+import AiUploadLanding from "../_components/AiUploadLanding";
 import PortalSidebar from "../_components/PortalSidebar";
 import PortalTopbar from "../_components/PortalTopbar";
 import SubTabNav from "../_components/SubTabNav";
@@ -11,140 +14,172 @@ const styleTemplates = [
   { id: "dark-bomber", label: "Dark Bomber", tone: "template-tone-charcoal" },
   { id: "jeans", label: "Blue Jeans", tone: "template-tone-jeans" },
   { id: "yellow-dress", label: "Yellow Dress", tone: "template-tone-gold" },
-  { id: "green-jacket", label: "Green Jacket", tone: "template-tone-olive" }
+  { id: "green-jacket", label: "Green Jacket", tone: "template-tone-olive" },
 ];
 
 const resultCards = [
   { id: "original", title: "Original Upload", enhanced: false, variant: "original" },
   { id: "enhanced-1", title: "Enhanced - OptimoVTS", enhanced: true, variant: "enhanced-a" },
-  { id: "enhanced-2", title: "Enhanced - OptimoVTS (1)", enhanced: true, variant: "enhanced-b" }
+  { id: "enhanced-2", title: "Enhanced - OptimoVTS (1)", enhanced: true, variant: "enhanced-b" },
 ] as const;
+
+const aiTabs = [
+  { href: "/ai-product-shoot", label: "Ghost Mannequin" },
+  { href: "/ai-product-shoot/model-try-on", label: "Model Try-on" },
+  { href: "/ai-product-shoot/model-swap", label: "Model Swap" },
+];
 
 export default function AiProductShootPage() {
   const [generated, setGenerated] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState(styleTemplates[0].id);
-  const aiTabs = [
-    { href: "/ai-product-shoot", label: "Ghost Mannequin" },
-    { href: "/ai-product-shoot/model-try-on", label: "Model Try-on" },
-    { href: "/ai-product-shoot/model-swap", label: "Model Swap" }
-  ];
 
   return (
-    <main className="portal-shell">
+    <div style={{ display: "flex", height: "100vh", overflow: "hidden", background: "#f6f4f4" }}>
       <PortalSidebar activeMain="ai" activeAi="ghost" />
 
-      <section className="portal-main">
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto" }}>
         <PortalTopbar title="AI Product Shoot" subtitle="Remove mannequin and enhance your product images" />
         <SubTabNav tabs={aiTabs} />
 
-        {!generated ? (
-          <section className="ai-stage-upload">
-            <article className="ai-upload-copy">
-              <h3>
-                AI <span>Ghost Mannequin</span>
-                <br />
-                Generator for Product
-                <br />
-                Photography
-              </h3>
-              <p>Professional results in seconds, without studios or mannequins.</p>
-              <div className="ai-upload-preview" aria-hidden />
-            </article>
+        <div style={{ flex: 1, overflow: "auto", padding: 24 }}>
+          {!generated ? (
+            <AiUploadLanding
+              headline={
+                <>
+                  AI{" "}
+                  <span style={{ background: "linear-gradient(135deg, #7E0175 0%, #BC174A 55%, #E40206 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>
+                    Ghost Mannequin
+                  </span>{" "}
+                  Generator for Product Photography
+                </>
+              }
+              subtitle="Professional results in seconds, without studios or mannequins."
+              videoSrc="/Ghost Mannequin.mp4"
+              onUpload={() => setGenerated(true)}
+            />
+          ) : (
+            /* Working state */
+            <div className="flex gap-0 h-full" style={{ margin: -24 }}>
+              {/* Left control panel */}
+              <div
+                className="w-[260px] flex-shrink-0 flex flex-col gap-4 p-5 overflow-auto"
+                style={{ borderRight: "1px solid #f0f0f0", background: "#ffffff" }}
+              >
+                <div>
+                  <h3 className="text-[15px] font-bold mb-0.5" style={{ color: "#1a1a1a" }}>Ghost Mannequin</h3>
+                  <p className="text-xs" style={{ color: "#9ca3af" }}>Original Image</p>
+                </div>
 
-            <aside className="ai-upload-panel">
-              <p className="ai-upgrade-banner">✦ Upgrade Your Visuals Now</p>
-
-              <div className="ai-upload-drop" aria-hidden>
-                <svg viewBox="0 0 24 24" role="img">
-                  <path
-                    d="M12 14V7M12 7L9 10M12 7L15 10M7 16.5H6.6C4.6 16.5 3 15 3 13C3 11 4.6 9.4 6.6 9.4C7.1 7 9.2 5.2 11.8 5.2C14.7 5.2 17 7.4 17.2 10.1C19.2 10.2 21 11.8 21 13.9C21 16.1 19.2 17.8 16.9 17.8H7"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="2"
-                  />
-                </svg>
-                <p>Click or drag image here</p>
-              </div>
-
-              <button type="button" className="ai-primary-btn" onClick={() => setGenerated(true)}>
-                Upload Image
-              </button>
-              <button type="button" className="ai-outline-btn">
-                Select from your store
-              </button>
-
-              <p className="ai-upload-note">
-                Any flat-lay or hanging photo works,
-                <br />
-                no professional setup needed
-              </p>
-            </aside>
-          </section>
-        ) : (
-          <section className="ai-stage-result">
-            <aside className="ai-generator-card">
-              <h3>Ghost Mannequin</h3>
-              <p>Original Image</p>
-
-              <h4>Clothing Type</h4>
-              <label className="ai-select-wrap">
-                <select aria-label="Clothing Type">
-                  <option>Select</option>
-                  <option>Tops</option>
-                  <option>Bottoms</option>
-                  <option>Outerwear</option>
-                </select>
-              </label>
-
-              <h4>Style Templates</h4>
-              <div className="ai-template-grid">
-                {styleTemplates.map((template) => (
-                  <button
-                    key={template.id}
-                    type="button"
-                    className={`ai-template-item ${template.tone}${selectedTemplate === template.id ? " is-selected" : ""}`}
-                    onClick={() => setSelectedTemplate(template.id)}
-                    aria-label={template.label}
+                <div>
+                  <h4 className="text-[12px] font-semibold mb-1.5" style={{ color: "#6b7280" }}>Clothing Type</h4>
+                  <select
+                    aria-label="Clothing Type"
+                    className="w-full text-sm px-3 py-2 rounded-[10px]"
+                    style={{ border: "1.5px solid #e5e5e5", color: "#1a1a1a", fontFamily: "inherit", outline: "none" }}
                   >
-                    <span />
-                  </button>
-                ))}
+                    <option>Select</option>
+                    <option>Tops</option>
+                    <option>Bottoms</option>
+                    <option>Outerwear</option>
+                  </select>
+                </div>
+
+                <div>
+                  <h4 className="text-[12px] font-semibold mb-2" style={{ color: "#6b7280" }}>Style Templates</h4>
+                  <div className="grid grid-cols-3 gap-2">
+                    {styleTemplates.map((template) => {
+                      const isSelected = selectedTemplate === template.id;
+                      return (
+                        <button
+                          key={template.id}
+                          type="button"
+                          onClick={() => setSelectedTemplate(template.id)}
+                          aria-label={template.label}
+                          className="aspect-square rounded-[8px] relative overflow-hidden"
+                          style={{
+                            border: isSelected ? "2px solid transparent" : "1.5px solid #e5e5e5",
+                            background: isSelected
+                              ? "linear-gradient(135deg, #7E0175, #E40206)"
+                              : "#f3f4f6",
+                            cursor: "pointer",
+                            padding: 0,
+                          }}
+                        >
+                          {isSelected && (
+                            <div
+                              className="absolute inset-0.5 rounded-[6px]"
+                              style={{ background: "#e5e5e5" }}
+                            />
+                          )}
+                          <span className={`ai-template-item ${template.tone}`} style={{ display: "block", width: "100%", height: "100%", position: "relative" }} />
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <motion.button
+                  type="button"
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  className="w-full py-2.5 rounded-[10px] text-sm font-semibold text-white mt-auto"
+                  style={{ background: "linear-gradient(135deg, #7E0175 0%, #BC174A 55%, #E40206 100%)", border: "none", cursor: "pointer" }}
+                >
+                  <Sparkles size={14} style={{ display: "inline", marginRight: 6 }} />
+                  Generate
+                </motion.button>
               </div>
 
-              <button type="button" className="ai-primary-btn ai-generate-btn">
-                Generate
-              </button>
-            </aside>
-
-            <div className="ai-results-grid">
-              {resultCards.map((card) => (
-                <article key={card.id} className="ai-result-card">
-                  <header>
-                    <p>{card.title}</p>
-                    {card.enhanced ? (
-                      <div className="ai-result-actions" aria-hidden>
-                        <button type="button">↓</button>
-                        <button type="button">↻</button>
+              {/* Results grid */}
+              <div className="flex-1 p-5 overflow-auto" style={{ background: "#f6f4f4" }}>
+                <div className="grid grid-cols-3 gap-4">
+                  {resultCards.map((card) => (
+                    <div
+                      key={card.id}
+                      className="bg-white rounded-[14px] overflow-hidden"
+                      style={{ boxShadow: "0 1px 3px rgba(0,0,0,0.04)", border: "1px solid rgba(0,0,0,0.05)" }}
+                    >
+                      <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid #f3f4f6" }}>
+                        <p className="text-[13px] font-medium" style={{ color: "#1a1a1a" }}>{card.title}</p>
+                        {card.enhanced && (
+                          <div className="flex gap-1">
+                            <button
+                              type="button"
+                              className="w-6 h-6 rounded-[6px] flex items-center justify-center"
+                              style={{ background: "rgba(126,1,117,0.08)", border: "none", cursor: "pointer" }}
+                            >
+                              <Download size={11} style={{ color: "#7E0175" }} />
+                            </button>
+                            <button
+                              type="button"
+                              className="w-6 h-6 rounded-[6px] flex items-center justify-center"
+                              style={{ background: "rgba(126,1,117,0.08)", border: "none", cursor: "pointer" }}
+                            >
+                              <RefreshCw size={11} style={{ color: "#7E0175" }} />
+                            </button>
+                          </div>
+                        )}
                       </div>
-                    ) : null}
-                  </header>
-
-                  <div className={`ai-result-image ai-result-image-${card.variant}`} aria-hidden>
-                    <span className="ai-model-figure">
-                      <span className="ai-model-head" />
-                      <span className="ai-model-torso" />
-                      <span className="ai-model-leg-left" />
-                      <span className="ai-model-leg-right" />
-                    </span>
-                  </div>
-                </article>
-              ))}
+                      <div
+                        className={`ai-result-image ai-result-image-${card.variant}`}
+                        aria-hidden
+                        style={{ minHeight: 200 }}
+                      >
+                        <span className="ai-model-figure">
+                          <span className="ai-model-head" />
+                          <span className="ai-model-torso" />
+                          <span className="ai-model-leg-left" />
+                          <span className="ai-model-leg-right" />
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
-          </section>
-        )}
-      </section>
-    </main>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

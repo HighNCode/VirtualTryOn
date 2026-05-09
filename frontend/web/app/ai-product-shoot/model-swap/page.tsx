@@ -1,7 +1,9 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { Check, ChevronLeft, ChevronRight, Download, RefreshCw, Sparkles } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Download, RefreshCw, Sparkles, Upload } from "lucide-react";
+import { motion } from "framer-motion";
+import AiUploadLanding from "../../_components/AiUploadLanding";
 import PortalSidebar from "../../_components/PortalSidebar";
 import PortalTopbar from "../../_components/PortalTopbar";
 import SubTabNav from "../../_components/SubTabNav";
@@ -34,6 +36,20 @@ function imageTileStyle(imageUrl: string): CSSProperties {
   };
 }
 
+const aiTabs = [
+  { href: "/ai-product-shoot", label: "Ghost Mannequin" },
+  { href: "/ai-product-shoot/model-try-on", label: "Model Try-on" },
+  { href: "/ai-product-shoot/model-swap", label: "Model Swap" }
+];
+
+const selectStyle = {
+  border: "1.5px solid #e5e5e5",
+  color: "#1a1a1a",
+  fontFamily: "inherit",
+  outline: "none",
+  background: "#fff",
+} as CSSProperties;
+
 export default function ModelSwapPage() {
   const [uploaded, setUploaded] = useState(false);
 
@@ -61,11 +77,6 @@ export default function ModelSwapPage() {
     () => faceLibrary.find((face) => face.id === selectedFaceId) ?? null,
     [faceLibrary, selectedFaceId]
   );
-  const aiTabs = [
-    { href: "/ai-product-shoot", label: "Ghost Mannequin" },
-    { href: "/ai-product-shoot/model-try-on", label: "Model Try-on" },
-    { href: "/ai-product-shoot/model-swap", label: "Model Swap" }
-  ];
 
   const resultCards: ResultCard[] = [
     { id: "original", title: "Original", enhanced: false, variant: "original", imageUrl: originalImageUrl || null },
@@ -91,36 +102,22 @@ export default function ModelSwapPage() {
       signal: controller.signal
     })
       .then((data) => {
-        if (!active) {
-          return;
-        }
-
+        if (!active) return;
         setFaceLibrary(data);
         setSelectedFaceId((current) => {
-          if (data.length === 0) {
-            return null;
-          }
-
-          if (current && data.some((item) => item.id === current)) {
-            return current;
-          }
-
+          if (data.length === 0) return null;
+          if (current && data.some((item) => item.id === current)) return current;
           return data[0].id;
         });
       })
       .catch((error: unknown) => {
-        if (!active || controller.signal.aborted) {
-          return;
-        }
-
+        if (!active || controller.signal.aborted) return;
         const message = error instanceof Error ? error.message : "Failed to load face library.";
         setErrorMessage(message);
         setFaceLibrary([]);
       })
       .finally(() => {
-        if (active) {
-          setLoadingFaces(false);
-        }
+        if (active) setLoadingFaces(false);
       });
 
     return () => {
@@ -150,17 +147,14 @@ export default function ModelSwapPage() {
       setErrorMessage("Open the app from Shopify Admin to connect this tool with the active store.");
       return;
     }
-
     if (!productGid.trim()) {
       setErrorMessage("Enter Shopify Product GID.");
       return;
     }
-
     if (!originalImageUrl.trim()) {
       setErrorMessage("Enter original image URL.");
       return;
     }
-
     if (!selectedFaceId) {
       setPickerOpen(true);
       setErrorMessage("Select a face model before generating.");
@@ -212,245 +206,487 @@ export default function ModelSwapPage() {
   };
 
   return (
-    <main className="portal-shell">
+    <div style={{ display: "flex", height: "100vh", overflow: "hidden", background: "#f6f4f4" }}>
       <PortalSidebar activeMain="ai" activeAi="model-swap" />
 
-      <section className="portal-main">
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto" }}>
         <PortalTopbar title="AI Product Shoot" subtitle="Swap the model in your existing product images" />
         <SubTabNav tabs={aiTabs} />
 
-        {!uploaded ? (
-          <section className="ai-stage-upload">
-            <article className="ai-upload-copy ai-swap-upload-copy">
-              <h3>
-                Transform Fashion Photos with
-                <br />
-                Premium <span>AI Model Swap</span>
-              </h3>
-              <p>Seamless, diverse, and customized visuals, perfect for any market.</p>
-              <div className="ai-upload-preview" aria-hidden />
-            </article>
-
-            <aside className="ai-upload-panel">
-              <p className="ai-upgrade-banner">
-                <Sparkles size={12} />
-                <span>Upgrade Your Visuals Now</span>
-              </p>
-
-              <div className="ai-upload-drop" aria-hidden>
-                <svg viewBox="0 0 24 24" role="img">
-                  <path
-                    d="M12 14V7M12 7L9 10M12 7L15 10M7 16.5H6.6C4.6 16.5 3 15 3 13C3 11 4.6 9.4 6.6 9.4C7.1 7 9.2 5.2 11.8 5.2C14.7 5.2 17 7.4 17.2 10.1C19.2 10.2 21 11.8 21 13.9C21 16.1 19.2 17.8 16.9 17.8H7"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="2"
-                  />
-                </svg>
-                <p>Click or drag image here</p>
+        <div style={{ flex: 1, overflow: "auto" }}>
+          {!uploaded ? (
+            <div style={{ padding: 24 }}>
+              <AiUploadLanding
+                headline={
+                  <>
+                    Transform Fashion Photos with Premium{" "}
+                    <span style={{ background: "linear-gradient(135deg, #7E0175 0%, #BC174A 55%, #E40206 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>
+                      AI Model Swap
+                    </span>
+                  </>
+                }
+                subtitle="Seamless, diverse, and customized visuals, perfect for any market."
+                videoSrc="/Model Swap.mp4"
+                onUpload={() => setUploaded(true)}
+              />
+            </div>
+          ) : !uploaded ? (
+            /* Upload landing */
+            <div className="flex gap-6 p-6 h-full">
+              {/* Left copy */}
+              <div className="flex-1 flex flex-col justify-center">
+                <span
+                  className="text-[11px] font-semibold px-2.5 py-1 rounded-full mb-4 inline-block w-fit"
+                  style={{ background: "rgba(126,1,117,0.08)", color: "#7E0175" }}
+                >
+                  ✦ AI-Powered
+                </span>
+                <h3 className="text-[28px] font-extrabold leading-tight mb-3" style={{ color: "#1a1a1a" }}>
+                  Transform Fashion Photos
+                  <br />
+                  with Premium
+                  <br />
+                  <span style={{ background: "linear-gradient(135deg, #7E0175 0%, #BC174A 55%, #E40206 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>
+                    AI Model Swap
+                  </span>
+                </h3>
+                <p className="text-[15px]" style={{ color: "#6b7280" }}>
+                  Seamless, diverse, and customized visuals, perfect for any market.
+                </p>
               </div>
 
-              <button type="button" className="ai-primary-btn" onClick={() => setUploaded(true)}>
-                Continue to model swap
-              </button>
+              {/* Right upload panel */}
+              <div
+                className="w-[320px] flex-shrink-0 bg-white rounded-[14px] p-5 flex flex-col gap-3"
+                style={{ boxShadow: "0 4px 24px rgba(0,0,0,0.08)", border: "1px solid rgba(0,0,0,0.05)" }}
+              >
+                <div
+                  className="text-[11px] font-semibold px-3 py-1.5 rounded-full text-center"
+                  style={{ background: "linear-gradient(135deg, #7E0175 0%, #BC174A 55%, #E40206 100%)", color: "#fff" }}
+                >
+                  ✦ Upgrade Your Visuals Now
+                </div>
 
-              <p className="ai-upload-note">
-                Use any product image from Shopify CDN,
-                <br />
-                then choose a face from the Optimo library
-              </p>
-            </aside>
-          </section>
-        ) : (
-          <section className="ai-stage-model-swap">
-            <aside className="ai-swap-panel">
-              <h3>Model Swap</h3>
-              <p>Product Image</p>
+                {/* Drop zone */}
+                <motion.div
+                  whileHover={{ y: -2, borderColor: "#7E0175" }}
+                  className="flex flex-col items-center justify-center gap-2 rounded-[14px] py-8 cursor-pointer"
+                  style={{
+                    border: "1.5px dashed rgba(126,1,117,0.25)",
+                    background: "rgba(126,1,117,0.02)",
+                    transition: "border-color 150ms",
+                  }}
+                >
+                  <div
+                    className="w-10 h-10 rounded-[10px] flex items-center justify-center"
+                    style={{ background: "rgba(126,1,117,0.08)" }}
+                  >
+                    <Upload size={18} style={{ color: "#7E0175" }} />
+                  </div>
+                  <p className="text-sm font-medium" style={{ color: "#6b7280" }}>
+                    Click or drag image here
+                  </p>
+                </motion.div>
 
-              <h4>Store context</h4>
-              <p className="ai-status-note">
-                {storeId ? "Connected to the current Shopify store." : "Open the app from Shopify Admin to load store context."}
-              </p>
+                <motion.button
+                  type="button"
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => setUploaded(true)}
+                  className="w-full py-2.5 rounded-[10px] text-sm font-semibold text-white"
+                  style={{ background: "linear-gradient(135deg, #7E0175 0%, #BC174A 55%, #E40206 100%)", border: "none", cursor: "pointer" }}
+                >
+                  Continue to model swap
+                </motion.button>
 
-              <h4>Shopify Product GID</h4>
-              <label className="ai-text-field">
-                <input
-                  aria-label="Shopify Product GID"
-                  value={productGid}
-                  onChange={(event) => setProductGid(event.target.value)}
-                  placeholder="gid://shopify/Product/1234567890"
-                  autoComplete="off"
-                />
-              </label>
+                <p className="text-xs text-center leading-relaxed" style={{ color: "#9ca3af" }}>
+                  Use any product image from Shopify CDN,
+                  <br />
+                  then choose a face from the Optimo library
+                </p>
+              </div>
+            </div>
+          ) : (
+            /* Working state */
+            <div className="flex gap-0 h-full">
+              {/* Left control panel */}
+              <div
+                className="w-[260px] flex-shrink-0 flex flex-col gap-4 p-5 overflow-auto"
+                style={{ borderRight: "1px solid #f0f0f0", background: "#ffffff" }}
+              >
+                <div>
+                  <h3 className="text-[15px] font-bold mb-0.5" style={{ color: "#1a1a1a" }}>Model Swap</h3>
+                  <p className="text-xs" style={{ color: "#9ca3af" }}>Product Image</p>
+                </div>
 
-              <h4>Original image URL</h4>
-              <label className="ai-text-field">
-                <input
-                  aria-label="Original image URL"
-                  value={originalImageUrl}
-                  onChange={(event) => setOriginalImageUrl(event.target.value)}
-                  placeholder="https://cdn.shopify.com/..."
-                  autoComplete="off"
-                />
-              </label>
+                {/* Store context */}
+                <div>
+                  <h4 className="text-[12px] font-semibold mb-1" style={{ color: "#6b7280" }}>Store context</h4>
+                  <p className="text-[11px] px-2.5 py-2 rounded-[8px]" style={{
+                    background: storeId ? "rgba(21,128,61,0.06)" : "rgba(220,38,38,0.06)",
+                    color: storeId ? "#15803d" : "#dc2626",
+                  }}>
+                    {storeId ? "Connected to the current Shopify store." : "Open the app from Shopify Admin to load store context."}
+                  </p>
+                </div>
 
-              <h4>Face model</h4>
-              <button type="button" className="ai-swap-face-trigger" onClick={openPicker}>
-                {selectedFace ? (
-                  <span className="ai-swap-face-thumb" style={imageTileStyle(selectedFace.image_url)} aria-hidden />
-                ) : (
-                  <span className="ai-swap-face-icon" aria-hidden>
-                    <svg viewBox="0 0 24 24" role="img">
-                      <rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8" />
-                      <circle cx="8.2" cy="9" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.8" />
-                      <path d="M5.5 17L10.4 12.2L13.3 14.9L16.2 12L18.5 14.4V17" fill="none" stroke="currentColor" strokeWidth="1.8" />
-                    </svg>
-                  </span>
+                {/* Product GID */}
+                <div>
+                  <h4 className="text-[12px] font-semibold mb-1.5" style={{ color: "#6b7280" }}>Shopify Product GID</h4>
+                  <input
+                    aria-label="Shopify Product GID"
+                    value={productGid}
+                    onChange={(e) => setProductGid(e.target.value)}
+                    placeholder="gid://shopify/Product/..."
+                    autoComplete="off"
+                    className="w-full text-xs px-3 py-2 rounded-[10px]"
+                    style={selectStyle}
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = "#7E0175";
+                      e.currentTarget.style.boxShadow = "0 0 0 3px rgba(126,1,117,0.1)";
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = "#e5e5e5";
+                      e.currentTarget.style.boxShadow = "none";
+                    }}
+                  />
+                </div>
+
+                {/* Original image URL */}
+                <div>
+                  <h4 className="text-[12px] font-semibold mb-1.5" style={{ color: "#6b7280" }}>Original image URL</h4>
+                  <input
+                    aria-label="Original image URL"
+                    value={originalImageUrl}
+                    onChange={(e) => setOriginalImageUrl(e.target.value)}
+                    placeholder="https://cdn.shopify.com/..."
+                    autoComplete="off"
+                    className="w-full text-xs px-3 py-2 rounded-[10px]"
+                    style={selectStyle}
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = "#7E0175";
+                      e.currentTarget.style.boxShadow = "0 0 0 3px rgba(126,1,117,0.1)";
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = "#e5e5e5";
+                      e.currentTarget.style.boxShadow = "none";
+                    }}
+                  />
+                </div>
+
+                {/* Face model trigger */}
+                <div>
+                  <h4 className="text-[12px] font-semibold mb-1.5" style={{ color: "#6b7280" }}>Face model</h4>
+                  <button
+                    type="button"
+                    onClick={openPicker}
+                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-[10px]"
+                    style={{
+                      border: "1.5px solid #e5e5e5",
+                      background: "#fafafa",
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                  >
+                    {selectedFace ? (
+                      <span
+                        className="w-9 h-9 rounded-[8px] flex-shrink-0"
+                        style={imageTileStyle(selectedFace.image_url)}
+                        aria-hidden
+                      />
+                    ) : (
+                      <span
+                        className="w-9 h-9 rounded-[8px] flex-shrink-0 flex items-center justify-center"
+                        style={{ background: "rgba(126,1,117,0.08)" }}
+                        aria-hidden
+                      >
+                        <svg viewBox="0 0 24 24" width={18} height={18} style={{ color: "#7E0175" }}>
+                          <rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8" />
+                          <circle cx="8.2" cy="9" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.8" />
+                          <path d="M5.5 17L10.4 12.2L13.3 14.9L16.2 12L18.5 14.4V17" fill="none" stroke="currentColor" strokeWidth="1.8" />
+                        </svg>
+                      </span>
+                    )}
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-[12px] font-semibold" style={{ color: "#1a1a1a" }}>Select face model</span>
+                      <span className="block text-[11px] truncate" style={{ color: "#9ca3af" }}>Choose from the Optimo face library</span>
+                    </span>
+                    <ChevronRight size={14} style={{ color: "#9ca3af", flexShrink: 0 }} />
+                  </button>
+                </div>
+
+                {/* Status / error */}
+                {statusMessage && (
+                  <p className="text-[11px] px-2.5 py-2 rounded-[8px]" style={{ background: "rgba(126,1,117,0.06)", color: "#7E0175" }}>
+                    {statusMessage}
+                  </p>
                 )}
-                <span className="ai-swap-face-copy">
-                  <strong>Select face model</strong>
-                  <span>Choose from the Optimo face library</span>
-                </span>
-                <span className="ai-swap-chevron" aria-hidden>
-                  <ChevronRight size={16} />
-                </span>
-              </button>
+                {errorMessage && (
+                  <p className="text-[11px] px-2.5 py-2 rounded-[8px]" style={{ background: "#fff1f1", color: "#dc2626" }}>
+                    {errorMessage}
+                  </p>
+                )}
 
-              <button type="button" className="ai-primary-btn ai-swap-generate-btn" onClick={generateResults} disabled={isGenerating}>
-                {isGenerating ? "Generating..." : "Generate"}
-              </button>
+                {/* Generate button */}
+                <motion.button
+                  type="button"
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={generateResults}
+                  disabled={isGenerating}
+                  className="w-full py-2.5 rounded-[10px] text-sm font-semibold text-white mt-auto"
+                  style={{
+                    background: "linear-gradient(135deg, #7E0175 0%, #BC174A 55%, #E40206 100%)",
+                    border: "none",
+                    cursor: isGenerating ? "not-allowed" : "pointer",
+                    opacity: isGenerating ? 0.7 : 1,
+                  }}
+                >
+                  <Sparkles size={14} style={{ display: "inline", marginRight: 6 }} />
+                  {isGenerating ? "Generating..." : "Generate"}
+                </motion.button>
+              </div>
 
-              {statusMessage ? <p className="ai-status-note">{statusMessage}</p> : null}
-              {errorMessage ? <p className="ai-error-note">{errorMessage}</p> : null}
-            </aside>
+              {/* Right area */}
+              <div className="flex-1 overflow-auto" style={{ background: "#f6f4f4" }}>
+                {pickerOpen ? (
+                  /* Face picker */
+                  <div className="flex flex-col h-full bg-white" style={{ maxWidth: "100%" }}>
+                    {/* Picker header */}
+                    <div
+                      className="flex items-center gap-3 px-5 py-4 flex-shrink-0"
+                      style={{ borderBottom: "1px solid #f0f0f0" }}
+                    >
+                      <button
+                        type="button"
+                        onClick={closePicker}
+                        aria-label="Back"
+                        className="w-8 h-8 rounded-[8px] flex items-center justify-center"
+                        style={{ background: "#f3f4f6", border: "none", cursor: "pointer" }}
+                      >
+                        <ChevronLeft size={16} style={{ color: "#6b7280" }} />
+                      </button>
+                      <div>
+                        <h3 className="text-[15px] font-bold" style={{ color: "#1a1a1a" }}>Select face model</h3>
+                        <p className="text-xs" style={{ color: "#9ca3af" }}>Optimo face library</p>
+                      </div>
+                    </div>
 
-            <section className="ai-swap-right">
-              {pickerOpen ? (
-                <section className="ai-swap-picker">
-                  <header className="ai-swap-picker-head">
-                    <button type="button" className="ai-swap-picker-back" onClick={closePicker} aria-label="Back">
-                      <ChevronLeft size={16} />
-                    </button>
-                  <div>
-                    <h3>Select face model</h3>
-                    <p>Optimo face library</p>
-                  </div>
-                </header>
-
-                  <div className="ai-swap-filters">
-                    <label className="ai-swap-filter">
-                      <select aria-label="Gender" value={faceGender} onChange={(event) => setFaceGender(event.target.value)}>
-                        <option value="female">Women</option>
-                        <option value="male">Men</option>
-                      </select>
-                    </label>
-                    <label className="ai-swap-filter">
-                      <select aria-label="Age" value={faceAge} onChange={(event) => setFaceAge(event.target.value)}>
-                        <option value="">Age</option>
-                        <option value="18-25">18-25</option>
-                        <option value="26-35">26-35</option>
-                        <option value="36-45">36-45</option>
-                        <option value="45+">45+</option>
-                      </select>
-                    </label>
-                    <label className="ai-swap-filter">
-                      <select aria-label="Skin" value={faceSkinTone} onChange={(event) => setFaceSkinTone(event.target.value)}>
-                        <option value="">Skin</option>
-                        <option value="fair">Fair</option>
-                        <option value="light">Light</option>
-                        <option value="medium">Medium</option>
-                        <option value="tan">Tan</option>
-                        <option value="dark">Dark</option>
-                      </select>
-                    </label>
-                  </div>
-
-                  <div className="ai-swap-face-list">
-                    <div className="ai-swap-face-grid">
-                      {loadingFaces ? <p className="ai-inline-note">Loading faces...</p> : null}
-                      {!loadingFaces && faceLibrary.length === 0 ? <p className="ai-inline-note">No faces returned for current filters.</p> : null}
-
-                      {faceLibrary.map((face) => (
-                        <button
-                          key={face.id}
-                          type="button"
-                          className={`ai-swap-face-tile${selectedFaceId === face.id ? " is-selected" : ""}`}
-                          onClick={() => selectFace(face.id)}
-                          aria-label={face.id}
+                    {/* Filters */}
+                    <div className="flex gap-3 px-5 py-3 flex-shrink-0" style={{ borderBottom: "1px solid #f0f0f0" }}>
+                      {[
+                        {
+                          label: "Gender",
+                          value: faceGender,
+                          onChange: setFaceGender,
+                          options: [
+                            { value: "female", label: "Women" },
+                            { value: "male", label: "Men" },
+                          ],
+                        },
+                        {
+                          label: "Age",
+                          value: faceAge,
+                          onChange: setFaceAge,
+                          options: [
+                            { value: "", label: "Age" },
+                            { value: "18-25", label: "18-25" },
+                            { value: "26-35", label: "26-35" },
+                            { value: "36-45", label: "36-45" },
+                            { value: "45+", label: "45+" },
+                          ],
+                        },
+                        {
+                          label: "Skin",
+                          value: faceSkinTone,
+                          onChange: setFaceSkinTone,
+                          options: [
+                            { value: "", label: "Skin" },
+                            { value: "fair", label: "Fair" },
+                            { value: "light", label: "Light" },
+                            { value: "medium", label: "Medium" },
+                            { value: "tan", label: "Tan" },
+                            { value: "dark", label: "Dark" },
+                          ],
+                        },
+                      ].map((filter) => (
+                        <select
+                          key={filter.label}
+                          aria-label={filter.label}
+                          value={filter.value}
+                          onChange={(e) => filter.onChange(e.target.value)}
+                          className="text-sm px-3 py-2 rounded-[10px]"
+                          style={selectStyle}
                         >
-                          <span style={imageTileStyle(face.image_url)} />
-                          {selectedFaceId === face.id ? (
-                            <i className="ai-swap-face-check" aria-hidden>
-                              <Check size={10} />
-                            </i>
-                          ) : null}
-                        </button>
+                          {filter.options.map((opt) => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
+                        </select>
+                      ))}
+                    </div>
+
+                    {/* Face grid */}
+                    <div className="flex-1 overflow-auto p-5">
+                      {loadingFaces && (
+                        <p className="text-sm" style={{ color: "#9ca3af" }}>Loading faces...</p>
+                      )}
+                      {!loadingFaces && faceLibrary.length === 0 && (
+                        <p className="text-sm" style={{ color: "#9ca3af" }}>No faces returned for current filters.</p>
+                      )}
+                      <div className="grid grid-cols-4 gap-3">
+                        {faceLibrary.map((face) => {
+                          const isSelected = selectedFaceId === face.id;
+                          return (
+                            <button
+                              key={face.id}
+                              type="button"
+                              onClick={() => selectFace(face.id)}
+                              aria-label={face.id}
+                              className="relative aspect-square rounded-[10px] overflow-hidden"
+                              style={{
+                                border: isSelected ? "2px solid transparent" : "1.5px solid #e5e5e5",
+                                background: isSelected
+                                  ? "linear-gradient(135deg, #7E0175, #E40206)"
+                                  : "#f3f4f6",
+                                padding: isSelected ? 2 : 0,
+                                cursor: "pointer",
+                              }}
+                            >
+                              <span
+                                className="block w-full h-full rounded-[8px]"
+                                style={imageTileStyle(face.image_url)}
+                              />
+                              {isSelected && (
+                                <span
+                                  className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full flex items-center justify-center"
+                                  style={{ background: "linear-gradient(135deg, #7E0175, #E40206)" }}
+                                  aria-hidden
+                                >
+                                  <Check size={10} color="white" />
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                ) : generated ? (
+                  /* Results grid */
+                  <div className="p-5">
+                    <div className="grid grid-cols-3 gap-4">
+                      {resultCards.map((card) => (
+                        <div
+                          key={card.id}
+                          className="bg-white rounded-[14px] overflow-hidden"
+                          style={{ boxShadow: "0 1px 3px rgba(0,0,0,0.04)", border: "1px solid rgba(0,0,0,0.05)" }}
+                        >
+                          <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid #f3f4f6" }}>
+                            <p className="text-[13px] font-medium" style={{ color: "#1a1a1a" }}>{card.title}</p>
+                            {card.enhanced && (
+                              <div className="flex gap-1">
+                                <button
+                                  type="button"
+                                  className="w-6 h-6 rounded-[6px] flex items-center justify-center"
+                                  style={{ background: "rgba(126,1,117,0.08)", border: "none", cursor: "pointer" }}
+                                >
+                                  <Download size={11} style={{ color: "#7E0175" }} />
+                                </button>
+                                <button
+                                  type="button"
+                                  className="w-6 h-6 rounded-[6px] flex items-center justify-center"
+                                  style={{ background: "rgba(126,1,117,0.08)", border: "none", cursor: "pointer" }}
+                                >
+                                  <RefreshCw size={11} style={{ color: "#7E0175" }} />
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                          <div
+                            className={`ai-result-image ai-result-image-${card.variant}`}
+                            aria-hidden
+                            style={{ minHeight: 200 }}
+                          >
+                            {card.imageUrl ? (
+                              <span
+                                className="block w-full h-full"
+                                style={{ ...imageTileStyle(card.imageUrl), minHeight: 200 }}
+                              />
+                            ) : (
+                              <span className="ai-model-figure">
+                                <span className="ai-model-head" />
+                                <span className="ai-model-torso" />
+                                <span className="ai-model-leg-left" />
+                                <span className="ai-model-leg-right" />
+                              </span>
+                            )}
+                          </div>
+                        </div>
                       ))}
                     </div>
                   </div>
-                </section>
-              ) : generated ? (
-                <div className="ai-results-grid ai-swap-results-grid">
-                  {resultCards.map((card) => (
-                    <article key={card.id} className="ai-result-card">
-                      <header>
-                        <p>{card.title}</p>
-                        {card.enhanced ? (
-                          <div className="ai-result-actions" aria-hidden>
-                            <button type="button">
-                              <Download size={11} />
-                            </button>
-                            <button type="button">
-                              <RefreshCw size={11} />
-                            </button>
-                          </div>
-                        ) : null}
-                      </header>
-
-                      <div className={`ai-result-image ai-result-image-${card.variant}`} aria-hidden>
-                        {card.imageUrl ? (
-                          <span className="ai-result-photo" style={imageTileStyle(card.imageUrl)} />
-                        ) : (
-                          <span className="ai-model-figure">
-                            <span className="ai-model-head" />
-                            <span className="ai-model-torso" />
-                            <span className="ai-model-leg-left" />
-                            <span className="ai-model-leg-right" />
-                          </span>
-                        )}
+                ) : (
+                  /* Placeholder grid */
+                  <div className="p-5">
+                    <div className="grid grid-cols-3 gap-4">
+                      {/* Original card */}
+                      <div
+                        className="bg-white rounded-[14px] overflow-hidden"
+                        style={{ boxShadow: "0 1px 3px rgba(0,0,0,0.04)", border: "1px solid rgba(0,0,0,0.05)" }}
+                      >
+                        <div className="px-4 py-3" style={{ borderBottom: "1px solid #f3f4f6" }}>
+                          <p className="text-[13px] font-medium" style={{ color: "#1a1a1a" }}>Original</p>
+                        </div>
+                        <div
+                          className="ai-result-image ai-result-image-original"
+                          aria-hidden
+                          style={{ minHeight: 200 }}
+                        >
+                          {originalImageUrl ? (
+                            <span
+                              className="block w-full h-full"
+                              style={{ ...imageTileStyle(originalImageUrl), minHeight: 200 }}
+                            />
+                          ) : (
+                            <span className="ai-model-figure">
+                              <span className="ai-model-head" />
+                              <span className="ai-model-torso" />
+                              <span className="ai-model-leg-left" />
+                              <span className="ai-model-leg-right" />
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    </article>
-                  ))}
-                </div>
-              ) : (
-                <div className="ai-swap-placeholder-grid">
-                  <article className="ai-result-card">
-                    <header>
-                      <p>Original</p>
-                    </header>
-                    <div className="ai-result-image ai-result-image-original" aria-hidden>
-                      {originalImageUrl ? (
-                        <span className="ai-result-photo" style={imageTileStyle(originalImageUrl)} />
-                      ) : (
-                        <span className="ai-model-figure">
-                          <span className="ai-model-head" />
-                          <span className="ai-model-torso" />
-                          <span className="ai-model-leg-left" />
-                          <span className="ai-model-leg-right" />
-                        </span>
-                      )}
+
+                      {/* Placeholder cards */}
+                      {[1, 2].map((i) => (
+                        <div
+                          key={i}
+                          className="bg-white rounded-[14px] overflow-hidden flex flex-col items-center justify-center"
+                          style={{
+                            boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
+                            border: "1.5px dashed rgba(126,1,117,0.2)",
+                            minHeight: 260,
+                          }}
+                          aria-hidden
+                        >
+                          <div
+                            className="w-10 h-10 rounded-[10px] flex items-center justify-center mb-2"
+                            style={{ background: "rgba(126,1,117,0.06)" }}
+                          >
+                            <Sparkles size={18} style={{ color: "#7E0175", opacity: 0.5 }} />
+                          </div>
+                          <p className="text-xs" style={{ color: "#d1d5db" }}>Awaiting generation</p>
+                        </div>
+                      ))}
                     </div>
-                  </article>
-                  <div className="ai-swap-placeholder-card" aria-hidden />
-                  <div className="ai-swap-placeholder-card" aria-hidden />
-                </div>
-              )}
-            </section>
-          </section>
-        )}
-      </section>
-    </main>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
-
