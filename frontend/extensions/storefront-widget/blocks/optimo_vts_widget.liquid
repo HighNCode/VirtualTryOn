@@ -3,8 +3,8 @@
   assign selected_variant = product.selected_or_first_available_variant
 %}
 
-{{ 'optimo-vts-widget.css' | asset_url | append: '?v=20260423-analytics-revamp' | stylesheet_tag }}
-<script src="{{ 'optimo-vts-widget.js' | asset_url | append: '?v=20260423-analytics-revamp' }}" defer></script>
+{{ 'optimo-vts-widget.css' | asset_url | append: '?v=20260510-widget-pose-inline' | stylesheet_tag }}
+<script src="{{ 'optimo-vts-widget.js' | asset_url | append: '?v=20260510-widget-pose-inline' }}" defer></script>
 
 {% if product != blank %}
   <div

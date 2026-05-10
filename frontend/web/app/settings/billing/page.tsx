@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { Check, CreditCard } from "lucide-react";
+import { Check } from "lucide-react";
 import PortalSidebar from "../../_components/PortalSidebar";
 import PortalTopbar from "../../_components/PortalTopbar";
 import SubTabNav from "../../_components/SubTabNav";
@@ -53,19 +53,6 @@ const settingsTabs = [
   { href: "/settings/privacy", label: "Privacy" },
   { href: "/settings/billing", label: "Billing" },
   { href: "/settings/support", label: "Support" },
-];
-
-const businessFeatures = [
-  "2,000 try-ons / month",
-  "Priority processing",
-  "Advanced analytics",
-  "Custom domain",
-];
-
-const billingHistoryRows = [
-  { date: "Apr 1, 2026", amount: "$49.00" },
-  { date: "Mar 1, 2026", amount: "$49.00" },
-  { date: "Feb 1, 2026", amount: "$49.00" },
 ];
 
 export default function SettingsBillingPage() {
@@ -172,13 +159,18 @@ export default function SettingsBillingPage() {
       : currentPlan.price_monthly
     : null;
   const currentIntervalLabel = billingStatus?.billing_interval === "annual" ? "month, billed annually" : "month";
-  const estimatedNextInvoice = (currentMonthlyPrice ?? 0) + (usageSummary?.overage_amount_usd ?? 0);
   const overagePrice = currentPlan?.overage_usd_per_tryon ?? businessPlan?.overage_usd_per_tryon ?? 0.01;
   const businessPrice = businessPlan
     ? billingCycle === "annual"
       ? businessPlan.price_annual_per_month
       : businessPlan.price_monthly
-    : 99;
+    : null;
+  const businessCredits = businessPlan
+    ? billingCycle === "annual"
+      ? businessPlan.credits_annual
+      : businessPlan.credits_monthly
+    : null;
+  const statusLabel = billingStatus?.subscription_status ?? (billingStatus?.plan_name ? "Active" : "Not connected");
 
   const handlePlanChange = async (plan: PlanConfigResponse) => {
     if (!storeId) {
@@ -251,7 +243,7 @@ export default function SettingsBillingPage() {
                 Current Plan
               </span>
               <span style={{ position: "absolute", top: 18, right: 20, padding: "3px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700, color: "#fff", background: "#b0006f" }}>
-                Active
+                {statusLabel}
               </span>
               <h3 style={{ margin: "8px 0 2px", fontSize: 22, fontWeight: 800, color: "#111827" }}>
                 {displayCurrentPlanName}
@@ -279,14 +271,14 @@ export default function SettingsBillingPage() {
 
               <div style={{ marginTop: 28, display: "flex", flexDirection: "column", gap: 7, fontSize: 14, color: "#5f6b85" }}>
                 <p style={{ margin: 0 }}>
-                  <strong style={{ color: "#111827" }}>{formatMoney(overagePrice, "USD")}</strong> per API call
+                  <strong style={{ color: "#111827" }}>{formatMoney(overagePrice, "USD")}</strong> per overage try-on
                 </p>
                 <p style={{ margin: 0 }}>
-                  <strong style={{ color: "#111827" }}>Current Usage:</strong> {usageUsedTotal.toLocaleString()} API calls this month
+                  <strong style={{ color: "#111827" }}>Consumed Credits:</strong> {usageUsedTotal.toLocaleString()} this cycle
                 </p>
                 <p style={{ margin: 0 }}>
-                  <strong style={{ color: "#111827" }}>Est. Next Invoice:</strong>{" "}
-                  <strong style={{ color: "#b0006f" }}>{formatMoney(estimatedNextInvoice, "USD")}</strong>
+                  <strong style={{ color: "#111827" }}>Current Overage:</strong>{" "}
+                  <strong style={{ color: "#b0006f" }}>{formatMoney(usageSummary?.overage_amount_usd ?? 0, "USD")}</strong>
                 </p>
               </div>
 
@@ -316,18 +308,33 @@ export default function SettingsBillingPage() {
               style={{ minHeight: 276, background: "#f4edf3", borderRadius: 12, padding: 20, border: "1px solid rgba(126,1,117,0.16)" }}
             >
               <span style={{ fontSize: 12, letterSpacing: 1, textTransform: "uppercase", color: "#5f6b85" }}>
-                Upgrade to {businessPlan?.display_name ?? "Business"}
+                {businessPlan ? `Upgrade to ${businessPlan.display_name}` : "Available Plans"}
               </span>
               <p style={{ margin: "18px 0 18px", fontSize: 14, color: "#5f6b85" }}>
                 <strong style={{ fontSize: 24, color: "#111827" }}>{formatMoney(businessPrice, "USD")}</strong> / month
               </p>
               <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 12 }}>
-                {businessFeatures.map((feature) => (
+                {businessPlan && (
+                  <li style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 14, color: "#111827" }}>
+                    <Check size={14} style={{ color: "#15803d", flexShrink: 0 }} />
+                    {businessCredits?.toLocaleString()} included credits
+                  </li>
+                )}
+                {businessPlan && (
+                  <li style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 14, color: "#111827" }}>
+                    <Check size={14} style={{ color: "#15803d", flexShrink: 0 }} />
+                    {formatMoney(businessPlan.overage_usd_per_tryon, "USD")} per overage try-on
+                  </li>
+                )}
+                {businessPlan?.features.map((feature) => (
                   <li key={feature} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 14, color: "#111827" }}>
                     <Check size={14} style={{ color: "#15803d", flexShrink: 0 }} />
                     {feature}
                   </li>
                 ))}
+                {!businessPlan && (
+                  <li style={{ fontSize: 14, color: "#5f6b85" }}>No active upgrade plan is configured.</li>
+                )}
               </ul>
               <button
                 type="button"
@@ -352,50 +359,22 @@ export default function SettingsBillingPage() {
             </motion.section>
           </div>
 
-          <section style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 20, background: "#fff", borderRadius: 12, padding: "20px 24px", boxShadow: "0 1px 3px rgba(0,0,0,0.06)", border: "1px solid rgba(0,0,0,0.06)" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-              <span style={{ width: 40, height: 40, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", background: "#f3f4f6", color: "#5f6b85" }}>
-                <CreditCard size={18} />
-              </span>
-              <div>
-                <p style={{ margin: "0 0 3px", fontSize: 14, fontWeight: 800, color: "#111827" }}>**** **** **** 4242</p>
-                <p style={{ margin: 0, fontSize: 12, color: "#5f6b85" }}>Expires 12/27</p>
-              </div>
-            </div>
-            <button
-              type="button"
-              style={{ padding: "11px 18px", borderRadius: 9, border: "1px solid #cbd5e1", background: "#fff", color: "#5f6b85", fontSize: 14, fontWeight: 700, cursor: "pointer" }}
-            >
-              Update Card
-            </button>
-          </section>
-
-          <section style={{ background: "#fff", borderRadius: 12, padding: "24px 20px", boxShadow: "0 1px 3px rgba(0,0,0,0.06)", border: "1px solid rgba(0,0,0,0.06)" }}>
-            <h3 style={{ margin: "0 0 22px", fontSize: 15, fontWeight: 800, color: "#111827" }}>
-              Billing History
+          <section style={{ background: "#fff", borderRadius: 12, padding: "22px 20px", boxShadow: "0 1px 3px rgba(0,0,0,0.06)", border: "1px solid rgba(0,0,0,0.06)" }}>
+            <h3 style={{ margin: "0 0 16px", fontSize: 15, fontWeight: 800, color: "#111827" }}>
+              Subscription Details
             </h3>
-            <div>
-              {billingHistoryRows.map((row) => (
-                <div
-                  key={row.date}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "1fr auto auto auto",
-                    alignItems: "center",
-                    gap: 14,
-                    minHeight: 40,
-                    borderTop: "1px solid #eef0f3",
-                    fontSize: 14,
-                  }}
-                >
-                  <span style={{ color: "#5f6b85" }}>{row.date}</span>
-                  <strong style={{ color: "#111827" }}>{row.amount}</strong>
-                  <span style={{ padding: "3px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700, background: "#dcfce7", color: "#15803d" }}>
-                    Paid
-                  </span>
-                  <button type="button" style={{ padding: 0, border: "none", background: "transparent", color: "#9a007f", fontSize: 13, cursor: "pointer" }}>
-                    Download
-                  </button>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 14 }}>
+              {[
+                { label: "Shopify Subscription", value: billingStatus?.shopify_subscription_id ?? "Not connected" },
+                { label: "Billing Interval", value: billingStatus?.billing_interval ?? "-" },
+                { label: "Current Period End", value: billingStatus?.current_period_end ? new Date(billingStatus.current_period_end).toLocaleString() : "-" },
+                { label: "Test Subscription", value: billingStatus?.is_test_subscription === null || billingStatus?.is_test_subscription === undefined ? "-" : billingStatus.is_test_subscription ? "Yes" : "No" },
+              ].map((item) => (
+                <div key={item.label} style={{ padding: 14, borderRadius: 10, background: "#fafafa", border: "1px solid #eef0f3", minWidth: 0 }}>
+                  <p style={{ margin: "0 0 6px", fontSize: 12, color: "#5f6b85" }}>{item.label}</p>
+                  <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {item.value}
+                  </p>
                 </div>
               ))}
             </div>
