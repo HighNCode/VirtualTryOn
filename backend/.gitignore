@@ -67,3 +67,5 @@ data/body_models/
 data/checkpoints/
 *.pt
 *.pth
+
+tests/

@@ -17,6 +17,10 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 
+class ShopifyManagedPricingError(Exception):
+    """Raised when Shopify rejects Billing API charge creation for managed-pricing apps."""
+
+
 class ShopifyService:
     """Service for interacting with Shopify API"""
 
@@ -715,6 +719,16 @@ class ShopifyService:
 
         if payload.get("userErrors"):
             errors = payload["userErrors"]
+            managed_pricing_error = next(
+                (
+                    (entry or {}).get("message", "")
+                    for entry in errors
+                    if "managed pricing apps cannot use the billing api" in str((entry or {}).get("message", "")).lower()
+                ),
+                None,
+            )
+            if managed_pricing_error:
+                raise ShopifyManagedPricingError(managed_pricing_error)
             raise Exception(f"Shopify billing error: {errors}")
 
         usage_line_item_id = None

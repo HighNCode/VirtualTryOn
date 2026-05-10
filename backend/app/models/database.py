@@ -4,7 +4,7 @@ All database tables for Virtual Try-On app
 """
 
 from sqlalchemy import (
-    Column, String, Integer, Float, Boolean, DateTime, Text,
+    Column, String, Integer, Float, Boolean, Date, DateTime, Text,
     ForeignKey, Index, UniqueConstraint, text, Numeric
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
@@ -63,6 +63,8 @@ class Store(Base, TimestampMixin):
     store_timezone = Column(String(64), nullable=True)  # IANA TZ, e.g. "America/New_York"
     has_usage_billing = Column(Boolean, nullable=False, default=False)
     usage_line_item_id = Column(String(255), nullable=True)
+    last_overage_settlement_local_date = Column(Date, nullable=True)
+    last_overage_settlement_at = Column(DateTime, nullable=True)
 
     # Relationships
     products = relationship("Product", back_populates="store", cascade="all, delete-orphan")
@@ -612,6 +614,7 @@ class UsageEvent(Base, TimestampMixin):
         Index("idx_usage_events_store_time", "store_id", "created_at"),
         Index("idx_usage_events_status", "status"),
         Index("idx_usage_events_ref", "reference_type", "reference_id"),
+        Index("idx_usage_events_unsettled_overage", "store_id", "status", "usage_charge_id", "created_at"),
     )
 
     event_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
