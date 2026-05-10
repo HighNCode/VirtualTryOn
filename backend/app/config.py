@@ -45,16 +45,37 @@ class Settings(BaseSettings):
     SHOPIFY_API_SECRET: Optional[str] = None
     SHOPIFY_SCOPES: str = "read_products,read_themes,write_products,write_script_tags"
     SHOPIFY_API_VERSION: str = "2024-01"
+    SHOPIFY_BILLING_MODE: str = "manual"  # manual | managed
     # Public-facing URL of the frontend (used to build OAuth redirect_uri).
     # In dev: set to the shopify app dev tunnel URL, e.g. https://abc123.trycloudflare.com
     # In production: set to https://optimo-virtual-try-on.vercel.app
     APP_URL: Optional[str] = None
+
+    # Image generation provider selection
+    IMAGE_PROVIDER: str = "gemini"  # gemini | replicate | seedream
 
     # Google Vertex AI (Gemini image generation)
     GOOGLE_CLOUD_PROJECT: Optional[str] = None
     GOOGLE_CLOUD_LOCATION: str = "us-central1"
     GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None   # Path to service account JSON
     TRYON_MODEL: str = "gemini-2.5-flash-image"               # Switchable via env var; must support image output
+
+    # Replicate
+    REPLICATE_API_TOKEN: Optional[str] = None
+    REPLICATE_MODEL: Optional[str] = None
+
+    # Seedream
+    SEEDREAM_API_KEY: Optional[str] = None
+    SEEDREAM_MODEL: Optional[str] = None
+    SEEDREAM_BASE_URL: str = "https://ark.cn-beijing.volces.com/api/v3"
+    SEEDREAM_TIMEOUT_SECONDS: int = 90
+
+    # Media storage (GCS)
+    MEDIA_STORAGE_BACKEND: str = "gcs"  # gcs
+    MEDIA_ARCHIVE_ENABLED: bool = False  # Deprecated compatibility toggle
+    GCS_BUCKET_NAME: Optional[str] = None
+    GCS_MEDIA_PREFIX: str = "v1"
+    GCS_SIGNED_URL_TTL_SECONDS: int = 900
 
     # Public URL (used to construct image URLs for Shopify productCreateMedia)
     PUBLIC_URL: str = "http://localhost:8000"
@@ -75,6 +96,11 @@ class Settings(BaseSettings):
     CREDITS_PER_GENERATION: int = 4
     # Fallback only when a plan row has no explicit overage_usd_per_tryon configured.
     OVERAGE_USD_PER_CREDIT: float = 0.035
+    OVERAGE_DAILY_THRESHOLD_USD: float = 10.0
+    OVERAGE_USAGE_CAP_USD: float = 10000.0
+    OVERAGE_SETTLEMENT_ENABLED: bool = True
+    OVERAGE_SETTLEMENT_INTERVAL_MINUTES: int = 15
+    OVERAGE_SETTLEMENT_LOCAL_TIME: str = "23:55"
 
     # Storefront proxy trust-chain
     WIDGET_PROXY_SHARED_SECRET: Optional[str] = None

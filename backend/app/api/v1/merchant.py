@@ -66,7 +66,7 @@ from app.models.schemas import (
     WidgetSessionCreateRequest,
 )
 from app.api.v1.sessions import create_or_resume_session_for_product
-from app.services.shopify_service import ShopifyService
+from app.services.shopify_service import ShopifyService, ShopifyManagedPricingError
 from app.services.customer_login_policy import (
     customer_login_required_message,
     is_customer_logged_in,
@@ -649,6 +649,19 @@ def _get_plan_or_404(plan_name: str, db: DBSession) -> Plan:
     return plan
 
 
+def _validate_manual_billing_mode() -> None:
+    billing_mode = (get_settings().SHOPIFY_BILLING_MODE or "manual").strip().lower()
+    if billing_mode != "manual":
+        raise HTTPException(
+            409,
+            (
+                "Backend billing mode is set to managed. /billing/create-subscription requires Shopify Manual "
+                "Billing API mode. In Partner Dashboard switch pricing to Manual billing with API, then set "
+                "SHOPIFY_BILLING_MODE=manual."
+            ),
+        )
+
+
 @merchant_router.post("/billing/activate", response_model=PlanResponse)
 def activate_billing(
     body: BillingActivateRequest,
@@ -883,6 +896,7 @@ async def create_subscription(
         raise HTTPException(422, "billing_interval must be 'monthly' or 'annual'")
 
     plan = _get_plan_or_404(body.plan_name, db)
+    _validate_manual_billing_mode()
 
     if body.plan_name == store.plan_name and body.billing_interval == store.billing_interval:
         raise HTTPException(409, f"Store is already on '{body.plan_name}' ({body.billing_interval})")
@@ -909,14 +923,31 @@ async def create_subscription(
             trial_days=trial_days,
             test=is_test,
             is_upgrade=is_upgrade,
-            usage_cap_usd=float(plan.usage_cap_usd),
+            usage_cap_usd=float(settings.OVERAGE_USAGE_CAP_USD),
             overage_terms=(
                 f"${float(plan.overage_usd_per_tryon):.3f} per AI generation "
                 f"({settings.CREDITS_PER_GENERATION} credits per generation)."
             ),
         )
+    except ShopifyManagedPricingError as exc:
+        logger.error("Managed pricing blocked Billing API for store %s: %s", store.store_id, exc)
+        raise HTTPException(
+            409,
+            (
+                "Shopify rejected Billing API charge creation because this app is currently on Managed Pricing. "
+                "Switch the app to Manual billing with API in Shopify Partner Dashboard, then retry."
+            ),
+        )
     except Exception as exc:
         logger.error(f"Shopify subscription create failed for store {store.store_id}: {exc}")
+        if "managed pricing apps cannot use the billing api" in str(exc).lower():
+            raise HTTPException(
+                409,
+                (
+                    "Shopify rejected Billing API charge creation because this app is currently on Managed Pricing. "
+                    "Switch the app to Manual billing with API in Shopify Partner Dashboard, then retry."
+                ),
+            )
         raise HTTPException(502, f"Failed to create Shopify subscription: {exc}")
 
     logger.info(

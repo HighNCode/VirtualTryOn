@@ -18,6 +18,7 @@ from app.models.schemas import MeasurementResponse
 from app.services.image_validator import ImageValidator
 from app.services.measurement_service import MeasurementService
 from app.services.cache_service import CacheService
+from app.services.media_archive_service import get_media_archive_service
 
 router = APIRouter(prefix="/measurements", tags=["Measurements"])
 logger = logging.getLogger(__name__)
@@ -233,6 +234,20 @@ async def extract_measurements(
 
         # Update session with measurement_id
         session.measurement_id = measurement.measurement_id
+
+        # Best-effort archival copy in private GCS.
+        archive_service = get_media_archive_service()
+        front_object_path = None
+        side_object_path = None
+        if archive_service.enabled:
+            front_object_path, side_object_path = archive_service.archive_customer_measurement_images(
+                store_id=str(session.store_id),
+                measurement_id=str(measurement.measurement_id),
+                front_image_bytes=front_data,
+                side_image_bytes=side_data,
+            )
+        measurement.front_image_object_path = front_object_path
+        measurement.side_image_object_path = side_object_path
 
         db.commit()
         db.refresh(measurement)

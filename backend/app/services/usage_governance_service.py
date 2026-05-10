@@ -249,34 +249,15 @@ class UsageGovernanceService:
             .with_for_update()
             .first()
         )
-        store = self.db.query(Store).filter_by(store_id=event.store_id).first()
-        if not cycle or not store:
+        if not cycle:
             return
 
         if reference_id:
             event.reference_id = reference_id
 
-        if event.overage_credits > 0 and event.overage_amount_usd > 0:
-            try:
-                usage_charge_id = await self._create_usage_charge(store=store, event=event)
-                event.usage_charge_id = usage_charge_id
-                event.billing_error_code = None
-                event.billing_error_message = None
-            except Exception as exc:
-                error_text = str(exc)
-                logger.error("Usage charge failed for event=%s: %s", event_id, error_text)
-
-                reason = "usage_charge_failed"
-                message = "Unable to post overage charge. Overage is temporarily blocked."
-                if "capped" in error_text.lower() or "cap" in error_text.lower():
-                    reason = "usage_cap_reached"
-                    message = "Usage billing cap reached. Increase cap to continue overage usage."
-
-                cycle.overage_blocked = True
-                cycle.overage_block_reason = reason
-                cycle.overage_block_message = message
-                event.billing_error_code = reason
-                event.billing_error_message = error_text[:1000]
+        # Usage charges are settled in a scheduled daily batch.
+        event.billing_error_code = None
+        event.billing_error_message = None
 
         event.status = "consumed"
         self.db.commit()
@@ -619,20 +600,6 @@ class UsageGovernanceService:
             return parsed.astimezone(timezone.utc).replace(tzinfo=None)
         except Exception:
             return None
-
-    async def _create_usage_charge(self, *, store: Store, event: UsageEvent) -> str:
-        amount = float(event.overage_amount_usd or 0)
-        if amount <= 0:
-            return ""
-
-        svc = ShopifyService(store.shopify_domain, require_shopify_access_token(store))
-        description = f"Optimo overage charge for {event.action_type} ({event.overage_credits} credits)"
-        result = await svc.billing_create_usage_charge(
-            usage_line_item_id=store.usage_line_item_id,
-            amount_usd=amount,
-            description=description,
-        )
-        return result["usage_record_id"]
 
     def _raise_usage_error(self, *, status_code: int, code: str, message: str, **extra) -> None:
         detail = {"code": code, "message": message}

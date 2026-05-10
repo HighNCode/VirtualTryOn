@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session as DBSession
 from app.core.database import get_db
 from app.models.database import PhotoshootModel, PhotoshootModelFace, GhostMannequinRef, Plan, Store
 from app.config import get_settings
+from app.services.media_storage_service import get_media_storage_service
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 logger = logging.getLogger(__name__)
@@ -69,7 +70,7 @@ async def upload_model_photos(
     """
     Upload one or more full-body model photos.
 
-    Saves each file to static/photoshoot/{gender}/ and creates a
+    Saves each file to private GCS and creates a
     photoshoot_models DB row. These images are served for both:
       - Customer studio look  (GET /tryon/studio-backgrounds)
       - Merchant AI photoshoot try-on (GET /merchant/photoshoot/models)
@@ -86,8 +87,9 @@ async def upload_model_photos(
     if not images:
         raise HTTPException(422, "No images provided")
 
-    gender_dir = os.path.join(STATIC_ROOT, "photoshoot", gender)
-    os.makedirs(gender_dir, exist_ok=True)
+    storage = get_media_storage_service()
+    if not storage.enabled:
+        raise HTTPException(500, "Media storage is not configured")
 
     created = []
     errors = []
@@ -106,18 +108,32 @@ async def upload_model_photos(
             continue
 
         safe_name = _safe_filename(original_name, ext)
-        dest_path, safe_name = _unique_dest(gender_dir, safe_name, ext)
+        object_path = storage.build_object_path(
+            relative_dir=f"admin/library/photoshoot_models/{gender}",
+            payload=image_data,
+            stem=os.path.splitext(safe_name)[0] or "model",
+        )
+        uploaded_path = storage.upload_bytes(
+            object_path=object_path,
+            payload=image_data,
+            metadata={
+                "flow": "admin",
+                "type": "photoshoot_model_library",
+                "gender": gender,
+            },
+        )
+        if not uploaded_path:
+            errors.append({"file": original_name, "error": "Failed to upload to media storage"})
+            continue
 
-        with open(dest_path, "wb") as f:
-            f.write(image_data)
-
-        # image_path stored relative to static/ root
+        # Keep legacy image_path format for compatibility/debug.
         relative_path = f"photoshoot/{gender}/{safe_name}"
         record = PhotoshootModel(
             gender=gender,
             age=age,
             body_type=body_type,
             image_path=relative_path,
+            object_path=uploaded_path,
             is_active=True,
         )
         db.add(record)
@@ -152,15 +168,17 @@ def list_model_photos(
     result = []
     for r in records:
         file_path = os.path.join(STATIC_ROOT, r.image_path)
+        file_exists = bool(r.object_path) or os.path.exists(file_path)
         result.append({
             "id": str(r.id),
             "gender": r.gender,
             "age": r.age,
             "body_type": r.body_type,
             "image_path": r.image_path,
+            "object_path": r.object_path,
             "is_active": r.is_active,
             "image_url": f"/api/v1/merchant/photoshoot/models/{r.id}/image",
-            "file_exists": os.path.exists(file_path),
+            "file_exists": file_exists,
             "created_at": r.created_at.isoformat(),
         })
 
@@ -203,20 +221,31 @@ def delete_model_photo(
         raise HTTPException(404, "Model photo not found")
 
     image_path = record.image_path
+    object_path = record.object_path
     file_path = os.path.join(STATIC_ROOT, image_path)
 
     db.delete(record)
     db.commit()
 
     file_deleted = False
-    if delete_file and os.path.exists(file_path):
-        os.remove(file_path)
-        file_deleted = True
-        logger.info(f"Model photo file deleted: {file_path}")
+    if delete_file:
+        storage = get_media_storage_service()
+        if object_path and storage.enabled:
+            file_deleted = storage.delete_object(object_path)
+        elif os.path.exists(file_path):
+            os.remove(file_path)
+            file_deleted = True
+            logger.info(f"Model photo file deleted: {file_path}")
 
     logger.info(f"Model photo DB record deleted: {photo_id}")
 
-    return {"deleted": True, "id": photo_id, "image_path": image_path, "file_deleted": file_deleted}
+    return {
+        "deleted": True,
+        "id": photo_id,
+        "image_path": image_path,
+        "object_path": object_path,
+        "file_deleted": file_deleted,
+    }
 
 
 # ─────────────────────────────────────────────────────────────
@@ -235,7 +264,7 @@ async def upload_model_faces(
     """
     Upload one or more face/headshot photos for the model swap library.
 
-    Saves to static/photoshoot_faces/{gender}/ and creates a
+    Saves to private GCS and creates a
     photoshoot_model_faces DB row per file.
 
     Headers:
@@ -250,8 +279,9 @@ async def upload_model_faces(
     if not images:
         raise HTTPException(422, "No images provided")
 
-    gender_dir = os.path.join(STATIC_ROOT, "photoshoot_faces", gender)
-    os.makedirs(gender_dir, exist_ok=True)
+    storage = get_media_storage_service()
+    if not storage.enabled:
+        raise HTTPException(500, "Media storage is not configured")
 
     created = []
     errors = []
@@ -270,10 +300,23 @@ async def upload_model_faces(
             continue
 
         safe_name = _safe_filename(original_name, ext)
-        dest_path, safe_name = _unique_dest(gender_dir, safe_name, ext)
-
-        with open(dest_path, "wb") as f:
-            f.write(image_data)
+        object_path = storage.build_object_path(
+            relative_dir=f"admin/library/photoshoot_faces/{gender}",
+            payload=image_data,
+            stem=os.path.splitext(safe_name)[0] or "face",
+        )
+        uploaded_path = storage.upload_bytes(
+            object_path=object_path,
+            payload=image_data,
+            metadata={
+                "flow": "admin",
+                "type": "photoshoot_face_library",
+                "gender": gender,
+            },
+        )
+        if not uploaded_path:
+            errors.append({"file": original_name, "error": "Failed to upload to media storage"})
+            continue
 
         relative_path = f"photoshoot_faces/{gender}/{safe_name}"
         record = PhotoshootModelFace(
@@ -281,6 +324,7 @@ async def upload_model_faces(
             age=age,
             skin_tone=skin_tone,
             image_path=relative_path,
+            object_path=uploaded_path,
             is_active=True,
         )
         db.add(record)
@@ -315,15 +359,17 @@ def list_model_faces(
     result = []
     for r in records:
         file_path = os.path.join(STATIC_ROOT, r.image_path)
+        file_exists = bool(r.object_path) or os.path.exists(file_path)
         result.append({
             "id": str(r.id),
             "gender": r.gender,
             "age": r.age,
             "skin_tone": r.skin_tone,
             "image_path": r.image_path,
+            "object_path": r.object_path,
             "is_active": r.is_active,
             "image_url": f"/api/v1/merchant/photoshoot/model-faces/{r.id}/image",
-            "file_exists": os.path.exists(file_path),
+            "file_exists": file_exists,
             "created_at": r.created_at.isoformat(),
         })
 
@@ -360,19 +406,30 @@ def delete_model_face(
         raise HTTPException(404, "Model face not found")
 
     image_path = record.image_path
+    object_path = record.object_path
     file_path = os.path.join(STATIC_ROOT, image_path)
 
     db.delete(record)
     db.commit()
 
     file_deleted = False
-    if delete_file and os.path.exists(file_path):
-        os.remove(file_path)
-        file_deleted = True
+    if delete_file:
+        storage = get_media_storage_service()
+        if object_path and storage.enabled:
+            file_deleted = storage.delete_object(object_path)
+        elif os.path.exists(file_path):
+            os.remove(file_path)
+            file_deleted = True
 
     logger.info(f"Model face deleted: {face_id} (file_deleted={file_deleted})")
 
-    return {"deleted": True, "id": face_id, "image_path": image_path, "file_deleted": file_deleted}
+    return {
+        "deleted": True,
+        "id": face_id,
+        "image_path": image_path,
+        "object_path": object_path,
+        "file_deleted": file_deleted,
+    }
 
 
 # ─────────────────────────────────────────────────────────────
@@ -394,7 +451,7 @@ async def upload_ghost_mannequin_ref(
     If a DB record already exists for this clothing_type + pose combination,
     the file is overwritten and the DB record updated (upsert).
 
-    Saves to static/ghost_mannequin/{clothing_type}/{pose}{ext}.
+    Saves to private GCS and upserts one DB row per clothing_type + pose.
 
     Headers:
         X-Admin-Key: <ADMIN_API_KEY from .env>
@@ -412,23 +469,41 @@ async def upload_ghost_mannequin_ref(
     if not image_data:
         raise HTTPException(422, "Image file is empty")
 
-    type_dir = os.path.join(STATIC_ROOT, "ghost_mannequin", clothing_type)
-    os.makedirs(type_dir, exist_ok=True)
+    storage = get_media_storage_service()
+    if not storage.enabled:
+        raise HTTPException(500, "Media storage is not configured")
 
     filename = f"{pose}{ext}"
-    dest_path = os.path.join(type_dir, filename)
-    with open(dest_path, "wb") as f:
-        f.write(image_data)
-
     relative_path = f"ghost_mannequin/{clothing_type}/{filename}"
+    object_path = storage.build_object_path(
+        relative_dir=f"admin/library/ghost_refs/{clothing_type}/{pose}",
+        payload=image_data,
+        stem="reference",
+    )
+    uploaded_path = storage.upload_bytes(
+        object_path=object_path,
+        payload=image_data,
+        metadata={
+            "flow": "admin",
+            "type": "ghost_reference_library",
+            "clothing_type": clothing_type,
+            "pose": pose,
+        },
+    )
+    if not uploaded_path:
+        raise HTTPException(500, "Failed to upload to media storage")
 
     # Upsert — one canonical record per clothing_type + pose
     existing = db.query(GhostMannequinRef).filter_by(
         clothing_type=clothing_type, pose=pose
     ).first()
     if existing:
+        old_object_path = existing.object_path
         existing.image_path = relative_path
+        existing.object_path = uploaded_path
         db.commit()
+        if old_object_path and old_object_path != uploaded_path:
+            storage.delete_object(old_object_path)
         record_id = str(existing.id)
         action = "updated"
     else:
@@ -436,6 +511,7 @@ async def upload_ghost_mannequin_ref(
             clothing_type=clothing_type,
             pose=pose,
             image_path=relative_path,
+            object_path=uploaded_path,
         )
         db.add(record)
         db.commit()
@@ -449,6 +525,7 @@ async def upload_ghost_mannequin_ref(
         "clothing_type": clothing_type,
         "pose": pose,
         "image_path": relative_path,
+        "object_path": uploaded_path,
         "image_url": f"/api/v1/merchant/photoshoot/ghost-mannequin-refs/{record_id}/image",
         "action": action,
     }
@@ -467,13 +544,15 @@ def list_ghost_mannequin_refs(
     result = []
     for r in records:
         file_path = os.path.join(STATIC_ROOT, r.image_path)
+        file_exists = bool(r.object_path) or os.path.exists(file_path)
         result.append({
             "id": str(r.id),
             "clothing_type": r.clothing_type,
             "pose": r.pose,
             "image_path": r.image_path,
+            "object_path": r.object_path,
             "image_url": f"/api/v1/merchant/photoshoot/ghost-mannequin-refs/{r.id}/image",
-            "file_exists": os.path.exists(file_path),
+            "file_exists": file_exists,
             "created_at": r.created_at.isoformat(),
         })
 

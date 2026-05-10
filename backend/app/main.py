@@ -13,6 +13,10 @@ import structlog
 from app.config import get_settings
 from app.core.database import check_db_connection
 from app.core.redis import check_redis_connection
+from app.services.overage_settlement_scheduler import (
+    start_overage_settlement_scheduler,
+    stop_overage_settlement_scheduler,
+)
 
 # Import API routers
 from app.api.v1 import auth, products, webhooks, sessions, measurements, recommendations, heatmap, tryon, admin, merchant, photoshoot, analytics
@@ -164,6 +168,8 @@ async def startup_event():
     else:
         logger.error("redis_connection_failed", status="error")
 
+    start_overage_settlement_scheduler()
+
 
 # Shutdown event
 @app.on_event("shutdown")
@@ -176,6 +182,7 @@ async def shutdown_event():
         app_name=settings.APP_NAME,
         environment=settings.APP_ENV
     )
+    stop_overage_settlement_scheduler()
 
 
 # Global exception handler
