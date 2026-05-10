@@ -18,12 +18,11 @@ from fastapi import (
     APIRouter, Depends, HTTPException,
     BackgroundTasks, UploadFile, File, Form, Query
 )
-from fastapi.responses import Response
+from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.orm import Session as DBSession
 
 from app.api.store_context import get_current_merchant_store, require_shopify_access_token
 from app.core.database import get_db
-from app.config import get_settings
 from app.models.database import Store, PhotoshootJob, PhotoshootModel, PhotoshootModelFace, GhostMannequinRef
 from app.models.schemas import (
     GhostMannequinRequest,
@@ -35,9 +34,9 @@ from app.models.schemas import (
     PhotoshootApproveResponse,
 )
 from app.services.cache_service import CacheService
+from app.services.media_storage_service import get_media_storage_service
 from app.services.usage_governance_service import UsageGovernanceService
 
-settings = get_settings()
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/merchant/photoshoot", tags=["AI Photoshoot"])
@@ -66,6 +65,19 @@ def _read_static_image(image_path: str) -> bytes:
 
 def _media_type(image_path: str) -> str:
     return "image/jpeg" if image_path.lower().endswith((".jpg", ".jpeg")) else "image/png"
+
+
+def _read_library_image(*, object_path: Optional[str], image_path: Optional[str]) -> bytes:
+    """Load library image bytes from GCS object path with static fallback."""
+    storage = get_media_storage_service()
+    if object_path and storage.enabled:
+        payload = storage.download_bytes(object_path)
+        if payload:
+            return payload
+
+    if not image_path:
+        raise HTTPException(404, "Image file not found")
+    return _read_static_image(image_path)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -148,8 +160,27 @@ def _run_photoshoot_job(
         )
         loop.close()
 
+        storage = get_media_storage_service()
+        output_object_path = None
+        if storage.enabled:
+            output_path = storage.build_object_path(
+                relative_dir=f"stores/{job.store_id}/photoshoot/{job_type}/{job_id}/output",
+                payload=result_bytes,
+                stem="output",
+            )
+            output_object_path = storage.upload_bytes(
+                object_path=output_path,
+                payload=result_bytes,
+                metadata={
+                    "flow": "merchant",
+                    "type": "photoshoot_output",
+                    "job_type": job_type,
+                },
+            )
+
         job.processing_status = "completed"
         job.result_cache_key = cache_key
+        job.output_object_path = output_object_path
         job.processing_time_seconds = round(elapsed, 2)
         job.completed_at = datetime.utcnow()
         db.commit()
@@ -239,12 +270,18 @@ async def get_photoshoot_model_image(
     model_id: str,
     db: DBSession = Depends(get_db),
 ):
-    """Serve a photoshoot model photo from static files (no auth)."""
+    """Serve a photoshoot model photo via short-lived signed URL."""
     model = db.query(PhotoshootModel).filter_by(id=model_id, is_active=True).first()
     if not model:
         raise HTTPException(404, "Model not found")
 
-    image_bytes = _read_static_image(model.image_path)
+    storage = get_media_storage_service()
+    if model.object_path and storage.enabled:
+        signed_url = storage.generate_signed_get_url(model.object_path)
+        if signed_url:
+            return RedirectResponse(url=signed_url, status_code=307)
+
+    image_bytes = _read_library_image(object_path=None, image_path=model.image_path)
     return Response(content=image_bytes, media_type=_media_type(model.image_path))
 
 
@@ -293,12 +330,18 @@ async def get_model_face_image(
     face_id: str,
     db: DBSession = Depends(get_db),
 ):
-    """Serve a face/headshot photo from static files (no auth)."""
+    """Serve a face/headshot photo via short-lived signed URL."""
     face = db.query(PhotoshootModelFace).filter_by(id=face_id, is_active=True).first()
     if not face:
         raise HTTPException(404, "Model face not found")
 
-    image_bytes = _read_static_image(face.image_path)
+    storage = get_media_storage_service()
+    if face.object_path and storage.enabled:
+        signed_url = storage.generate_signed_get_url(face.object_path)
+        if signed_url:
+            return RedirectResponse(url=signed_url, status_code=307)
+
+    image_bytes = _read_library_image(object_path=None, image_path=face.image_path)
     return Response(content=image_bytes, media_type=_media_type(face.image_path))
 
 
@@ -338,12 +381,18 @@ async def get_ghost_mannequin_ref_image(
     ref_id: str,
     db: DBSession = Depends(get_db),
 ):
-    """Serve a ghost mannequin reference image from static files (no auth)."""
+    """Serve a ghost mannequin reference image via short-lived signed URL."""
     ref = db.query(GhostMannequinRef).filter_by(id=ref_id).first()
     if not ref:
         raise HTTPException(404, "Ghost mannequin reference not found")
 
-    image_bytes = _read_static_image(ref.image_path)
+    storage = get_media_storage_service()
+    if ref.object_path and storage.enabled:
+        signed_url = storage.generate_signed_get_url(ref.object_path)
+        if signed_url:
+            return RedirectResponse(url=signed_url, status_code=307)
+
+    image_bytes = _read_library_image(object_path=None, image_path=ref.image_path)
     return Response(content=image_bytes, media_type=_media_type(ref.image_path))
 
 
@@ -397,12 +446,39 @@ async def start_ghost_mannequin(
         usage_event_id = reservation.event_id
 
         job_id = uuid.uuid4()
+        storage = get_media_storage_service()
+        input1_object_path = None
+        input2_object_path = None
+        if storage.enabled:
+            input1_path = storage.build_object_path(
+                relative_dir=f"stores/{store.store_id}/photoshoot/ghost_mannequin/{job_id}/inputs/1",
+                payload=img1.content,
+                stem="input1",
+            )
+            input2_path = storage.build_object_path(
+                relative_dir=f"stores/{store.store_id}/photoshoot/ghost_mannequin/{job_id}/inputs/2",
+                payload=img2.content,
+                stem="input2",
+            )
+            input1_object_path = storage.upload_bytes(
+                object_path=input1_path,
+                payload=img1.content,
+                metadata={"flow": "merchant", "type": "photoshoot_input", "job_type": "ghost_mannequin"},
+            )
+            input2_object_path = storage.upload_bytes(
+                object_path=input2_path,
+                payload=img2.content,
+                metadata={"flow": "merchant", "type": "photoshoot_input", "job_type": "ghost_mannequin"},
+            )
+
         job = PhotoshootJob(
             job_id=job_id,
             store_id=store.store_id,
             job_type="ghost_mannequin",
             shopify_product_gid=request.shopify_product_gid,
             processing_status="queued",
+            input1_object_path=input1_object_path,
+            input2_object_path=input2_object_path,
         )
         db.add(job)
         db.commit()
@@ -480,7 +556,10 @@ async def start_try_on_model(
             ).first()
             if not model_record:
                 raise HTTPException(404, "Model not found in library")
-            model_bytes = _read_static_image(model_record.image_path)
+            model_bytes = _read_library_image(
+                object_path=model_record.object_path,
+                image_path=model_record.image_path,
+            )
         else:
             model_bytes = await photo_upload.read()
             if not model_bytes:
@@ -497,12 +576,39 @@ async def start_try_on_model(
         usage_event_id = reservation.event_id
 
         job_id = uuid.uuid4()
+        storage = get_media_storage_service()
+        input1_object_path = None
+        input2_object_path = None
+        if storage.enabled:
+            input1_path = storage.build_object_path(
+                relative_dir=f"stores/{store.store_id}/photoshoot/try_on_model/{job_id}/inputs/1",
+                payload=product_bytes,
+                stem="input1",
+            )
+            input2_path = storage.build_object_path(
+                relative_dir=f"stores/{store.store_id}/photoshoot/try_on_model/{job_id}/inputs/2",
+                payload=model_bytes,
+                stem="input2",
+            )
+            input1_object_path = storage.upload_bytes(
+                object_path=input1_path,
+                payload=product_bytes,
+                metadata={"flow": "merchant", "type": "photoshoot_input", "job_type": "try_on_model"},
+            )
+            input2_object_path = storage.upload_bytes(
+                object_path=input2_path,
+                payload=model_bytes,
+                metadata={"flow": "merchant", "type": "photoshoot_input", "job_type": "try_on_model"},
+            )
+
         job = PhotoshootJob(
             job_id=job_id,
             store_id=store.store_id,
             job_type="try_on_model",
             shopify_product_gid=shopify_product_gid,
             processing_status="queued",
+            input1_object_path=input1_object_path,
+            input2_object_path=input2_object_path,
         )
         db.add(job)
         db.commit()
@@ -582,7 +688,10 @@ async def start_model_swap(
             ).first()
             if not face_record:
                 raise HTTPException(404, "Face not found in library")
-            face_bytes = _read_static_image(face_record.image_path)
+            face_bytes = _read_library_image(
+                object_path=face_record.object_path,
+                image_path=face_record.image_path,
+            )
         else:
             face_bytes = await face_image.read()
             if not face_bytes:
@@ -599,12 +708,39 @@ async def start_model_swap(
         usage_event_id = reservation.event_id
 
         job_id = uuid.uuid4()
+        storage = get_media_storage_service()
+        input1_object_path = None
+        input2_object_path = None
+        if storage.enabled:
+            input1_path = storage.build_object_path(
+                relative_dir=f"stores/{store.store_id}/photoshoot/model_swap/{job_id}/inputs/1",
+                payload=original_bytes,
+                stem="input1",
+            )
+            input2_path = storage.build_object_path(
+                relative_dir=f"stores/{store.store_id}/photoshoot/model_swap/{job_id}/inputs/2",
+                payload=face_bytes,
+                stem="input2",
+            )
+            input1_object_path = storage.upload_bytes(
+                object_path=input1_path,
+                payload=original_bytes,
+                metadata={"flow": "merchant", "type": "photoshoot_input", "job_type": "model_swap"},
+            )
+            input2_object_path = storage.upload_bytes(
+                object_path=input2_path,
+                payload=face_bytes,
+                metadata={"flow": "merchant", "type": "photoshoot_input", "job_type": "model_swap"},
+            )
+
         job = PhotoshootJob(
             job_id=job_id,
             store_id=store.store_id,
             job_type="model_swap",
             shopify_product_gid=shopify_product_gid,
             processing_status="queued",
+            input1_object_path=input1_object_path,
+            input2_object_path=input2_object_path,
         )
         db.add(job)
         db.commit()
@@ -679,10 +815,16 @@ async def get_job_result(
 
     cache = CacheService()
     image_bytes = await cache.get_photoshoot_result(job_id)
-    if not image_bytes:
-        raise HTTPException(410, "Result image has expired from cache (24h TTL). Please regenerate.")
+    if image_bytes:
+        return Response(content=image_bytes, media_type="image/jpeg")
 
-    return Response(content=image_bytes, media_type="image/jpeg")
+    storage = get_media_storage_service()
+    if job.output_object_path and storage.enabled:
+        signed_url = storage.generate_signed_get_url(job.output_object_path)
+        if signed_url:
+            return RedirectResponse(url=signed_url, status_code=307)
+
+    raise HTTPException(410, "Result image has expired from cache. Please regenerate.")
 
 
 @router.post("/jobs/{job_id}/approve", response_model=PhotoshootApproveResponse)
@@ -714,16 +856,33 @@ async def approve_job(
     if job.approved_at:
         raise HTTPException(409, "Job has already been approved and pushed to Shopify.")
 
-    cache = CacheService()
-    image_bytes = await cache.get_photoshoot_result(job_id)
-    if not image_bytes:
-        raise HTTPException(
-            410,
-            "Result image has expired from cache (24h TTL). Please regenerate before approving."
-        )
+    storage = get_media_storage_service()
+    if not storage.enabled:
+        raise HTTPException(500, "Media storage is not configured")
 
-    public_url = settings.PUBLIC_URL.rstrip("/")
-    result_url = f"{public_url}/api/v1/merchant/photoshoot/jobs/{job_id}/result"
+    if not job.output_object_path:
+        cache = CacheService()
+        image_bytes = await cache.get_photoshoot_result(job_id)
+        if not image_bytes:
+            raise HTTPException(
+                410,
+                "Result image has expired from cache. Please regenerate before approving.",
+            )
+        output_path = storage.build_object_path(
+            relative_dir=f"stores/{store.store_id}/photoshoot/{job.job_type}/{job_id}/output",
+            payload=image_bytes,
+            stem="output",
+        )
+        job.output_object_path = storage.upload_bytes(
+            object_path=output_path,
+            payload=image_bytes,
+            metadata={"flow": "merchant", "type": "photoshoot_output", "job_type": job.job_type},
+        )
+        db.commit()
+
+    result_url = storage.generate_signed_get_url(job.output_object_path)
+    if not result_url:
+        raise HTTPException(500, "Failed to generate signed URL for Shopify media upload")
     alt_text = request.alt_text or f"AI generated {job.job_type.replace('_', ' ')} image"
 
     try:

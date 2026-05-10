@@ -214,6 +214,8 @@ class UserMeasurement(Base, TimestampMixin):
     gender = Column(String(10))  # 'male', 'female', 'unisex'
     body_type = Column(String(20))  # 'slim', 'average', 'athletic', 'heavy'
     confidence_score = Column(Float)
+    front_image_object_path = Column(String(500), nullable=True)
+    side_image_object_path = Column(String(500), nullable=True)
 
     # Relationships
     session = relationship("Session", foreign_keys=[session_id])
@@ -305,6 +307,7 @@ class TryOn(Base, TimestampMixin):
     product_id = Column(UUID(as_uuid=True), ForeignKey('products.product_id', ondelete='CASCADE'), nullable=False)
     processing_status = Column(String(20), default='queued')  # 'queued', 'processing', 'completed', 'failed'
     result_cache_key = Column(String(200))  # Redis key for result image
+    result_object_path = Column(String(500), nullable=True)  # Private archival object path (GCS)
     processing_time_seconds = Column(Float)
     error_message = Column(Text)
     completed_at = Column(DateTime)
@@ -424,6 +427,7 @@ class PhotoshootModel(Base, TimestampMixin):
     age = Column(String(10), nullable=True)            # "18-25" | "26-35" | "36-45" | "45+"
     body_type = Column(String(20), nullable=True)      # "slim" | "athletic" | "regular" | "plus"
     image_path = Column(String(300), nullable=False)   # Relative to static/: "photoshoot/female/model_1.jpg"
+    object_path = Column(String(500), nullable=True)   # Durable object path in GCS
     is_active = Column(Boolean, default=True)
 
     def __repr__(self):
@@ -442,6 +446,7 @@ class PhotoshootModelFace(Base, TimestampMixin):
     age = Column(String(10), nullable=True)            # "18-25" | "26-35" | "36-45" | "45+"
     skin_tone = Column(String(10), nullable=True)      # "fair" | "light" | "medium" | "tan" | "dark"
     image_path = Column(String(300), nullable=False)   # Relative to static/: "photoshoot_faces/female/face_1.jpg"
+    object_path = Column(String(500), nullable=True)   # Durable object path in GCS
     is_active = Column(Boolean, default=True)
 
     def __repr__(self):
@@ -461,6 +466,7 @@ class GhostMannequinRef(Base, TimestampMixin):
     clothing_type = Column(String(20), nullable=False)  # "tops" | "bottoms" | "dresses" | "outerwear"
     pose = Column(String(10), nullable=False)            # "front" | "side" | "back"
     image_path = Column(String(300), nullable=False)     # "ghost_mannequin/tops/front.jpg"
+    object_path = Column(String(500), nullable=True)     # Durable object path in GCS
 
     def __repr__(self):
         return f"<GhostMannequinRef {self.clothing_type}/{self.pose}>"
@@ -485,6 +491,9 @@ class PhotoshootJob(Base, TimestampMixin):
     processing_status = Column(String(20), default='queued', nullable=False)
     # values: 'queued' | 'processing' | 'completed' | 'failed'
     result_cache_key = Column(String(200), nullable=True)   # Redis key for result image
+    input1_object_path = Column(String(500), nullable=True)
+    input2_object_path = Column(String(500), nullable=True)
+    output_object_path = Column(String(500), nullable=True)
     processing_time_seconds = Column(Float, nullable=True)
     error_message = Column(Text, nullable=True)
     completed_at = Column(DateTime, nullable=True)

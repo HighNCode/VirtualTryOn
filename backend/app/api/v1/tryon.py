@@ -6,12 +6,13 @@ Generates try-on images using Google Gemini (nano-banana) API
 import uuid
 import time
 import logging
+import os
 from datetime import datetime, timedelta
 from io import BytesIO
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Depends, Header, BackgroundTasks, Request
-from fastapi.responses import Response
+from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.orm import Session as DBSession
 from PIL import Image
 
@@ -25,6 +26,8 @@ from app.models.schemas import (
     StudioBackgroundResponse, StudioTryOnRequest,
 )
 from app.services.cache_service import CacheService
+from app.services.media_archive_service import get_media_archive_service
+from app.services.media_storage_service import get_media_storage_service
 from app.services.rate_limit_service import StorefrontRateLimitService
 from app.services.storefront_identity_service import StorefrontIdentityService
 from app.services.usage_governance_service import UsageGovernanceService
@@ -55,6 +58,30 @@ def _is_valid_image_payload(image_bytes: bytes) -> bool:
         return True
     except Exception:
         return False
+
+
+def _static_root() -> str:
+    return os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+        "static",
+    )
+
+
+def _read_library_image_bytes(*, object_path: Optional[str], image_path: Optional[str]) -> bytes:
+    storage = get_media_storage_service()
+    if object_path and storage.enabled:
+        payload = storage.download_bytes(object_path)
+        if payload:
+            return payload
+
+    if not image_path:
+        raise HTTPException(404, "Studio background image file not found")
+
+    file_path = os.path.join(_static_root(), image_path)
+    if not os.path.exists(file_path):
+        raise HTTPException(404, "Studio background image file not found")
+    with open(file_path, "rb") as f:
+        return f.read()
 
 
 def _build_tryon_reuse_key(store_id: str, user_identifier: str, product_id: str, measurement_id: Optional[str]) -> str:
@@ -148,9 +175,21 @@ def _run_tryon_generation(
         finally:
             loop.close()
 
+        # Private archival copy for internal usage. Customer retrieval remains Redis-only.
+        archived_object_path = None
+        if store_id:
+            archive_service = get_media_archive_service()
+            archived_object_path = archive_service.archive_customer_tryon_result(
+                store_id=str(store_id),
+                try_on_id=str(try_on_id),
+                result_bytes=result_bytes,
+                flow_variant="generate",
+            )
+
         # Update DB record
         record.processing_status = "completed"
         record.result_cache_key = cache_key
+        record.result_object_path = archived_object_path
         record.processing_time_seconds = round(elapsed, 2)
         record.completed_at = datetime.utcnow()
         db.commit()
@@ -213,6 +252,7 @@ def _run_studio_generation(
     studio_image: bytes,
     parent_try_on_id: str,
     studio_background_id: str,
+    store_id: Optional[str] = None,
     usage_event_id: Optional[str] = None,
 ):
     """Background task: generate studio-styled try-on image."""
@@ -256,8 +296,20 @@ def _run_studio_generation(
         finally:
             loop.close()
 
+        # Private archival copy for internal usage. Customer retrieval remains Redis-only.
+        archived_object_path = None
+        if store_id:
+            archive_service = get_media_archive_service()
+            archived_object_path = archive_service.archive_customer_tryon_result(
+                store_id=str(store_id),
+                try_on_id=str(try_on_id),
+                result_bytes=result_bytes,
+                flow_variant="studio",
+            )
+
         record.processing_status = "completed"
         record.result_cache_key = cache_key
+        record.result_object_path = archived_object_path
         record.processing_time_seconds = round(elapsed, 2)
         record.completed_at = datetime.utcnow()
         db.commit()
@@ -341,24 +393,22 @@ async def get_studio_background_image(
     store: Store = Depends(get_public_store),
     db: DBSession = Depends(get_db),
 ):
-    """Serve a model photo from static files (image_path is relative to backend/static/)."""
-    import os
-
+    """Serve a model photo using short-lived signed URL when available."""
     _ = store
     bg = db.query(PhotoshootModel).filter_by(id=bg_id, is_active=True).first()
     if not bg:
         raise HTTPException(404, "Studio background not found")
 
-    static_root = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "static")
-    file_path = os.path.join(static_root, bg.image_path)
+    storage = get_media_storage_service()
+    if bg.object_path and storage.enabled:
+        signed_url = storage.generate_signed_get_url(bg.object_path)
+        if signed_url:
+            return RedirectResponse(url=signed_url, status_code=307)
 
-    if not os.path.exists(file_path):
+    if not bg.image_path:
         raise HTTPException(404, "Studio background image file not found")
-
-    with open(file_path, "rb") as f:
-        image_bytes = f.read()
-
-    media_type = "image/jpeg" if file_path.lower().endswith(".jpg") else "image/png"
+    image_bytes = _read_library_image_bytes(object_path=None, image_path=bg.image_path)
+    media_type = "image/jpeg" if bg.image_path.lower().endswith(".jpg") else "image/png"
     return Response(content=image_bytes, media_type=media_type)
 
 
@@ -381,8 +431,6 @@ async def generate_studio_tryon(
     Body:
         {"try_on_id": "uuid", "studio_background_id": "uuid"}
     """
-    import os
-
     usage_event_id: Optional[str] = None
     try:
         # Validate original try-on exists and is completed
@@ -423,19 +471,14 @@ async def generate_studio_tryon(
         # Get original try-on image from Redis
         tryon_image = await cache.get_tryon_result(str(request.try_on_id))
         if not tryon_image:
+            # Customer guardrail: do not fall back to archival storage after Redis expiry.
             raise HTTPException(410, "Original try-on image has expired from cache")
 
-        # Read studio background from static file
-        static_root = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
-            "static",
+        # Read studio background from durable object path (fallback to local static while backfill completes).
+        studio_image = _read_library_image_bytes(
+            object_path=bg.object_path,
+            image_path=bg.image_path,
         )
-        file_path = os.path.join(static_root, bg.image_path)
-        if not os.path.exists(file_path):
-            raise HTTPException(500, "Studio background image file missing")
-
-        with open(file_path, "rb") as f:
-            studio_image = f.read()
 
         product = db.query(Product).filter_by(product_id=original.product_id).first()
         if not product:
@@ -491,6 +534,7 @@ async def generate_studio_tryon(
             studio_image=studio_image,
             parent_try_on_id=str(request.try_on_id),
             studio_background_id=str(request.studio_background_id),
+            store_id=str(store.store_id),
             usage_event_id=usage_event_id,
         )
 
@@ -631,6 +675,7 @@ async def generate_tryon(
         person_image = await cache.get_image(str(session.session_id), "front")
 
         if not person_image:
+            # Customer guardrail: source image must come from live Redis cache only.
             raise HTTPException(
                 422,
                 "Person's front image not found in cache. "
@@ -773,6 +818,7 @@ async def get_tryon_status(
         cache = CacheService()
         cached = await cache.get_tryon_result(str(try_on_id))
         if not cached:
+            # Customer guardrail: never restore customer-visible output from archival storage.
             record.processing_status = "failed"
             record.error_message = "Generated image expired or missing from cache. Please regenerate."
             db.commit()
@@ -823,6 +869,7 @@ async def get_tryon_image(
     image_bytes = await cache.get_tryon_result(str(try_on_id))
 
     if not image_bytes:
+        # Customer guardrail: image availability is bounded by Redis cache TTL.
         raise HTTPException(410, "Try-on image has expired from cache")
     if not _is_valid_image_payload(image_bytes):
         logger.error("Cached try-on payload is not a valid image for try_on_id=%s", try_on_id)

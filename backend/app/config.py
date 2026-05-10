@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     SEEDREAM_BASE_URL: str = "https://ark.cn-beijing.volces.com/api/v3"
     SEEDREAM_TIMEOUT_SECONDS: int = 90
 
+    # Media storage (GCS)
+    MEDIA_STORAGE_BACKEND: str = "gcs"  # gcs
+    MEDIA_ARCHIVE_ENABLED: bool = False  # Deprecated compatibility toggle
+    GCS_BUCKET_NAME: Optional[str] = None
+    GCS_MEDIA_PREFIX: str = "v1"
+    GCS_SIGNED_URL_TTL_SECONDS: int = 900
+
     # Public URL (used to construct image URLs for Shopify productCreateMedia)
     PUBLIC_URL: str = "http://localhost:8000"
     # Optional compatibility var (some envs set APP_URL instead of PUBLIC_URL)
