@@ -123,7 +123,7 @@ export function Step5Results({ onNext, confidence = 86 }: Props) {
             View Your Fit →
           </button>
 
-          <p className="text-[9px] text-[#9ca3af] text-center">Your measurements are saved for 1 year. Photo deleted in 1 hour.</p>
+          <p className="text-[9px] text-[#9ca3af] text-center">Photos stay available for try-on for about 1 hour. With consent, photos and measurement outputs may be retained for research for a limited period.</p>
         </div>
       </div>
     </div>

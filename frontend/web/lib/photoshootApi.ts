@@ -37,6 +37,12 @@ export type PhotoshootJobResponse = {
   retry_allowed?: boolean;
 };
 
+export type PhotoshootApproveResponse = {
+  approved: boolean;
+  shopify_media_id?: string | null;
+  message: string;
+};
+
 export type OnboardingStatusResponse = {
   store_id: string;
   onboarding_step: string;
@@ -273,6 +279,11 @@ export type ProductResponse = {
   created_at: string;
 };
 
+export type ProductListPage = {
+  products: ProductResponse[];
+  nextOffset: number | null;
+};
+
 export type ProductSyncResponse = {
   status: string;
   products_synced: number;
@@ -439,6 +450,21 @@ export function getDefaultProductGid(): string {
 
 export function getDefaultProductImageUrl(): string {
   return process.env.NEXT_PUBLIC_DEFAULT_PRODUCT_IMAGE_URL?.trim() ?? "";
+}
+
+export function normalizeShopifyProductGid(value: string | null | undefined): string {
+  const normalized = (value ?? "").trim();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.startsWith("gid://shopify/Product/")) {
+    return normalized;
+  }
+  return /^\d+$/.test(normalized) ? `gid://shopify/Product/${normalized}` : normalized;
+}
+
+export function toShopifyProductGid(product: Pick<ProductResponse, "shopify_product_id">): string {
+  return normalizeShopifyProductGid(product.shopify_product_id);
 }
 
 export function getBillingReturnUrl(): string {
@@ -958,6 +984,28 @@ export async function listProducts(options: {
   });
 }
 
+export async function listProductsPage(options: {
+  storeId: string;
+  category?: string | null;
+  limit?: number;
+  offset?: number;
+  signal?: AbortSignal;
+}): Promise<ProductListPage> {
+  const limit = options.limit ?? 50;
+  const offset = options.offset ?? 0;
+  const products = await listProducts({
+    storeId: options.storeId,
+    category: options.category,
+    limit,
+    offset,
+    signal: options.signal
+  });
+  return {
+    products,
+    nextOffset: products.length === limit ? offset + limit : null
+  };
+}
+
 export async function syncProducts(options: {
   storeId: string;
 }): Promise<ProductSyncResponse> {
@@ -1144,16 +1192,64 @@ export async function listModelFaces(options: {
   });
 }
 
+export async function startGhostMannequinJob(options: {
+  storeId: string;
+  clothingType: string;
+  shopifyProductGid?: string | null;
+  image1Url?: string | null;
+  image2Url?: string | null;
+  image1File?: File | null;
+  image2File?: File | null;
+}): Promise<PhotoshootJobResponse> {
+  const formData = new FormData();
+  formData.append("clothing_type", options.clothingType);
+
+  const normalizedProductGid = normalizeShopifyProductGid(options.shopifyProductGid ?? "");
+  if (normalizedProductGid) {
+    formData.append("shopify_product_gid", normalizedProductGid);
+  }
+
+  if (options.image1Url) {
+    formData.append("image1_url", options.image1Url);
+  }
+  if (options.image2Url) {
+    formData.append("image2_url", options.image2Url);
+  }
+  if (options.image1File) {
+    formData.append("image1_file", options.image1File);
+  }
+  if (options.image2File) {
+    formData.append("image2_file", options.image2File);
+  }
+
+  return requestJson<PhotoshootJobResponse>("/api/v1/merchant/photoshoot/ghost-mannequin", {
+    method: "POST",
+    storeId: options.storeId,
+    body: formData
+  });
+}
+
 export async function startTryOnModelJob(options: {
   storeId: string;
-  shopifyProductGid: string;
-  productImageUrl: string;
+  shopifyProductGid?: string | null;
+  productImageUrl?: string | null;
+  productImageFile?: File | null;
   modelLibraryId?: string | null;
   modelImage?: File | null;
 }): Promise<PhotoshootJobResponse> {
   const formData = new FormData();
-  formData.append("shopify_product_gid", options.shopifyProductGid);
-  formData.append("product_image_url", options.productImageUrl);
+  const normalizedProductGid = normalizeShopifyProductGid(options.shopifyProductGid ?? "");
+  if (normalizedProductGid) {
+    formData.append("shopify_product_gid", normalizedProductGid);
+  }
+
+  if (options.productImageUrl) {
+    formData.append("product_image_url", options.productImageUrl);
+  }
+
+  if (options.productImageFile) {
+    formData.append("product_image_file", options.productImageFile);
+  }
 
   if (options.modelLibraryId) {
     formData.append("model_library_id", options.modelLibraryId);
@@ -1172,14 +1268,25 @@ export async function startTryOnModelJob(options: {
 
 export async function startModelSwapJob(options: {
   storeId: string;
-  shopifyProductGid: string;
-  originalImageUrl: string;
+  shopifyProductGid?: string | null;
+  originalImageUrl?: string | null;
+  originalImageFile?: File | null;
   faceLibraryId?: string | null;
   faceImage?: File | null;
 }): Promise<PhotoshootJobResponse> {
   const formData = new FormData();
-  formData.append("shopify_product_gid", options.shopifyProductGid);
-  formData.append("original_image_url", options.originalImageUrl);
+  const normalizedProductGid = normalizeShopifyProductGid(options.shopifyProductGid ?? "");
+  if (normalizedProductGid) {
+    formData.append("shopify_product_gid", normalizedProductGid);
+  }
+
+  if (options.originalImageUrl) {
+    formData.append("original_image_url", options.originalImageUrl);
+  }
+
+  if (options.originalImageFile) {
+    formData.append("original_image_file", options.originalImageFile);
+  }
 
   if (options.faceLibraryId) {
     formData.append("face_library_id", options.faceLibraryId);
@@ -1205,6 +1312,23 @@ export async function getPhotoshootJobStatus(options: {
     method: "GET",
     storeId: options.storeId,
     signal: options.signal
+  });
+}
+
+export async function approvePhotoshootJob(options: {
+  storeId: string;
+  jobId: string;
+  shopifyProductGid?: string | null;
+}): Promise<PhotoshootApproveResponse> {
+  const normalizedProductGid = normalizeShopifyProductGid(options.shopifyProductGid ?? "");
+  const payload = normalizedProductGid
+    ? { shopify_product_gid: normalizedProductGid }
+    : {};
+
+  return requestJson<PhotoshootApproveResponse>(`/api/v1/merchant/photoshoot/jobs/${options.jobId}/approve`, {
+    method: "POST",
+    storeId: options.storeId,
+    body: payload
   });
 }
 

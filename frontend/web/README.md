@@ -47,7 +47,7 @@ Billing plan selection and billing-status reads use Shopify Direct API access fr
 
 - Plan configuration is served from `web/app/api/shopify/billing/plans/route.ts` and can be overridden with `SHOPIFY_BILLING_PLANS_JSON`.
 - Shopify webhook requests are verified in `web/app/api/webhooks/route.ts`.
-- If `SHOPIFY_WEBHOOK_FORWARD_URL` is configured, verified webhook payloads are forwarded to that backend endpoint.
+- `SHOPIFY_WEBHOOK_FORWARD_URL` is required in production; verified webhook payloads are forwarded to that backend endpoint.
 - Deploy `shopify.app.toml` with `shopify app deploy` after changing webhook or Direct API settings.
 
 ## Shopify CLI

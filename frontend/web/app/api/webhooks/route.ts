@@ -18,6 +18,7 @@ const TOPIC_TO_FORWARD_PATH: Record<string, string> = {
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
 function buildHmac(secret: string, payload: string): string {
   return createHmac("sha256", secret).update(payload, "utf8").digest("base64");
@@ -49,6 +50,9 @@ function buildForwardUrl(base: string, path: string): string | null {
 async function forwardWebhook(rawBody: string, request: NextRequest): Promise<void> {
   const forwardBaseUrl = process.env.SHOPIFY_WEBHOOK_FORWARD_URL?.trim();
   if (!forwardBaseUrl) {
+    if (IS_PRODUCTION) {
+      throw new Error("SHOPIFY_WEBHOOK_FORWARD_URL is required in production.");
+    }
     return;
   }
 
@@ -61,10 +65,14 @@ async function forwardWebhook(rawBody: string, request: NextRequest): Promise<vo
 
   const forwardUrl = buildForwardUrl(forwardBaseUrl, forwardPath);
   if (!forwardUrl) {
-    console.error("Shopify webhook forwarding skipped: invalid SHOPIFY_WEBHOOK_FORWARD_URL", {
+    const message = "Shopify webhook forwarding skipped: invalid SHOPIFY_WEBHOOK_FORWARD_URL";
+    console.error(message, {
       topic,
       configuredBaseUrl: forwardBaseUrl
     });
+    if (IS_PRODUCTION) {
+      throw new Error(message);
+    }
     return;
   }
 
@@ -102,11 +110,15 @@ async function forwardWebhook(rawBody: string, request: NextRequest): Promise<vo
   });
 
   if (!response.ok) {
-    console.error("Shopify webhook forward target responded non-2xx", {
+    const message = "Shopify webhook forward target responded non-2xx";
+    console.error(message, {
       topic,
       forwardPath,
       status: response.status
     });
+    if (IS_PRODUCTION) {
+      throw new Error(`${message}: status=${response.status}`);
+    }
   }
 }
 
@@ -149,6 +161,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       webhookId: request.headers.get(WEBHOOK_ID_HEADER) ?? "",
       message
     });
+    if (!IS_PRODUCTION) {
+      console.warn("Continuing in non-production despite webhook forwarding failure.");
+      return new NextResponse(null, { status: 200 });
+    }
+    return NextResponse.json(
+      {
+        error: "Webhook forwarding failed.",
+        message
+      },
+      {
+        status: 502
+      }
+    );
   }
 
   console.info("Shopify webhook received", {

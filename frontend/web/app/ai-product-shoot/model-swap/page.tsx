@@ -1,14 +1,20 @@
-﻿"use client";
+"use client";
 
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { Check, ChevronLeft, ChevronRight, Download, RefreshCw, Sparkles } from "lucide-react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ChangeEvent
+} from "react";
+import { Download, RefreshCw } from "lucide-react";
 import PortalSidebar from "../../_components/PortalSidebar";
 import PortalTopbar from "../../_components/PortalTopbar";
 import SubTabNav from "../../_components/SubTabNav";
 import {
+  approvePhotoshootJob,
   buildJobResultUrl,
-  getDefaultProductGid,
-  getDefaultProductImageUrl,
   getDefaultStoreId,
   isFailureStatus,
   listModelFaces,
@@ -17,16 +23,12 @@ import {
   startModelSwapJob,
   type PhotoshootModelFaceResponse
 } from "../../../lib/photoshootApi";
+import { extractProductImageUrls, usePhotoshootProducts } from "../_components/usePhotoshootProducts";
 
-type ResultCard = {
-  id: string;
-  title: string;
-  enhanced: boolean;
-  variant: "original" | "enhanced-a" | "enhanced-b";
-  imageUrl?: string | null;
-};
+const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+const ALLOWED_IMAGE_MIME = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp"]);
 
-function imageTileStyle(imageUrl: string): CSSProperties {
+function tileStyle(imageUrl: string): CSSProperties {
   return {
     backgroundImage: `url(${resolveBackendUrl(imageUrl)})`,
     backgroundSize: "cover",
@@ -34,55 +36,78 @@ function imageTileStyle(imageUrl: string): CSSProperties {
   };
 }
 
+function validateImageFile(file: File): string | null {
+  if (!ALLOWED_IMAGE_MIME.has(file.type.toLowerCase())) {
+    return "Only jpg, png, and webp files are allowed.";
+  }
+  if (file.size > IMAGE_MAX_BYTES) {
+    return "Each file must be 10MB or smaller.";
+  }
+  return null;
+}
+
 export default function ModelSwapPage() {
-  const [uploaded, setUploaded] = useState(false);
-
   const storeId = useMemo(() => getDefaultStoreId(), []);
-  const [productGid, setProductGid] = useState(getDefaultProductGid());
-  const [originalImageUrl, setOriginalImageUrl] = useState(getDefaultProductImageUrl());
-
-  const [faceGender, setFaceGender] = useState("female");
-  const [faceAge, setFaceAge] = useState("");
-  const [faceSkinTone, setFaceSkinTone] = useState("");
-
-  const [faceLibrary, setFaceLibrary] = useState<PhotoshootModelFaceResponse[]>([]);
-  const [loadingFaces, setLoadingFaces] = useState(false);
-
-  const [selectedFaceId, setSelectedFaceId] = useState<string | null>(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [generated, setGenerated] = useState(false);
-  const [isGenerating, setIsGenerating] = useState(false);
-
-  const [statusMessage, setStatusMessage] = useState("");
-  const [errorMessage, setErrorMessage] = useState("");
-  const [resultImageUrl, setResultImageUrl] = useState<string | null>(null);
-
-  const selectedFace = useMemo(
-    () => faceLibrary.find((face) => face.id === selectedFaceId) ?? null,
-    [faceLibrary, selectedFaceId]
-  );
   const aiTabs = [
     { href: "/ai-product-shoot", label: "Ghost Mannequin" },
     { href: "/ai-product-shoot/model-try-on", label: "Model Try-on" },
     { href: "/ai-product-shoot/model-swap", label: "Model Swap" }
   ];
 
-  const resultCards: ResultCard[] = [
-    { id: "original", title: "Original", enhanced: false, variant: "original", imageUrl: originalImageUrl || null },
-    { id: "enhanced-1", title: "Model Swap - OptimoVTS", enhanced: true, variant: "enhanced-a", imageUrl: resultImageUrl },
-    { id: "enhanced-2", title: "Model Swap Variant", enhanced: true, variant: "enhanced-b", imageUrl: resultImageUrl }
-  ];
+  const {
+    visibleProducts,
+    selectedProduct,
+    selectedProductId,
+    selectedProductGid,
+    searchQuery,
+    setSearchQuery,
+    setSelectedProductId,
+    isLoading,
+    isLoadingMore,
+    isSyncing,
+    errorMessage: productError,
+    canLoadMore,
+    loadMoreProducts,
+    syncNow
+  } = usePhotoshootProducts(storeId);
+
+  const [started, setStarted] = useState(false);
+  const [originalImageUrl, setOriginalImageUrl] = useState<string | null>(null);
+  const [originalImageFile, setOriginalImageFile] = useState<File | null>(null);
+  const [originalImagePreview, setOriginalImagePreview] = useState<string | null>(null);
+
+  const [faceSource, setFaceSource] = useState<"library" | "upload">("library");
+  const [faceGender, setFaceGender] = useState("female");
+  const [faceAge, setFaceAge] = useState("");
+  const [faceSkinTone, setFaceSkinTone] = useState("");
+  const [faceLibrary, setFaceLibrary] = useState<PhotoshootModelFaceResponse[]>([]);
+  const [selectedFaceId, setSelectedFaceId] = useState<string | null>(null);
+  const [faceImageFile, setFaceImageFile] = useState<File | null>(null);
+  const [faceImagePreview, setFaceImagePreview] = useState<string | null>(null);
+  const [isLoadingFaces, setIsLoadingFaces] = useState(false);
+
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isApproving, setIsApproving] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [resultImageUrl, setResultImageUrl] = useState<string | null>(null);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [jobNeedsProductAtApprove, setJobNeedsProductAtApprove] = useState(false);
+  const previewUrlsRef = useRef<string[]>([]);
 
   useEffect(() => {
-    if (!pickerOpen || !storeId.trim()) {
+    return () => {
+      previewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      previewUrlsRef.current = [];
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!storeId.trim() || faceSource !== "library") {
       return;
     }
-
     const controller = new AbortController();
-    let active = true;
-
-    setLoadingFaces(true);
-
+    setIsLoadingFaces(true);
     listModelFaces({
       storeId: storeId.trim(),
       gender: faceGender,
@@ -90,59 +115,81 @@ export default function ModelSwapPage() {
       skinTone: faceSkinTone || null,
       signal: controller.signal
     })
-      .then((data) => {
-        if (!active) {
-          return;
-        }
-
-        setFaceLibrary(data);
+      .then((payload) => {
+        setFaceLibrary(payload);
         setSelectedFaceId((current) => {
-          if (data.length === 0) {
-            return null;
-          }
-
-          if (current && data.some((item) => item.id === current)) {
+          if (current && payload.some((item) => item.id === current)) {
             return current;
           }
-
-          return data[0].id;
+          return payload[0]?.id ?? null;
         });
       })
       .catch((error: unknown) => {
-        if (!active || controller.signal.aborted) {
+        if (controller.signal.aborted) {
           return;
         }
-
         const message = error instanceof Error ? error.message : "Failed to load face library.";
         setErrorMessage(message);
-        setFaceLibrary([]);
       })
       .finally(() => {
-        if (active) {
-          setLoadingFaces(false);
+        if (!controller.signal.aborted) {
+          setIsLoadingFaces(false);
         }
       });
+    return () => controller.abort();
+  }, [faceAge, faceGender, faceSkinTone, faceSource, storeId]);
 
-    return () => {
-      active = false;
-      controller.abort();
-    };
-  }, [pickerOpen, storeId, faceGender, faceAge, faceSkinTone]);
+  const productImages = useMemo(() => extractProductImageUrls(selectedProduct), [selectedProduct]);
+  const selectedFace = useMemo(
+    () => faceLibrary.find((item) => item.id === selectedFaceId) ?? null,
+    [faceLibrary, selectedFaceId]
+  );
 
-  const openPicker = () => {
-    setGenerated(false);
+  const onOriginalUpload = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+    const validation = validateImageFile(file);
+    if (validation) {
+      setErrorMessage(validation);
+      event.currentTarget.value = "";
+      return;
+    }
+    const preview = URL.createObjectURL(file);
+    previewUrlsRef.current.push(preview);
+    setOriginalImageFile(file);
+    setOriginalImageUrl(null);
+    setOriginalImagePreview(preview);
     setErrorMessage("");
-    setPickerOpen(true);
+    event.currentTarget.value = "";
   };
 
-  const closePicker = () => {
-    setPickerOpen(false);
+  const onFaceUpload = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+    const validation = validateImageFile(file);
+    if (validation) {
+      setErrorMessage(validation);
+      event.currentTarget.value = "";
+      return;
+    }
+    const preview = URL.createObjectURL(file);
+    previewUrlsRef.current.push(preview);
+    setFaceImageFile(file);
+    setFaceImagePreview(preview);
+    setFaceSource("upload");
+    setErrorMessage("");
+    event.currentTarget.value = "";
   };
 
-  const selectFace = (faceId: string) => {
-    setSelectedFaceId(faceId);
-    setGenerated(false);
-    setPickerOpen(false);
+  const chooseStoreOriginalImage = (imageUrl: string) => {
+    setOriginalImageUrl(imageUrl);
+    setOriginalImageFile(null);
+    setOriginalImagePreview(imageUrl);
+    setErrorMessage("");
   };
 
   const generateResults = async () => {
@@ -150,37 +197,37 @@ export default function ModelSwapPage() {
       setErrorMessage("Open the app from Shopify Admin to connect this tool with the active store.");
       return;
     }
-
-    if (!productGid.trim()) {
-      setErrorMessage("Enter Shopify Product GID.");
+    if (!originalImageUrl && !originalImageFile) {
+      setErrorMessage("Select original image from store or upload one.");
       return;
     }
-
-    if (!originalImageUrl.trim()) {
-      setErrorMessage("Enter original image URL.");
+    if (faceSource === "library" && !selectedFaceId) {
+      setErrorMessage("Select a replacement face from library.");
       return;
     }
-
-    if (!selectedFaceId) {
-      setPickerOpen(true);
-      setErrorMessage("Select a face model before generating.");
+    if (faceSource === "upload" && !faceImageFile) {
+      setErrorMessage("Upload a replacement face image.");
       return;
     }
 
     setIsGenerating(true);
-    setGenerated(false);
-    setErrorMessage("");
     setResultImageUrl(null);
     setStatusMessage("Starting model swap job...");
+    setErrorMessage("");
 
     try {
+      const submittedGid = selectedProductGid.trim() || null;
       const startedJob = await startModelSwapJob({
         storeId: storeId.trim(),
-        shopifyProductGid: productGid.trim(),
-        originalImageUrl: originalImageUrl.trim(),
-        faceLibraryId: selectedFaceId
+        shopifyProductGid: submittedGid,
+        originalImageUrl,
+        originalImageFile,
+        faceLibraryId: faceSource === "library" ? selectedFaceId : null,
+        faceImage: faceSource === "upload" ? faceImageFile : null
       });
 
+      setJobId(startedJob.job_id);
+      setJobNeedsProductAtApprove(!submittedGid);
       setStatusMessage(`Job ${startedJob.job_id} started. Processing...`);
 
       const finishedJob = await pollPhotoshootJob(storeId.trim(), startedJob.job_id, {
@@ -197,10 +244,7 @@ export default function ModelSwapPage() {
       const imageUrl = finishedJob.result_image_url
         ? resolveBackendUrl(finishedJob.result_image_url)
         : buildJobResultUrl(startedJob.job_id);
-
       setResultImageUrl(imageUrl);
-      setGenerated(true);
-      setPickerOpen(false);
       setStatusMessage("Generation complete.");
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Failed to generate model swap image.";
@@ -208,6 +252,33 @@ export default function ModelSwapPage() {
       setStatusMessage("");
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const approveToShopify = async () => {
+    if (!jobId || !storeId.trim()) {
+      return;
+    }
+    if (jobNeedsProductAtApprove && !selectedProductGid) {
+      setErrorMessage("Select a store product before approving this result.");
+      return;
+    }
+
+    setIsApproving(true);
+    setErrorMessage("");
+    try {
+      const response = await approvePhotoshootJob({
+        storeId: storeId.trim(),
+        jobId,
+        shopifyProductGid: jobNeedsProductAtApprove ? selectedProductGid : null
+      });
+      setStatusMessage(response.message);
+      setJobNeedsProductAtApprove(false);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Failed to approve generated image.";
+      setErrorMessage(message);
+    } finally {
+      setIsApproving(false);
     }
   };
 
@@ -219,7 +290,7 @@ export default function ModelSwapPage() {
         <PortalTopbar title="AI Product Shoot" subtitle="Swap the model in your existing product images" />
         <SubTabNav tabs={aiTabs} />
 
-        {!uploaded ? (
+        {!started ? (
           <section className="ai-stage-upload">
             <article className="ai-upload-copy ai-swap-upload-copy">
               <h3>
@@ -227,95 +298,151 @@ export default function ModelSwapPage() {
                 <br />
                 Premium <span>AI Model Swap</span>
               </h3>
-              <p>Seamless, diverse, and customized visuals, perfect for any market.</p>
+              <p>Swap model identity while preserving garment and scene continuity.</p>
               <div className="ai-upload-preview" aria-hidden />
             </article>
 
             <aside className="ai-upload-panel">
-              <p className="ai-upgrade-banner">
-                <Sparkles size={12} />
-                <span>Upgrade Your Visuals Now</span>
-              </p>
-
-              <div className="ai-upload-drop" aria-hidden>
-                <svg viewBox="0 0 24 24" role="img">
-                  <path
-                    d="M12 14V7M12 7L9 10M12 7L15 10M7 16.5H6.6C4.6 16.5 3 15 3 13C3 11 4.6 9.4 6.6 9.4C7.1 7 9.2 5.2 11.8 5.2C14.7 5.2 17 7.4 17.2 10.1C19.2 10.2 21 11.8 21 13.9C21 16.1 19.2 17.8 16.9 17.8H7"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="2"
-                  />
-                </svg>
-                <p>Click or drag image here</p>
-              </div>
-
-              <button type="button" className="ai-primary-btn" onClick={() => setUploaded(true)}>
+              <p className="ai-upgrade-banner">Upgrade Your Visuals Now</p>
+              <button type="button" className="ai-primary-btn" onClick={() => setStarted(true)}>
                 Continue to model swap
               </button>
-
-              <p className="ai-upload-note">
-                Use any product image from Shopify CDN,
-                <br />
-                then choose a face from the Optimo library
-              </p>
+              <p className="ai-upload-note">Only the model identity changes. Garment and pose remain intact.</p>
             </aside>
           </section>
         ) : (
           <section className="ai-stage-model-swap">
             <aside className="ai-swap-panel">
               <h3>Model Swap</h3>
-              <p>Product Image</p>
+              <p>Original Product Image</p>
 
               <h4>Store context</h4>
               <p className="ai-status-note">
                 {storeId ? "Connected to the current Shopify store." : "Open the app from Shopify Admin to load store context."}
               </p>
 
-              <h4>Shopify Product GID</h4>
+              <h4>Product Search</h4>
               <label className="ai-text-field">
                 <input
-                  aria-label="Shopify Product GID"
-                  value={productGid}
-                  onChange={(event) => setProductGid(event.target.value)}
-                  placeholder="gid://shopify/Product/1234567890"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search synced products"
                   autoComplete="off"
                 />
               </label>
+              {isLoading ? <p className="ai-status-note">Loading products...</p> : null}
+              {isSyncing ? <p className="ai-status-note">Syncing products from Shopify...</p> : null}
+              {productError ? <p className="ai-error-note">{productError}</p> : null}
 
-              <h4>Original image URL</h4>
-              <label className="ai-text-field">
-                <input
-                  aria-label="Original image URL"
-                  value={originalImageUrl}
-                  onChange={(event) => setOriginalImageUrl(event.target.value)}
-                  placeholder="https://cdn.shopify.com/..."
-                  autoComplete="off"
-                />
+              <div className="ai-product-list">
+                {visibleProducts.map((product) => (
+                  <button
+                    key={product.product_id}
+                    type="button"
+                    className={`ai-template-item ${selectedProductId === product.product_id ? "is-selected" : ""}`}
+                    onClick={() => setSelectedProductId(product.product_id)}
+                    aria-label={product.title}
+                  >
+                    <span>{product.title}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="ai-inline-actions">
+                <button type="button" className="ai-outline-btn" onClick={syncNow} disabled={isSyncing}>
+                  {isSyncing ? "Syncing..." : "Sync products"}
+                </button>
+                {canLoadMore ? (
+                  <button type="button" className="ai-outline-btn" onClick={loadMoreProducts} disabled={isLoadingMore}>
+                    {isLoadingMore ? "Loading..." : "Load more"}
+                  </button>
+                ) : null}
+              </div>
+
+              <h4>Store product images</h4>
+              <div className="ai-template-grid">
+                {productImages.map((imageUrl) => (
+                  <button key={imageUrl} type="button" className="ai-template-item is-selected" onClick={() => chooseStoreOriginalImage(imageUrl)}>
+                    <span style={tileStyle(imageUrl)} />
+                    <strong>Use image</strong>
+                  </button>
+                ))}
+              </div>
+
+              <label className="ai-outline-btn">
+                <input type="file" accept="image/jpeg,image/png,image/webp" onChange={onOriginalUpload} />
+                Upload Original Image
               </label>
 
-              <h4>Face model</h4>
-              <button type="button" className="ai-swap-face-trigger" onClick={openPicker}>
-                {selectedFace ? (
-                  <span className="ai-swap-face-thumb" style={imageTileStyle(selectedFace.image_url)} aria-hidden />
-                ) : (
-                  <span className="ai-swap-face-icon" aria-hidden>
-                    <svg viewBox="0 0 24 24" role="img">
-                      <rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8" />
-                      <circle cx="8.2" cy="9" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.8" />
-                      <path d="M5.5 17L10.4 12.2L13.3 14.9L16.2 12L18.5 14.4V17" fill="none" stroke="currentColor" strokeWidth="1.8" />
-                    </svg>
-                  </span>
-                )}
-                <span className="ai-swap-face-copy">
-                  <strong>Select face model</strong>
-                  <span>Choose from the Optimo face library</span>
-                </span>
-                <span className="ai-swap-chevron" aria-hidden>
-                  <ChevronRight size={16} />
-                </span>
-              </button>
+              <h4>Replacement Face</h4>
+              <div className="ai-inline-actions">
+                <button
+                  type="button"
+                  className={`ai-outline-btn${faceSource === "library" ? " is-selected" : ""}`}
+                  onClick={() => setFaceSource("library")}
+                >
+                  Face Library
+                </button>
+                <button
+                  type="button"
+                  className={`ai-outline-btn${faceSource === "upload" ? " is-selected" : ""}`}
+                  onClick={() => setFaceSource("upload")}
+                >
+                  Upload Face
+                </button>
+              </div>
+
+              {faceSource === "library" ? (
+                <>
+                  <div className="ai-inline-actions">
+                    <label className="ai-select-wrap">
+                      <select value={faceGender} onChange={(event) => setFaceGender(event.target.value)} aria-label="Gender">
+                        <option value="female">Women</option>
+                        <option value="male">Men</option>
+                      </select>
+                    </label>
+                    <label className="ai-select-wrap">
+                      <select value={faceAge} onChange={(event) => setFaceAge(event.target.value)} aria-label="Age">
+                        <option value="">Age</option>
+                        <option value="18-25">18-25</option>
+                        <option value="26-35">26-35</option>
+                        <option value="36-45">36-45</option>
+                        <option value="45+">45+</option>
+                      </select>
+                    </label>
+                    <label className="ai-select-wrap">
+                      <select value={faceSkinTone} onChange={(event) => setFaceSkinTone(event.target.value)} aria-label="Skin tone">
+                        <option value="">Skin</option>
+                        <option value="fair">Fair</option>
+                        <option value="light">Light</option>
+                        <option value="medium">Medium</option>
+                        <option value="tan">Tan</option>
+                        <option value="dark">Dark</option>
+                      </select>
+                    </label>
+                  </div>
+                  {isLoadingFaces ? <p className="ai-status-note">Loading faces...</p> : null}
+                  <div className="ai-template-grid">
+                    {faceLibrary.map((face) => (
+                      <button
+                        key={face.id}
+                        type="button"
+                        className={`ai-template-item ${selectedFaceId === face.id ? "is-selected" : ""}`}
+                        onClick={() => setSelectedFaceId(face.id)}
+                      >
+                        <span style={tileStyle(face.image_url)} />
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <label className="ai-outline-btn">
+                  <input type="file" accept="image/jpeg,image/png,image/webp" onChange={onFaceUpload} />
+                  Upload Face Image
+                </label>
+              )}
+
+              <p className="ai-status-note">Only the face will be swapped while keeping body, clothing, and background aligned.</p>
 
               <button type="button" className="ai-primary-btn ai-swap-generate-btn" onClick={generateResults} disabled={isGenerating}>
                 {isGenerating ? "Generating..." : "Generate"}
@@ -326,126 +453,49 @@ export default function ModelSwapPage() {
             </aside>
 
             <section className="ai-swap-right">
-              {pickerOpen ? (
-                <section className="ai-swap-picker">
-                  <header className="ai-swap-picker-head">
-                    <button type="button" className="ai-swap-picker-back" onClick={closePicker} aria-label="Back">
-                      <ChevronLeft size={16} />
-                    </button>
-                  <div>
-                    <h3>Select face model</h3>
-                    <p>Optimo face library</p>
+              <div className="ai-results-grid ai-swap-results-grid">
+                <article className="ai-result-card">
+                  <header>
+                    <p>Original</p>
+                  </header>
+                  <div className="ai-result-image ai-result-image-original" aria-hidden>
+                    {originalImagePreview ? <span className="ai-result-photo" style={tileStyle(originalImagePreview)} /> : null}
                   </div>
-                </header>
+                </article>
 
-                  <div className="ai-swap-filters">
-                    <label className="ai-swap-filter">
-                      <select aria-label="Gender" value={faceGender} onChange={(event) => setFaceGender(event.target.value)}>
-                        <option value="female">Women</option>
-                        <option value="male">Men</option>
-                      </select>
-                    </label>
-                    <label className="ai-swap-filter">
-                      <select aria-label="Age" value={faceAge} onChange={(event) => setFaceAge(event.target.value)}>
-                        <option value="">Age</option>
-                        <option value="18-25">18-25</option>
-                        <option value="26-35">26-35</option>
-                        <option value="36-45">36-45</option>
-                        <option value="45+">45+</option>
-                      </select>
-                    </label>
-                    <label className="ai-swap-filter">
-                      <select aria-label="Skin" value={faceSkinTone} onChange={(event) => setFaceSkinTone(event.target.value)}>
-                        <option value="">Skin</option>
-                        <option value="fair">Fair</option>
-                        <option value="light">Light</option>
-                        <option value="medium">Medium</option>
-                        <option value="tan">Tan</option>
-                        <option value="dark">Dark</option>
-                      </select>
-                    </label>
-                  </div>
-
-                  <div className="ai-swap-face-list">
-                    <div className="ai-swap-face-grid">
-                      {loadingFaces ? <p className="ai-inline-note">Loading faces...</p> : null}
-                      {!loadingFaces && faceLibrary.length === 0 ? <p className="ai-inline-note">No faces returned for current filters.</p> : null}
-
-                      {faceLibrary.map((face) => (
-                        <button
-                          key={face.id}
-                          type="button"
-                          className={`ai-swap-face-tile${selectedFaceId === face.id ? " is-selected" : ""}`}
-                          onClick={() => selectFace(face.id)}
-                          aria-label={face.id}
-                        >
-                          <span style={imageTileStyle(face.image_url)} />
-                          {selectedFaceId === face.id ? (
-                            <i className="ai-swap-face-check" aria-hidden>
-                              <Check size={10} />
-                            </i>
-                          ) : null}
+                <article className="ai-result-card">
+                  <header>
+                    <p>Generated</p>
+                    {resultImageUrl ? (
+                      <div className="ai-result-actions">
+                        <a href={resultImageUrl} download="model-swap-result.jpg">
+                          <Download size={11} />
+                        </a>
+                        <button type="button" onClick={generateResults} disabled={isGenerating}>
+                          <RefreshCw size={11} />
                         </button>
-                      ))}
-                    </div>
-                  </div>
-                </section>
-              ) : generated ? (
-                <div className="ai-results-grid ai-swap-results-grid">
-                  {resultCards.map((card) => (
-                    <article key={card.id} className="ai-result-card">
-                      <header>
-                        <p>{card.title}</p>
-                        {card.enhanced ? (
-                          <div className="ai-result-actions" aria-hidden>
-                            <button type="button">
-                              <Download size={11} />
-                            </button>
-                            <button type="button">
-                              <RefreshCw size={11} />
-                            </button>
-                          </div>
-                        ) : null}
-                      </header>
-
-                      <div className={`ai-result-image ai-result-image-${card.variant}`} aria-hidden>
-                        {card.imageUrl ? (
-                          <span className="ai-result-photo" style={imageTileStyle(card.imageUrl)} />
-                        ) : (
-                          <span className="ai-model-figure">
-                            <span className="ai-model-head" />
-                            <span className="ai-model-torso" />
-                            <span className="ai-model-leg-left" />
-                            <span className="ai-model-leg-right" />
-                          </span>
-                        )}
                       </div>
-                    </article>
-                  ))}
-                </div>
-              ) : (
-                <div className="ai-swap-placeholder-grid">
-                  <article className="ai-result-card">
-                    <header>
-                      <p>Original</p>
-                    </header>
-                    <div className="ai-result-image ai-result-image-original" aria-hidden>
-                      {originalImageUrl ? (
-                        <span className="ai-result-photo" style={imageTileStyle(originalImageUrl)} />
-                      ) : (
-                        <span className="ai-model-figure">
-                          <span className="ai-model-head" />
-                          <span className="ai-model-torso" />
-                          <span className="ai-model-leg-left" />
-                          <span className="ai-model-leg-right" />
-                        </span>
-                      )}
-                    </div>
-                  </article>
-                  <div className="ai-swap-placeholder-card" aria-hidden />
-                  <div className="ai-swap-placeholder-card" aria-hidden />
-                </div>
-              )}
+                    ) : null}
+                  </header>
+                  <div className="ai-result-image ai-result-image-enhanced-a" aria-hidden>
+                    {resultImageUrl ? <span className="ai-result-photo" style={tileStyle(resultImageUrl)} /> : null}
+                  </div>
+                  <button
+                    type="button"
+                    className="ai-primary-btn"
+                    onClick={approveToShopify}
+                    disabled={!jobId || isApproving || (jobNeedsProductAtApprove && !selectedProductGid)}
+                  >
+                    {isApproving ? "Approving..." : "Approve & Push to Shopify"}
+                  </button>
+                </article>
+              </div>
+              {faceSource === "library" && selectedFace ? (
+                <p className="ai-status-note">Selected face from library is ready for generation.</p>
+              ) : null}
+              {faceSource === "upload" && faceImagePreview ? (
+                <p className="ai-status-note">Uploaded face image is ready for generation.</p>
+              ) : null}
             </section>
           </section>
         )}
@@ -453,4 +503,3 @@ export default function ModelSwapPage() {
     </main>
   );
 }
-

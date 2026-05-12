@@ -235,7 +235,8 @@
         form: {
           height: "",
           weight: "",
-          gender: "male"
+          gender: "male",
+          researchConsent: false
         },
         session: null,
         measurement: null,
@@ -734,7 +735,11 @@
         return;
       }
 
-      this.state.form[target.name] = target.value;
+      if (target instanceof HTMLInputElement && target.type === "checkbox") {
+        this.state.form[target.name] = Boolean(target.checked);
+      } else {
+        this.state.form[target.name] = target.value;
+      }
     }
 
     handleOverlayClick(event) {
@@ -898,6 +903,12 @@
         const reason = await this.probeImageFailureReason(src);
         if (reason === "expired") {
           message = "Your generated image expired from cache. Please generate again.";
+          this.resetFitArtifactsForRegeneration();
+          this.state.error = "";
+          this.state.notice = message;
+          this.state.stage = "measurements";
+          this.renderOverlay();
+          return;
         } else if (reason === "mime") {
           message = "Image format issue detected. Please retry generation.";
         } else if (reason === "proxy") {
@@ -1004,6 +1015,10 @@
 
       if (!["male", "female", "unisex"].includes(this.state.form.gender)) {
         return "Select a valid gender option.";
+      }
+
+      if (!this.state.form.researchConsent) {
+        return "Consent is required to continue.";
       }
 
       return "";
@@ -1249,6 +1264,9 @@
         formData.append("height_cm", String(this.state.form.height));
         formData.append("weight_kg", String(this.state.form.weight));
         formData.append("gender", this.state.form.gender);
+        formData.append("research_consent", this.state.form.researchConsent ? "true" : "false");
+        formData.append("research_consent_policy_version", "v1");
+        formData.append("research_consent_source", "storefront_widget_step1");
 
         const measurement = await this.request("/measurements/extract", {
           method: "POST",
@@ -1381,6 +1399,15 @@
         this.state.stage = "results";
         this.saveFlowSnapshot();
       } catch (error) {
+        if (error && error.code === "TRYON_CACHE_EXPIRED") {
+          this.clearAnalysisTicker();
+          this.resetFitArtifactsForRegeneration();
+          this.state.error = "";
+          this.state.notice = "Your generated image expired from cache. Please generate again.";
+          this.state.stage = "measurements";
+          this.renderOverlay();
+          return;
+        }
         this.clearAnalysisTicker();
         if (!this.handleGenerationError(error, "tryon")) {
           this.state.error = error.message || "We couldn't generate your try-on.";
@@ -1504,7 +1531,9 @@
         }
 
         if (status.status === "failed") {
-          throw new Error(status.error || status.message || "Try-on generation failed.");
+          const failure = new Error(status.error || status.message || "Try-on generation failed.");
+          failure.code = status.error_code || "";
+          throw failure;
         }
 
         await delay(2500);
@@ -1574,6 +1603,20 @@
         if (!imageUrl) {
           const status = await this.pollTryOn(start.try_on_id);
           imageUrl = this.toProxyUrl(status.result_image_url);
+        }
+
+        if (!imageUrl) {
+          throw new Error("Studio image is unavailable. Please retry.");
+        }
+
+        const usable = await this.isImageUrlUsable(imageUrl);
+        if (!usable) {
+          const probeReason = await this.probeImageFailureReason(imageUrl);
+          const unusableError = new Error("Studio image is unavailable. Please regenerate your fit and retry.");
+          if (probeReason === "expired") {
+            unusableError.code = "TRYON_CACHE_EXPIRED";
+          }
+          throw unusableError;
         }
 
         this.state.studioResults[backgroundId] = imageUrl;
@@ -2322,6 +2365,30 @@
         return true;
       }
 
+      if (code === "TRYON_OUTPUT_INVALID_OR_ECHO") {
+        this.state.error =
+          "We could not generate a valid try-on image for this attempt. Please retry once.";
+        if (context !== "studio") {
+          this.state.stage = "measurements";
+        }
+        return true;
+      }
+
+      if (code === "TRYON_CACHE_EXPIRED") {
+        if (context === "studio") {
+          this.state.currentStudioBackgroundId = "";
+          this.state.selectedStudioImageUrl = "";
+          this.state.error = "Studio source expired. Regenerate your fit, then retry studio.";
+          this.state.notice = "";
+          return true;
+        }
+        this.resetFitArtifactsForRegeneration();
+        this.state.error = "";
+        this.state.notice = "Your generated image expired from cache. Please generate again.";
+        this.state.stage = "measurements";
+        return true;
+      }
+
       return false;
     }
 
@@ -2549,6 +2616,7 @@
     }
 
     renderSetup() {
+      const consentChecked = Boolean(this.state.form.researchConsent);
       return (
         '<div class="ovts-stage">' +
         '<div class="ovts-stage-head"><h2>Quick Setup <span>Guide</span></h2><p>Follow these simple steps for the best results.</p></div>' +
@@ -2569,14 +2637,18 @@
         ">Female</option>" +
         '<option value="unisex"' +
         (this.state.form.gender === "unisex" ? " selected" : "") +
-        ">Prefer not to say</option></select></div></label></form>" +
+        '>Prefer not to say</option></select></div></label><label class="ovts-field ovts-consent-field"><div class="ovts-consent-wrap"><input type="checkbox" name="researchConsent" value="true"' +
+        (consentChecked ? " checked" : "") +
+        '><span>I agree to research retention of my photos and measurement outputs as described in the privacy notice.</span></div></label></form>' +
         '<div class="ovts-guides">' +
         this.renderGuideRow("plain", "Plain Background", "Position yourself in front of a plain wall.") +
         this.renderGuideRow("distance", "Stand 1.5m Away", "Step back so your full body is visible in frame.") +
         this.renderGuideRow("clothing", "Fitted Clothing", "Wear fitting clothes for the cleanest measurement read.") +
         this.renderGuideRow("light", "Good Lighting", "Stand in a well-lit area facing the light source.") +
-        '</div><button type="button" class="ovts-primary" data-action="continue-to-front">Continue</button>' +
-        '<div class="ovts-privacy-note"><strong>Your Privacy Matters</strong><span>Your photo is processed instantly and deleted within 1 hour. We never store or share your image. GDPR compliant.</span></div></div>'
+        '</div><button type="button" class="ovts-primary" data-action="continue-to-front"' +
+        (consentChecked ? "" : " disabled") +
+        ">Continue</button>" +
+        '<div class="ovts-privacy-note"><strong>Your Privacy Matters</strong><span>Your photos stay available for try-on for about 1 hour. With your consent, photos and measurement outputs are retained for research for a limited period.</span></div></div>'
       );
     }
 
@@ -2671,7 +2743,7 @@
         this.renderFeatureTile("Virtual Try-On", "Visualize the product on your body before purchasing.") +
         '</div><button type="button" class="ovts-primary ovts-primary--wide" data-action="view-fit">View Your Fit <span class="ovts-inline-icon">' +
         svgIcon("arrow") +
-        '</span></button><div class="ovts-subtle-note">Measurements are cached for faster reuse. Photos are deleted in 1 hour.</div></section></div></div>'
+        '</span></button><div class="ovts-subtle-note">Measurements are cached for faster reuse. Photos remain available for try-on for about 1 hour; with consent, photos and measurement outputs may be retained for research for a limited period.</div></section></div></div>'
       );
     }
 
