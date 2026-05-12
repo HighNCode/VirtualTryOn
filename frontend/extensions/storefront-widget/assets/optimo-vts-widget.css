@@ -489,6 +489,19 @@
   justify-self: start;
 }
 
+.ovts-stage--measurements .ovts-link-button svg {
+  width: 12px !important;
+  height: 12px !important;
+  flex: 0 0 12px !important;
+}
+
+.ovts-stage--measurements .ovts-link-button {
+  gap: 6px !important;
+  color: #6b7280 !important;
+  font-size: 11px !important;
+  line-height: 1.2 !important;
+}
+
 .ovts-inline-back.is-top {
   align-self: flex-start;
 }
@@ -568,37 +581,6 @@
   border-radius: 14px;
   overflow: hidden;
   background: linear-gradient(180deg, #f0f0f0 0%, #f7f7f7 100%);
-}
-
-.ovts-pose-head,
-.ovts-pose-body,
-.ovts-pose-arm,
-.ovts-pose-leg {
-  position: absolute;
-  display: block;
-  background: #385270;
-  left: 50%;
-  transform: translateX(-50%);
-  border-radius: 999px;
-}
-
-.ovts-pose-head { top: 22px; width: 30px; height: 30px; background: #d2a78c; }
-.ovts-pose-body { top: 58px; width: 58px; height: 86px; border-radius: 18px; }
-.ovts-pose-arm { top: 70px; width: 12px; height: 82px; }
-.ovts-pose-arm.is-left { margin-left: -36px; }
-.ovts-pose-arm.is-right { margin-left: 36px; }
-.ovts-pose-leg { top: 142px; width: 17px; height: 72px; background: #c8d8ea; }
-.ovts-pose-leg.is-left { margin-left: -13px; }
-.ovts-pose-leg.is-right { margin-left: 13px; }
-.ovts-pose-figure.is-side .ovts-pose-body { width: 42px; }
-.ovts-pose-figure.is-side .ovts-pose-arm.is-left { display: none; }
-.ovts-pose-figure.is-side .ovts-pose-leg.is-right { display: none; }
-
-.ovts-pose-slash {
-  position: absolute;
-  inset: 18px 44%;
-  background: linear-gradient(180deg, transparent 0%, var(--ovts-brand-accent) 20%, var(--ovts-brand-accent) 80%, transparent 100%);
-  transform: rotate(-22deg);
 }
 
 .ovts-pose-actions,
@@ -1380,14 +1362,6 @@
   border-radius: 8px !important;
   background: #f0f0f0 !important;
   display: block !important;
-}
-
-.ovts-stage--pose .ovts-pose-head,
-.ovts-stage--pose .ovts-pose-body,
-.ovts-stage--pose .ovts-pose-arm,
-.ovts-stage--pose .ovts-pose-leg,
-.ovts-stage--pose .ovts-pose-slash {
-  display: none !important;
 }
 
 .ovts-stage--pose .ovts-pose-actions {

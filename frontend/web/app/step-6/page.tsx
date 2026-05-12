@@ -22,7 +22,104 @@ function formatPrice(value: number, currencyCode: string): string {
   }).format(value);
 }
 
+function formatRate(value: number, currencyCode: string): string {
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: currencyCode,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 3
+  }).format(value);
+}
+
 type BillingCycle = "monthly" | "annual";
+
+const PLAN_PRICE_SHEET: PlanConfigResponse[] = [
+  {
+    id: "ui-starter",
+    name: "starter",
+    display_name: "Starter",
+    price_monthly: 17.99,
+    price_annual_total: 179,
+    price_annual_per_month: 14.92,
+    annual_discount_pct: 17,
+    credits_monthly: 600,
+    credits_annual: 7600,
+    overage_usd_per_tryon: 0.14,
+    usage_cap_usd: 500,
+    trial_days: 14,
+    trial_credits: 80,
+    features: ["150 smart fits per month", "AI Try-On", "AI Studio Look", "Fit heatmap", "Analytics", "Email support"],
+    is_current: false,
+    is_active: true
+  },
+  {
+    id: "ui-growth",
+    name: "growth",
+    display_name: "Growth",
+    price_monthly: 29.99,
+    price_annual_total: 299,
+    price_annual_per_month: 24.92,
+    annual_discount_pct: 17,
+    credits_monthly: 1000,
+    credits_annual: 12800,
+    overage_usd_per_tryon: 0.098,
+    usage_cap_usd: 500,
+    trial_days: 14,
+    trial_credits: 80,
+    features: ["250 AI experiences", "Photostudio", "Social sharing", "AI Try-On", "Fit heatmap", "Priority support"],
+    is_current: false,
+    is_active: true
+  },
+  {
+    id: "ui-professional",
+    name: "professional",
+    display_name: "Professional",
+    price_monthly: 49.99,
+    price_annual_total: 499,
+    price_annual_per_month: 41.58,
+    annual_discount_pct: 17,
+    credits_monthly: 1680,
+    credits_annual: 21000,
+    overage_usd_per_tryon: 0.078,
+    usage_cap_usd: 500,
+    trial_days: 14,
+    trial_credits: 80,
+    features: ["420 AI experiences", "Advanced analytics", "Priority speed", "Photostudio", "Social sharing", "Priority support"],
+    is_current: false,
+    is_active: true
+  },
+  {
+    id: "ui-scale",
+    name: "scale",
+    display_name: "Scale",
+    price_monthly: 99.99,
+    price_annual_total: 999,
+    price_annual_per_month: 83.25,
+    annual_discount_pct: 17,
+    credits_monthly: 3500,
+    credits_annual: 42000,
+    overage_usd_per_tryon: 0.068,
+    usage_cap_usd: 500,
+    trial_days: 14,
+    trial_credits: 80,
+    features: ["1,000 AI experiences", "Dedicated support", "Full API access", "Advanced analytics", "Priority speed", "Custom widget branding"],
+    is_current: false,
+    is_active: true
+  }
+];
+
+function mergePlanCatalog(apiPlans: PlanConfigResponse[]): PlanConfigResponse[] {
+  return PLAN_PRICE_SHEET.map((sheetPlan) => {
+    const apiPlan = apiPlans.find((plan) => plan.name === sheetPlan.name);
+
+    return {
+      ...sheetPlan,
+      id: apiPlan?.id ?? sheetPlan.id,
+      is_current: apiPlan?.is_current ?? sheetPlan.is_current,
+      is_active: apiPlan?.is_active ?? sheetPlan.is_active
+    };
+  });
+}
 
 export default function StepSixPage() {
   const router = useEmbeddedRouter();
@@ -105,7 +202,7 @@ export default function StepSixPage() {
 
   const renderedPlans = useMemo(
     () =>
-      plans.map((plan) => ({
+      mergePlanCatalog(plans).map((plan) => ({
         ...plan,
         displayedPrice: isAnnual ? plan.price_annual_per_month : plan.price_monthly,
         displayedCredits: isAnnual ? plan.credits_annual : plan.credits_monthly,
@@ -187,7 +284,7 @@ export default function StepSixPage() {
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "24px 16px", background: "#f6f4f4" }}>
-      <div style={{ width: "100%", maxWidth: 860, background: "#fff", borderRadius: 14, overflow: "hidden", boxShadow: "0 4px 24px rgba(0,0,0,0.08)", border: "1px solid rgba(0,0,0,0.05)" }}>
+      <div style={{ width: "100%", maxWidth: 1120, background: "#fff", borderRadius: 14, overflow: "hidden", boxShadow: "0 4px 24px rgba(0,0,0,0.08)", border: "1px solid rgba(0,0,0,0.05)" }}>
 
         {/* Top bar */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 24px", borderBottom: "1px solid #f0f0f0" }}>
@@ -263,7 +360,7 @@ export default function StepSixPage() {
           </div>
 
           {/* Plans grid */}
-          <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.max(renderedPlans.length, 1)}, 1fr)`, gap: 16, marginBottom: 20 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 16, marginBottom: 20 }}>
             {renderedPlans.map((plan) => (
               <article
                 key={plan.id}
@@ -304,6 +401,10 @@ export default function StepSixPage() {
                     {introTrialConsumed ? "Intro trial already used" : plan.trial_days ? `${plan.trial_days}-day trial` : "No trial"}
                   </p>
                 </div>
+
+                <p style={{ margin: "0 0 12px", fontSize: 12, color: "#6b7280" }}>
+                  Additional try-ons at <strong style={{ color: "#1a1a1a" }}>{formatRate(plan.overage_usd_per_tryon, "USD")}</strong>
+                </p>
 
                 <p style={{ margin: "0 0 6px", fontSize: 11, fontWeight: 600, color: "#6b7280" }}>Features</p>
                 <ul style={{ listStyle: "none", margin: "0 0 12px", padding: 0, display: "flex", flexDirection: "column", gap: 6, flex: 1 }}>
@@ -349,7 +450,7 @@ export default function StepSixPage() {
               </article>
             ))}
 
-            {!isLoading && plans.length === 0 && (
+            {!isLoading && renderedPlans.length === 0 && (
               <p style={{ fontSize: 13, gridColumn: "1 / -1", textAlign: "center", padding: "16px 0", color: "#9ca3af" }}>
                 No billing plans available. Please contact support.
               </p>
@@ -358,7 +459,7 @@ export default function StepSixPage() {
 
           <p style={{ margin: "0 0 20px", fontSize: 12, textAlign: "center", color: "#9ca3af" }}>
             <strong style={{ color: "#6b7280" }}>1 Try-on = 4 Credits</strong>
-            {" · "}
+            {" - "}
             Billing is created through Shopify and approved on Shopify&apos;s hosted confirmation page.
           </p>
 
@@ -368,7 +469,7 @@ export default function StepSixPage() {
           >
             <div>
               <h2 style={{ margin: "0 0 2px", fontSize: 15, fontWeight: 700, color: "#1a1a1a" }}>Start Free Trial</h2>
-              <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>14 days free trial with 80 included credits. No Shopify charge approval required today.</p>
+              <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>14 days free trial with 80 included credits (20 AI experiences). No Shopify charge approval required today.</p>
             </div>
             <button
               type="button"
