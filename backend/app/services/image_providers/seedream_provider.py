@@ -4,13 +4,20 @@ import base64
 import binascii
 import logging
 from io import BytesIO
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 import requests
 from PIL import Image
 
 from app.config import Settings
 from app.services.image_providers.base import ImageGenerationProvider
+from app.services.image_providers.hardening import (
+    ImageEchoError,
+    build_tryon_prompt,
+    compute_reference_hashes,
+    download_and_validate_product_image,
+    select_best_non_echo_candidate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,15 +38,65 @@ class SeedreamProvider(ImageGenerationProvider):
         product_title: str,
         category: str,
     ) -> bytes:
-        prompt = self._build_tryon_prompt(product_title, category)
-        result = self._generate_image(
+        product_bytes = download_and_validate_product_image(
+            product_image_url,
+            timeout_seconds=self._timeout,
+            logger=logger,
+        )
+        reference_hashes = compute_reference_hashes(
+            person_image,
+            product_bytes,
+            normalize_fn=self._normalize_image_bytes,
+        )
+
+        prompt = build_tryon_prompt(product_title, category, strict=False)
+        result, source = self._generate_image(
             prompt=prompt,
             image=[
                 self._image_bytes_to_data_uri(person_image),
-                product_image_url,
+                self._image_bytes_to_data_uri(product_bytes),
             ],
         )
-        return self._normalize_image_bytes(result)
+        try:
+            selected, selected_source = select_best_non_echo_candidate(
+                [(result, source)],
+                reference_hashes=reference_hashes,
+                normalize_fn=self._normalize_image_bytes,
+                logger=logger,
+            )
+            logger.info(
+                "Try-on candidate selection: total=%s selected_source=%s selected_bytes=%s",
+                1,
+                selected_source,
+                len(selected),
+            )
+            return selected
+        except ImageEchoError:
+            retry_prompt = build_tryon_prompt(product_title, category, strict=True)
+            logger.warning("retry_attempted event=tryon_echo_rejected reason=echo_output_detected")
+            retry_result, retry_source = self._generate_image(
+                prompt=retry_prompt,
+                image=[
+                    self._image_bytes_to_data_uri(person_image),
+                    self._image_bytes_to_data_uri(product_bytes),
+                ],
+            )
+            try:
+                selected, selected_source = select_best_non_echo_candidate(
+                    [(retry_result, retry_source)],
+                    reference_hashes=reference_hashes,
+                    normalize_fn=self._normalize_image_bytes,
+                    logger=logger,
+                )
+                logger.info(
+                    "Try-on candidate selection: total=%s selected_source=%s selected_bytes=%s",
+                    1,
+                    selected_source,
+                    len(selected),
+                )
+                return selected
+            except ImageEchoError as exc:
+                raise ValueError("TRYON_OUTPUT_INVALID_OR_ECHO: model returned echoed input image") from exc
 
     def generate_studio_tryon(
         self,
@@ -52,7 +109,7 @@ class SeedreamProvider(ImageGenerationProvider):
             "Change the background, lighting, objects and pose of the person to match "
             "the environment in the second image. The result should look like a natural professional photograph."
         )
-        result = self._generate_image(
+        result, _ = self._generate_image(
             prompt=prompt,
             image=[
                 self._image_bytes_to_data_uri(tryon_image),
@@ -87,13 +144,14 @@ class SeedreamProvider(ImageGenerationProvider):
             f"{garment_detail} "
             "Output a clean, professional product photo on a white or light grey background."
         )
-        return self._generate_image(
+        result, _ = self._generate_image(
             prompt=prompt,
             image=[
                 self._image_bytes_to_data_uri(image1_bytes),
                 self._image_bytes_to_data_uri(image2_bytes),
             ],
         )
+        return result
 
     def generate_try_on_model(
         self,
@@ -108,13 +166,14 @@ class SeedreamProvider(ImageGenerationProvider):
             "Fit the garment naturally on the model's body. "
             "The result should look like a professional fashion product photograph."
         )
-        return self._generate_image(
+        result, _ = self._generate_image(
             prompt=prompt,
             image=[
                 self._image_bytes_to_data_uri(product_image_bytes),
                 self._image_bytes_to_data_uri(model_image_bytes),
             ],
         )
+        return result
 
     def generate_model_swap(
         self,
@@ -130,15 +189,16 @@ class SeedreamProvider(ImageGenerationProvider):
             "Only the face region should be replaced. "
             "The result should look like a seamless, photorealistic professional fashion photograph."
         )
-        return self._generate_image(
+        result, _ = self._generate_image(
             prompt=prompt,
             image=[
                 self._image_bytes_to_data_uri(original_wearing_bytes),
                 self._image_bytes_to_data_uri(face_bytes),
             ],
         )
+        return result
 
-    def _generate_image(self, prompt: str, image: str | list[str]) -> bytes:
+    def _generate_image(self, prompt: str, image: str | list[str]) -> Tuple[bytes, str]:
         if not self._settings.SEEDREAM_API_KEY:
             raise ValueError("SEEDREAM_API_KEY is not configured")
         if not self._model:
@@ -187,13 +247,13 @@ class SeedreamProvider(ImageGenerationProvider):
         b64 = base64.b64encode(image_bytes).decode("ascii")
         return f"data:{mime_type};base64,{b64}"
 
-    def _extract_output_bytes(self, response_json: dict[str, Any]) -> bytes:
+    def _extract_output_bytes(self, response_json: dict[str, Any]) -> Tuple[bytes, str]:
         first = response_json["data"][0]
 
         b64_payload = first.get("b64_json")
         if isinstance(b64_payload, str) and b64_payload.strip():
             try:
-                return base64.b64decode(b64_payload, validate=True)
+                return base64.b64decode(b64_payload, validate=True), "b64_json"
             except (binascii.Error, ValueError) as exc:
                 raise ValueError("Seedream b64_json output is invalid") from exc
 
@@ -206,7 +266,7 @@ class SeedreamProvider(ImageGenerationProvider):
                 raise RuntimeError(
                     f"Seedream output URL download failed ({result.status_code}): {image_url}"
                 ) from exc
-            return result.content
+            return result.content, "url"
 
         raise ValueError("Seedream response did not include b64_json or url output")
 
@@ -226,23 +286,6 @@ class SeedreamProvider(ImageGenerationProvider):
             raise ValueError("Seedream response contains no generated image data")
         if not isinstance(data[0], dict):
             raise ValueError("Seedream response data item is malformed")
-
-    def _build_tryon_prompt(self, product_title: str, category: str) -> str:
-        category_hint = {
-            "tops": "upper body garment",
-            "bottoms": "lower body garment (pants/jeans)",
-            "dresses": "full-body dress",
-            "outerwear": "outer layer jacket/coat",
-        }.get(category, "garment")
-
-        return (
-            "Using the provided person photo and product photo, generate a single "
-            f"photorealistic image of the person wearing the {product_title} ({category_hint}). "
-            "Keep the person's face, body, pose, and background exactly the same. "
-            "Keep the product's color, texture, and design exactly the same. "
-            "Fit the product naturally on the person's body. "
-            "The result should look like a real photograph, not a collage."
-        )
 
     def _normalize_image_bytes(self, image_bytes: bytes) -> bytes:
         try:

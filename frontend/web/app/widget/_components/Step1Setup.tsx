@@ -16,6 +16,7 @@ export function Step1Setup({ onNext }: Props) {
   const [height, setHeight] = useState("");
   const [weight, setWeight] = useState("");
   const [gender, setGender] = useState("");
+  const [researchConsent, setResearchConsent] = useState(false);
 
   return (
     <div className="flex flex-col items-center px-6 py-8 gap-5">
@@ -93,6 +94,7 @@ export function Step1Setup({ onNext }: Props) {
       </div>
 
       <button
+        disabled={!researchConsent}
         onClick={onNext}
         className="w-full py-3.5 rounded-[12px] text-white text-sm font-bold"
         style={{ background: "linear-gradient(135deg, #7E0175 0%, #BC174A 55%, #E40206 100%)" }}
@@ -100,12 +102,22 @@ export function Step1Setup({ onNext }: Props) {
         Continue
       </button>
 
+      <label className="w-full flex items-start gap-2 text-[11px] text-[#5f6368]">
+        <input
+          type="checkbox"
+          checked={researchConsent}
+          onChange={(event) => setResearchConsent(event.target.checked)}
+          className="mt-0.5"
+        />
+        <span>I agree to research retention of my photos and measurement outputs as described in the privacy notice.</span>
+      </label>
+
       <div className="w-full bg-[#f9f9f9] rounded-[10px] px-4 py-3 text-center">
         <p className="text-[11px] font-semibold text-[#1a1a1a]">Your Privacy Matters</p>
         <p className="text-[10px] text-[#9ca3af] mt-0.5">
-          Your photo is processed instantly and deleted within 1 hour.
+          Your photos stay available for try-on for about 1 hour.
           <br />
-          We never store or share your images. GDPR compliant.
+          With your consent, photos and measurement outputs are retained for research for a limited period.
         </p>
       </div>
     </div>

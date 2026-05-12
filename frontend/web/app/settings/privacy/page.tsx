@@ -25,8 +25,8 @@ const privacyRows = [
   },
   {
     title: "Policy and retention details",
-    text: "Retention policy, subprocessors, and merchant-facing policy documents should be provided in the client handoff and app listing.",
-    status: "Review"
+    text: "Customer media is cache-visible for about 1 hour; if explicit consent is collected in widget setup, photos and measurement outputs can be retained for research for a limited period.",
+    status: "Configured"
   }
 ];
 

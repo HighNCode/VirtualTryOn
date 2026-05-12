@@ -247,6 +247,23 @@
   font-weight: 700;
 }
 
+.ovts-consent-wrap {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.ovts-consent-wrap input[type="checkbox"] {
+  margin-top: 2px;
+}
+
+.ovts-consent-wrap span {
+  font-size: 13px;
+  line-height: 1.45;
+  font-weight: 600;
+}
+
 .ovts-input-wrap,
 .ovts-select-wrap {
   position: relative;
@@ -311,6 +328,13 @@
   justify-content: center;
   gap: 10px;
   box-shadow: 0 14px 24px rgba(181, 0, 73, 0.24);
+}
+
+.ovts-primary:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }
 
 .ovts-primary--wide,

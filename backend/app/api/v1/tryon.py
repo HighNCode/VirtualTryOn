@@ -36,6 +36,56 @@ router = APIRouter(prefix="/tryon", tags=["Virtual Try-On"])
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+ERROR_CODE_TRYON_CACHE_EXPIRED = "TRYON_CACHE_EXPIRED"
+ERROR_CODE_TRYON_OUTPUT_INVALID_OR_ECHO = "TRYON_OUTPUT_INVALID_OR_ECHO"
+ERROR_CODE_TRYON_PRODUCT_IMAGE_INVALID = "TRYON_PRODUCT_IMAGE_INVALID"
+ERROR_CODE_TRYON_GENERATION_FAILED = "TRYON_GENERATION_FAILED"
+
+
+def _error_code_from_message(message: Optional[str]) -> Optional[str]:
+    raw = (message or "").strip()
+    if raw.startswith("[") and "]" in raw:
+        token = raw[1:raw.index("]")].strip()
+        if token:
+            return token
+    text = raw.lower()
+    if not text:
+        return None
+    if "expired" in text and "cache" in text:
+        return ERROR_CODE_TRYON_CACHE_EXPIRED
+    if "echo" in text or "invalid_or_echo" in text:
+        return ERROR_CODE_TRYON_OUTPUT_INVALID_OR_ECHO
+    if "generated output is not a valid image" in text:
+        return ERROR_CODE_TRYON_OUTPUT_INVALID_OR_ECHO
+    if "product_image_invalid" in text:
+        return ERROR_CODE_TRYON_PRODUCT_IMAGE_INVALID
+    if "product image too small" in text:
+        return ERROR_CODE_TRYON_PRODUCT_IMAGE_INVALID
+    if "expected image content-type" in text:
+        return ERROR_CODE_TRYON_PRODUCT_IMAGE_INVALID
+    if "downloaded payload is not a decodable image" in text:
+        return ERROR_CODE_TRYON_PRODUCT_IMAGE_INVALID
+    return ERROR_CODE_TRYON_GENERATION_FAILED
+
+
+def _http_error(status_code: int, code: str, message: str) -> HTTPException:
+    return HTTPException(status_code=status_code, detail={"code": code, "message": message})
+
+
+def _strip_error_code_prefix(message: Optional[str]) -> Optional[str]:
+    raw = (message or "").strip()
+    if raw.startswith("[") and "]" in raw:
+        return raw[raw.index("]") + 1 :].strip()
+    return raw or None
+
+
+def _assert_debug_admin_access(x_admin_key: Optional[str]) -> None:
+    if settings.APP_ENV.lower() != "development":
+        raise HTTPException(404, "Not found")
+    if not x_admin_key or x_admin_key != settings.ADMIN_API_KEY:
+        raise HTTPException(403, "Forbidden")
+
+
 def _infer_image_media_type(image_bytes: bytes) -> str:
     """Infer image mime type from magic bytes for reliable browser rendering."""
     if not image_bytes:
@@ -167,6 +217,7 @@ def _run_tryon_generation(
             cache_key = loop.run_until_complete(
                 cache.store_tryon_result(str(try_on_id), result_bytes)
             )
+            logger.info("redis_write_ok event=tryon_result_stored try_on_id=%s key=%s", try_on_id, cache_key)
             cached_bytes = loop.run_until_complete(cache.get_tryon_result(str(try_on_id)))
             if not cached_bytes:
                 raise RuntimeError(f"Try-on cached payload missing right after write: {try_on_id}")
@@ -185,6 +236,12 @@ def _run_tryon_generation(
                 result_bytes=result_bytes,
                 flow_variant="generate",
             )
+            if archived_object_path:
+                logger.info(
+                    "archive_write_ok event=tryon_result_archived try_on_id=%s object_path=%s",
+                    try_on_id,
+                    archived_object_path,
+                )
 
         # Update DB record
         record.processing_status = "completed"
@@ -227,7 +284,11 @@ def _run_tryon_generation(
             record = db.query(TryOn).filter_by(try_on_id=try_on_id).first()
             if record:
                 record.processing_status = "failed"
-                record.error_message = str(e)[:500]
+                error_code = _error_code_from_message(str(e))
+                if error_code:
+                    record.error_message = f"[{error_code}] {str(e)[:460]}"
+                else:
+                    record.error_message = str(e)[:500]
                 db.commit()
             if usage_event_id:
                 import asyncio
@@ -284,6 +345,7 @@ def _run_studio_generation(
             cache_key = loop.run_until_complete(
                 cache.store_tryon_result(str(try_on_id), result_bytes)
             )
+            logger.info("redis_write_ok event=studio_result_stored try_on_id=%s key=%s", try_on_id, cache_key)
             cached_bytes = loop.run_until_complete(cache.get_tryon_result(str(try_on_id)))
             if not cached_bytes:
                 raise RuntimeError(f"Studio try-on cached payload missing right after write: {try_on_id}")
@@ -306,6 +368,12 @@ def _run_studio_generation(
                 result_bytes=result_bytes,
                 flow_variant="studio",
             )
+            if archived_object_path:
+                logger.info(
+                    "archive_write_ok event=studio_result_archived try_on_id=%s object_path=%s",
+                    try_on_id,
+                    archived_object_path,
+                )
 
         record.processing_status = "completed"
         record.result_cache_key = cache_key
@@ -334,7 +402,11 @@ def _run_studio_generation(
             record = db.query(TryOn).filter_by(try_on_id=try_on_id).first()
             if record:
                 record.processing_status = "failed"
-                record.error_message = str(e)[:500]
+                error_code = _error_code_from_message(str(e))
+                if error_code:
+                    record.error_message = f"[{error_code}] {str(e)[:460]}"
+                else:
+                    record.error_message = str(e)[:500]
                 db.commit()
             if usage_event_id:
                 import asyncio
@@ -440,6 +512,13 @@ async def generate_studio_tryon(
         if original.processing_status != "completed":
             raise HTTPException(409, "Original try-on is not completed yet")
 
+        # Validate store ownership early for all branches including cache-hit returns.
+        original_product = db.query(Product).filter_by(product_id=original.product_id).first()
+        if not original_product:
+            raise HTTPException(404, "Product not found for original try-on")
+        if str(original_product.store_id) != str(store.store_id):
+            raise HTTPException(403, "Try-on does not belong to this store")
+
         # Validate studio background
         bg = db.query(PhotoshootModel).filter_by(
             id=str(request.studio_background_id), is_active=True
@@ -458,21 +537,60 @@ async def generate_studio_tryon(
                 parent_try_on_id=str(request.try_on_id),
                 studio_background_id=str(request.studio_background_id),
                 processing_status="completed",
-            ).first()
+            ).order_by(TryOn.created_at.desc()).first()
 
             if existing:
-                logger.info(f"Studio cache hit: parent={request.try_on_id}, bg={request.studio_background_id}")
+                logger.info(
+                    "studio_cache_hit event=studio_cache_hit parent=%s bg=%s try_on_id=%s",
+                    request.try_on_id,
+                    request.studio_background_id,
+                    existing.try_on_id,
+                )
                 return {
                     "try_on_id": str(existing.try_on_id),
                     "status": "completed",
                     "result_image_url": f"/api/v1/tryon/{existing.try_on_id}/image",
+                    "result_source": "redis",
+                    "reused": True,
+                }
+
+        # Fallback: combo key may expire before the per-tryon image key.
+        existing = db.query(TryOn).filter_by(
+            parent_try_on_id=str(request.try_on_id),
+            studio_background_id=str(request.studio_background_id),
+            processing_status="completed",
+        ).order_by(TryOn.created_at.desc()).first()
+        if existing:
+            cached_existing = await cache.get_tryon_result(str(existing.try_on_id))
+            if cached_existing:
+                logger.info(
+                    "studio_cache_fallback_hit event=studio_cache_fallback_hit parent=%s bg=%s try_on_id=%s",
+                    request.try_on_id,
+                    request.studio_background_id,
+                    existing.try_on_id,
+                )
+                return {
+                    "try_on_id": str(existing.try_on_id),
+                    "status": "completed",
+                    "result_image_url": f"/api/v1/tryon/{existing.try_on_id}/image",
+                    "result_source": "redis",
+                    "reused": True,
                 }
 
         # Get original try-on image from Redis
         tryon_image = await cache.get_tryon_result(str(request.try_on_id))
         if not tryon_image:
+            logger.info(
+                "redis_read_miss event=studio_parent_tryon_image parent=%s bg=%s",
+                request.try_on_id,
+                request.studio_background_id,
+            )
             # Customer guardrail: do not fall back to archival storage after Redis expiry.
-            raise HTTPException(410, "Original try-on image has expired from cache")
+            raise _http_error(
+                410,
+                ERROR_CODE_TRYON_CACHE_EXPIRED,
+                "Original try-on image has expired from cache",
+            )
 
         # Read studio background from durable object path (fallback to local static while backfill completes).
         studio_image = _read_library_image_bytes(
@@ -480,11 +598,7 @@ async def generate_studio_tryon(
             image_path=bg.image_path,
         )
 
-        product = db.query(Product).filter_by(product_id=original.product_id).first()
-        if not product:
-            raise HTTPException(404, "Product not found for original try-on")
-        if str(product.store_id) != str(store.store_id):
-            raise HTTPException(403, "Try-on does not belong to this store")
+        product = original_product
 
         StorefrontRateLimitService(db).enforce(
             request=http_request,
@@ -538,12 +652,18 @@ async def generate_studio_tryon(
             usage_event_id=usage_event_id,
         )
 
-        logger.info(f"Studio try-on queued: {new_try_on_id} (parent={request.try_on_id}, bg={bg.image_path})")
+        logger.info(
+            "studio_generation_queued event=studio_generation_queued try_on_id=%s parent=%s bg=%s",
+            new_try_on_id,
+            request.try_on_id,
+            request.studio_background_id,
+        )
 
         return {
             "try_on_id": str(new_try_on_id),
             "status": "processing",
             "estimated_time_seconds": 45,
+            "reused": False,
         }
 
     except HTTPException:
@@ -562,7 +682,8 @@ async def generate_studio_tryon(
                 event_id=usage_event_id,
                 reason=f"studio_request_error:{str(e)[:240]}",
             )
-        raise HTTPException(500, f"Studio try-on generation failed: {str(e)}")
+        code = _error_code_from_message(str(e)) or ERROR_CODE_TRYON_GENERATION_FAILED
+        raise _http_error(500, code, f"Studio try-on generation failed: {str(e)}")
 
 
 # ============================================================================
@@ -638,6 +759,7 @@ async def generate_tryon(
                             "try_on_id": str(existing.try_on_id),
                             "status": "completed",
                             "result_image_url": f"/api/v1/tryon/{existing.try_on_id}/image",
+                            "result_source": "redis",
                             "reused": True,
                         }
 
@@ -668,6 +790,7 @@ async def generate_tryon(
                         "try_on_id": str(existing.try_on_id),
                         "status": "completed",
                         "result_image_url": f"/api/v1/tryon/{existing.try_on_id}/image",
+                        "result_source": "redis",
                         "reused": True,
                     }
 
@@ -783,6 +906,50 @@ async def generate_tryon(
         raise HTTPException(500, f"Try-on generation failed: {str(e)}")
 
 
+@router.post("/debug/{try_on_id}/rehydrate-cache")
+async def debug_rehydrate_tryon_cache(
+    try_on_id: str,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: DBSession = Depends(get_db),
+):
+    """
+    Internal debug-only utility:
+    Rehydrate a customer try-on Redis payload from archived object storage.
+    Supports both base try-on and studio outputs by try_on_id.
+    """
+    _assert_debug_admin_access(x_admin_key)
+    record = db.query(TryOn).filter_by(try_on_id=try_on_id).first()
+    if not record:
+        raise HTTPException(404, "Try-on not found")
+    if not record.result_object_path:
+        raise HTTPException(409, "No archived object found for this try-on")
+
+    storage = get_media_storage_service()
+    if not storage.enabled:
+        raise HTTPException(500, "Media storage is not configured")
+
+    payload = storage.download_bytes(record.result_object_path)
+    if not payload:
+        raise HTTPException(404, "Archived object payload missing")
+    if not _is_valid_image_payload(payload):
+        raise HTTPException(422, "Archived payload is not a valid image")
+
+    cache = CacheService()
+    cache_key = await cache.store_tryon_result(try_on_id, payload)
+    logger.info(
+        "redis_write_ok event=debug_rehydrate_cache try_on_id=%s object_path=%s key=%s",
+        try_on_id,
+        record.result_object_path,
+        cache_key,
+    )
+    return {
+        "rehydrated": True,
+        "try_on_id": try_on_id,
+        "result_source": "redis",
+        "cache_key": cache_key,
+    }
+
+
 @router.get("/{try_on_id}/status", response_model=TryOnStatusResponse)
 async def get_tryon_status(
     try_on_id: str,
@@ -806,7 +973,9 @@ async def get_tryon_status(
     progress = None
     message = None
     result_image_url = None
+    result_source = None
     cache_expires_at = None
+    error_code = None
 
     if status == "queued":
         progress = 0
@@ -818,20 +987,24 @@ async def get_tryon_status(
         cache = CacheService()
         cached = await cache.get_tryon_result(str(try_on_id))
         if not cached:
+            logger.info("redis_read_miss event=tryon_status_check try_on_id=%s", try_on_id)
             # Customer guardrail: never restore customer-visible output from archival storage.
             record.processing_status = "failed"
             record.error_message = "Generated image expired or missing from cache. Please regenerate."
             db.commit()
             status = "failed"
             message = record.error_message
+            error_code = ERROR_CODE_TRYON_CACHE_EXPIRED
         else:
             progress = 100
             message = "Try-on image ready"
             result_image_url = f"/api/v1/tryon/{try_on_id}/image"
+            result_source = "redis"
             if record.completed_at:
                 cache_expires_at = record.completed_at + timedelta(seconds=settings.TRYON_RESULT_TTL_SECONDS)
     elif status == "failed":
-        message = record.error_message or "Image generation failed"
+        message = _strip_error_code_prefix(record.error_message) or "Image generation failed"
+        error_code = _error_code_from_message(record.error_message or message)
 
     return TryOnStatusResponse(
         try_on_id=record.try_on_id,
@@ -839,9 +1012,11 @@ async def get_tryon_status(
         progress=progress,
         message=message,
         result_image_url=result_image_url,
+        result_source=result_source,
         processing_time_seconds=record.processing_time_seconds,
         cache_expires_at=cache_expires_at,
-        error=record.error_message if status == "failed" else None,
+        error=_strip_error_code_prefix(record.error_message) if status == "failed" else None,
+        error_code=error_code,
         retry_allowed=status == "failed",
     )
 
@@ -869,6 +1044,7 @@ async def get_tryon_image(
     image_bytes = await cache.get_tryon_result(str(try_on_id))
 
     if not image_bytes:
+        logger.info("redis_read_miss event=tryon_image_fetch try_on_id=%s", try_on_id)
         # Customer guardrail: image availability is bounded by Redis cache TTL.
         raise HTTPException(410, "Try-on image has expired from cache")
     if not _is_valid_image_payload(image_bytes):

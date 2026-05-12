@@ -149,6 +149,48 @@ class MediaStorageService:
             logger.warning("Failed to generate signed PUT URL (%s): %s", object_path, exc)
             return None
 
+    def prefixed_path(self, relative_path: str) -> str:
+        normalized = "/".join(
+            part.strip("/")
+            for part in str(relative_path or "").split("/")
+            if part and part.strip("/")
+        )
+        if self._prefix:
+            return f"{self._prefix}/{normalized}" if normalized else self._prefix
+        return normalized
+
+    def list_object_paths(self, *, prefix: str, max_results: Optional[int] = None) -> list[str]:
+        if not self.enabled:
+            return []
+        normalized_prefix = self.prefixed_path(prefix)
+        if normalized_prefix and not normalized_prefix.endswith("/"):
+            normalized_prefix = f"{normalized_prefix}/"
+        try:
+            iterator = self._client.list_blobs(
+                self._bucket_name,
+                prefix=normalized_prefix,
+                max_results=max_results,
+            )
+            return [blob.name for blob in iterator]
+        except Exception as exc:
+            logger.warning("Failed to list objects in GCS prefix (%s): %s", normalized_prefix, exc)
+            return []
+
+    def delete_prefix(
+        self,
+        *,
+        prefix: str,
+        max_results: Optional[int] = None,
+        timeout_seconds: int = 120,
+    ) -> int:
+        if not self.enabled:
+            return 0
+        deleted_count = 0
+        for path in self.list_object_paths(prefix=prefix, max_results=max_results):
+            if self.delete_object(path, timeout_seconds=timeout_seconds):
+                deleted_count += 1
+        return deleted_count
+
     def build_object_path(self, *, relative_dir: str, payload: bytes, stem: str = "asset") -> str:
         normalized_dir = "/".join(
             part.strip("/")
@@ -157,8 +199,7 @@ class MediaStorageService:
         )
         ext = self.detect_extension(payload)
         suffix = uuid.uuid4().hex[:12]
-        pref = f"{self._prefix}/" if self._prefix else ""
-        return f"{pref}{normalized_dir}/{stem}-{suffix}.{ext}"
+        return f"{self.prefixed_path(normalized_dir)}/{stem}-{suffix}.{ext}"
 
     @staticmethod
     def detect_content_type(payload: bytes) -> str:
@@ -185,4 +226,3 @@ class MediaStorageService:
 @lru_cache(maxsize=1)
 def get_media_storage_service() -> MediaStorageService:
     return MediaStorageService()
-

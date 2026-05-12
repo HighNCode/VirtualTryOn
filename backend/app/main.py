@@ -17,6 +17,10 @@ from app.services.overage_settlement_scheduler import (
     start_overage_settlement_scheduler,
     stop_overage_settlement_scheduler,
 )
+from app.services.store_deletion_scheduler import (
+    start_store_deletion_scheduler,
+    stop_store_deletion_scheduler,
+)
 
 # Import API routers
 from app.api.v1 import auth, products, webhooks, sessions, measurements, recommendations, heatmap, tryon, admin, merchant, photoshoot, analytics
@@ -169,6 +173,7 @@ async def startup_event():
         logger.error("redis_connection_failed", status="error")
 
     start_overage_settlement_scheduler()
+    start_store_deletion_scheduler()
 
 
 # Shutdown event
@@ -183,6 +188,7 @@ async def shutdown_event():
         environment=settings.APP_ENV
     )
     stop_overage_settlement_scheduler()
+    stop_store_deletion_scheduler()
 
 
 # Global exception handler

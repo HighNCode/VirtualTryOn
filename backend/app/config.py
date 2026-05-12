@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     # In dev: set to the shopify app dev tunnel URL, e.g. https://abc123.trycloudflare.com
     # In production: set to https://optimo-virtual-try-on.vercel.app
     APP_URL: Optional[str] = None
+    UNINSTALL_FALLBACK_DELETE_DAYS: int = 30
+    STORE_DELETION_SCHEDULER_ENABLED: bool = True
+    STORE_DELETION_SCHEDULER_INTERVAL_MINUTES: int = 15
 
     # Image generation provider selection
     IMAGE_PROVIDER: str = "gemini"  # gemini | replicate | seedream
@@ -79,8 +82,6 @@ class Settings(BaseSettings):
 
     # Public URL (used to construct image URLs for Shopify productCreateMedia)
     PUBLIC_URL: str = "http://localhost:8000"
-    # Optional compatibility var (some envs set APP_URL instead of PUBLIC_URL)
-    APP_URL: Optional[str] = None
 
     # Admin
     ADMIN_API_KEY: str = "change-this-admin-key-in-production"
@@ -129,6 +130,11 @@ class Settings(BaseSettings):
     SHAPY_SERVICE_URL: str = ""
     SHAPY_API_KEY: Optional[str] = None
     SHAPY_TIMEOUT: int = 60
+
+    # Consented research retention
+    RESEARCH_CONSENT_REQUIRED: bool = True
+    RESEARCH_CONSENT_VERSION: str = "v1"
+    RESEARCH_RETENTION_DAYS: int = 365
 
     class Config:
         env_file = ".env"

@@ -146,6 +146,9 @@ class MeasurementExtractRequest(BaseModel):
     height_cm: float = Field(..., ge=100, le=250, description="Height in centimeters")
     weight_kg: float = Field(..., ge=30, le=300, description="Weight in kilograms")
     gender: str = Field(..., pattern="^(male|female|unisex)$")
+    research_consent: bool = False
+    research_consent_policy_version: Optional[str] = None
+    research_consent_source: Optional[str] = None
 
 
 class MeasurementResponse(BaseModel):
@@ -256,9 +259,11 @@ class TryOnStatusResponse(BaseModel):
     progress: Optional[int] = None
     message: Optional[str] = None
     result_image_url: Optional[str] = None
+    result_source: Optional[str] = None
     processing_time_seconds: Optional[float] = None
     cache_expires_at: Optional[datetime] = None
     error: Optional[str] = None
+    error_code: Optional[str] = None
     retry_allowed: bool = False
 
     class Config:
@@ -642,6 +647,10 @@ class PhotoshootJobResponse(BaseModel):
 class PhotoshootApproveRequest(BaseModel):
     """Approve a completed photoshoot job and push the image to the Shopify product"""
     alt_text: Optional[str] = Field(None, description="Alt text for the Shopify product image")
+    shopify_product_gid: Optional[str] = Field(
+        None,
+        description="Optional Shopify product GID. Required when approving jobs generated without product binding.",
+    )
 
 
 class PhotoshootApproveResponse(BaseModel):

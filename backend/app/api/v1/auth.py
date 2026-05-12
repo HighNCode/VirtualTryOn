@@ -13,7 +13,7 @@ import logging
 
 from app.core.database import get_db
 from app.core.security import encrypt_token
-from app.models.database import Store
+from app.models.database import DataDeletionQueue, Store
 from app.models.schemas import StoreResponse
 from app.services.shopify_service import ShopifyService
 from app.config import get_settings
@@ -101,7 +101,17 @@ async def shopify_oauth_callback(
         if existing_store:
             existing_store.shopify_access_token = encrypted_token
             existing_store.installation_status = 'active'
+            existing_store.uninstalled_at = None
             existing_store.reinstalled_at = datetime.utcnow()
+            pending_deletions = (
+                db.query(DataDeletionQueue)
+                .filter(DataDeletionQueue.store_id == existing_store.store_id)
+                .filter(DataDeletionQueue.status == "pending")
+                .all()
+            )
+            for task in pending_deletions:
+                task.status = "cancelled"
+                task.executed_at = datetime.utcnow()
             store = existing_store
             logger.info(f"Store reinstalled: {shop}")
         else:
