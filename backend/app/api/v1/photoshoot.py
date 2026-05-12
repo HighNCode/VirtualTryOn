@@ -8,12 +8,14 @@ Image-serving endpoints are public (no auth) so Shopify CDN can fetch them.
 """
 
 import os
+import re
 import uuid
 import time
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Set
 
+import requests
 from fastapi import (
     APIRouter, Depends, HTTPException,
     BackgroundTasks, UploadFile, File, Form, Query
@@ -23,9 +25,8 @@ from sqlalchemy.orm import Session as DBSession
 
 from app.api.store_context import get_current_merchant_store, require_shopify_access_token
 from app.core.database import get_db
-from app.models.database import Store, PhotoshootJob, PhotoshootModel, PhotoshootModelFace, GhostMannequinRef
+from app.models.database import Store, Product, PhotoshootJob, PhotoshootModel, PhotoshootModelFace, GhostMannequinRef
 from app.models.schemas import (
-    GhostMannequinRequest,
     PhotoshootJobResponse,
     PhotoshootModelResponse,
     PhotoshootModelFaceResponse,
@@ -40,6 +41,15 @@ from app.services.usage_governance_service import UsageGovernanceService
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/merchant/photoshoot", tags=["AI Photoshoot"])
+
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+ALLOWED_UPLOAD_MIME_TYPES = {
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+}
+ALLOWED_CLOTHING_TYPES = {"tops", "bottoms", "dresses", "outerwear"}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -78,6 +88,112 @@ def _read_library_image(*, object_path: Optional[str], image_path: Optional[str]
     if not image_path:
         raise HTTPException(404, "Image file not found")
     return _read_static_image(image_path)
+
+
+def _normalize_shopify_product_gid(value: Optional[str]) -> Optional[str]:
+    normalized = (value or "").strip()
+    if not normalized:
+        return None
+    if normalized.startswith("gid://shopify/Product/"):
+        return normalized
+    if normalized.isdigit():
+        return f"gid://shopify/Product/{normalized}"
+    return normalized
+
+
+def _extract_shopify_numeric_id(value: Optional[str]) -> Optional[str]:
+    normalized = (value or "").strip()
+    if not normalized:
+        return None
+    if normalized.isdigit():
+        return normalized
+    match = re.search(r"/(\d+)$", normalized)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _resolve_product_for_store(
+    *,
+    db: DBSession,
+    store: Store,
+    shopify_product_gid: Optional[str],
+) -> Product:
+    normalized_gid = _normalize_shopify_product_gid(shopify_product_gid)
+    if not normalized_gid:
+        raise HTTPException(422, "shopify_product_gid is required for store image selection")
+    numeric_id = _extract_shopify_numeric_id(normalized_gid)
+    if not numeric_id:
+        raise HTTPException(422, "shopify_product_gid is invalid")
+    product = db.query(Product).filter_by(
+        store_id=store.store_id,
+        shopify_product_id=numeric_id,
+    ).first()
+    if not product:
+        raise HTTPException(404, "Product not found for this store")
+    return product
+
+
+def _extract_product_image_urls(product: Product) -> Set[str]:
+    urls: Set[str] = set()
+    for image in product.images or []:
+        if isinstance(image, dict):
+            src = image.get("src")
+        else:
+            src = getattr(image, "src", None)
+        if isinstance(src, str) and src.strip():
+            urls.add(src.strip())
+    return urls
+
+
+def _validate_store_image_url(
+    *,
+    product: Product,
+    image_url: str,
+    field_name: str,
+) -> None:
+    normalized_url = (image_url or "").strip()
+    if not normalized_url:
+        raise HTTPException(422, f"{field_name} is required")
+    allowed_urls = _extract_product_image_urls(product)
+    if normalized_url not in allowed_urls:
+        raise HTTPException(422, f"{field_name} must be selected from the chosen store product gallery")
+
+
+async def _read_upload_image(
+    upload: UploadFile,
+    *,
+    field_name: str,
+) -> bytes:
+    if upload is None:
+        raise HTTPException(422, f"{field_name} is required")
+    payload = await upload.read()
+    if not payload:
+        raise HTTPException(422, f"{field_name} is empty")
+    if len(payload) > MAX_UPLOAD_BYTES:
+        raise HTTPException(422, f"{field_name} exceeds the 10MB upload limit")
+    content_type = (upload.content_type or "").lower().strip()
+    if content_type and content_type not in ALLOWED_UPLOAD_MIME_TYPES:
+        raise HTTPException(422, f"{field_name} must be jpg, png, or webp")
+    return payload
+
+
+def _download_image_from_url(*, image_url: str, field_name: str) -> bytes:
+    try:
+        response = requests.get(image_url, timeout=20)
+        response.raise_for_status()
+    except Exception as exc:
+        raise HTTPException(422, f"Could not download {field_name}: {exc}")
+    payload = response.content
+    if not payload:
+        raise HTTPException(422, f"{field_name} returned empty content")
+    return payload
+
+
+def _require_storage_enabled() -> None:
+    storage = get_media_storage_service()
+    if not storage.enabled:
+        raise HTTPException(500, "Media storage is not configured. Ensure GCS bucket access is available.")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -161,22 +277,25 @@ def _run_photoshoot_job(
         loop.close()
 
         storage = get_media_storage_service()
-        output_object_path = None
-        if storage.enabled:
-            output_path = storage.build_object_path(
-                relative_dir=f"stores/{job.store_id}/photoshoot/{job_type}/{job_id}/output",
-                payload=result_bytes,
-                stem="output",
-            )
-            output_object_path = storage.upload_bytes(
-                object_path=output_path,
-                payload=result_bytes,
-                metadata={
-                    "flow": "merchant",
-                    "type": "photoshoot_output",
-                    "job_type": job_type,
-                },
-            )
+        if not storage.enabled:
+            raise RuntimeError("Media storage is unavailable during photoshoot processing")
+
+        output_path = storage.build_object_path(
+            relative_dir=f"stores/{job.store_id}/photoshoot/{job_type}/{job_id}/output",
+            payload=result_bytes,
+            stem="output",
+        )
+        output_object_path = storage.upload_bytes(
+            object_path=output_path,
+            payload=result_bytes,
+            metadata={
+                "flow": "merchant",
+                "type": "photoshoot_output",
+                "job_type": job_type,
+            },
+        )
+        if not output_object_path:
+            raise RuntimeError("Failed to archive photoshoot output to media storage")
 
         job.processing_status = "completed"
         job.result_cache_key = cache_key
@@ -281,7 +400,7 @@ async def get_photoshoot_model_image(
         if signed_url:
             return RedirectResponse(url=signed_url, status_code=307)
 
-    image_bytes = _read_library_image(object_path=None, image_path=model.image_path)
+    image_bytes = _read_library_image(object_path=model.object_path, image_path=model.image_path)
     return Response(content=image_bytes, media_type=_media_type(model.image_path))
 
 
@@ -341,7 +460,7 @@ async def get_model_face_image(
         if signed_url:
             return RedirectResponse(url=signed_url, status_code=307)
 
-    image_bytes = _read_library_image(object_path=None, image_path=face.image_path)
+    image_bytes = _read_library_image(object_path=face.object_path, image_path=face.image_path)
     return Response(content=image_bytes, media_type=_media_type(face.image_path))
 
 
@@ -392,7 +511,7 @@ async def get_ghost_mannequin_ref_image(
         if signed_url:
             return RedirectResponse(url=signed_url, status_code=307)
 
-    image_bytes = _read_library_image(object_path=None, image_path=ref.image_path)
+    image_bytes = _read_library_image(object_path=ref.object_path, image_path=ref.image_path)
     return Response(content=image_bytes, media_type=_media_type(ref.image_path))
 
 
@@ -402,38 +521,71 @@ async def get_ghost_mannequin_ref_image(
 
 @router.post("/ghost-mannequin", status_code=202, response_model=PhotoshootJobResponse)
 async def start_ghost_mannequin(
-    request: GhostMannequinRequest,
     background_tasks: BackgroundTasks,
+    shopify_product_gid: Optional[str] = Form(None, description="Optional Shopify product GID"),
+    clothing_type: str = Form(..., description="Garment type: tops | bottoms | dresses | outerwear"),
+    image1_url: Optional[str] = Form(None, description="First product image URL from selected store product"),
+    image2_url: Optional[str] = Form(None, description="Second product image URL from selected store product"),
+    image1_file: Optional[UploadFile] = File(None, description="Optional local upload for image 1"),
+    image2_file: Optional[UploadFile] = File(None, description="Optional local upload for image 2"),
     store: Store = Depends(get_current_merchant_store),
     db: DBSession = Depends(get_db),
 ):
     """
     Start a ghost mannequin generation job.
 
-    Accepts two Shopify CDN image URLs from the same product and the clothing type.
-    The merchant can pick any two angles — Gemini constructs the best 3D hollow
-    garment view from whatever images are provided.
+    Accepts exactly two slots. Each slot can be either:
+    - a URL from the selected store product gallery, or
+    - a local uploaded image file.
 
     Returns 202 immediately. Poll GET /jobs/{job_id}/status for result.
-
-    Body:
-        {
-          "image1_url": "...", "image2_url": "...",
-          "shopify_product_gid": "gid://...",
-          "clothing_type": "tops"
-        }
     """
-    import requests as req_lib
+    _require_storage_enabled()
+
+    if clothing_type not in ALLOWED_CLOTHING_TYPES:
+        raise HTTPException(422, f"Invalid clothing_type. Expected one of: {', '.join(sorted(ALLOWED_CLOTHING_TYPES))}")
+
+    normalized_product_gid = _normalize_shopify_product_gid(shopify_product_gid)
+
+    has_image1_url = bool((image1_url or "").strip())
+    has_image2_url = bool((image2_url or "").strip())
+    has_image1_file = bool(image1_file and image1_file.filename)
+    has_image2_file = bool(image2_file and image2_file.filename)
+
+    if has_image1_url == has_image1_file:
+        raise HTTPException(422, "Provide exactly one of image1_url or image1_file")
+    if has_image2_url == has_image2_file:
+        raise HTTPException(422, "Provide exactly one of image2_url or image2_file")
+
+    selected_product: Optional[Product] = None
+    if has_image1_url or has_image2_url:
+        selected_product = _resolve_product_for_store(
+            db=db,
+            store=store,
+            shopify_product_gid=normalized_product_gid,
+        )
+        if has_image1_url:
+            _validate_store_image_url(product=selected_product, image_url=image1_url or "", field_name="image1_url")
+        if has_image2_url:
+            _validate_store_image_url(product=selected_product, image_url=image2_url or "", field_name="image2_url")
+    elif normalized_product_gid:
+        _resolve_product_for_store(
+            db=db,
+            store=store,
+            shopify_product_gid=normalized_product_gid,
+        )
 
     usage_event_id: Optional[str] = None
     try:
-        try:
-            img1 = req_lib.get(request.image1_url, timeout=15)
-            img1.raise_for_status()
-            img2 = req_lib.get(request.image2_url, timeout=15)
-            img2.raise_for_status()
-        except Exception as e:
-            raise HTTPException(422, f"Could not download product images: {e}")
+        if has_image1_url:
+            image1_bytes = _download_image_from_url(image_url=(image1_url or "").strip(), field_name="image1_url")
+        else:
+            image1_bytes = await _read_upload_image(image1_file, field_name="image1_file")
+
+        if has_image2_url:
+            image2_bytes = _download_image_from_url(image_url=(image2_url or "").strip(), field_name="image2_url")
+        else:
+            image2_bytes = await _read_upload_image(image2_file, field_name="image2_file")
 
         usage = UsageGovernanceService(db)
         reservation = await usage.reserve_generation(
@@ -449,33 +601,34 @@ async def start_ghost_mannequin(
         storage = get_media_storage_service()
         input1_object_path = None
         input2_object_path = None
-        if storage.enabled:
-            input1_path = storage.build_object_path(
-                relative_dir=f"stores/{store.store_id}/photoshoot/ghost_mannequin/{job_id}/inputs/1",
-                payload=img1.content,
-                stem="input1",
-            )
-            input2_path = storage.build_object_path(
-                relative_dir=f"stores/{store.store_id}/photoshoot/ghost_mannequin/{job_id}/inputs/2",
-                payload=img2.content,
-                stem="input2",
-            )
-            input1_object_path = storage.upload_bytes(
-                object_path=input1_path,
-                payload=img1.content,
-                metadata={"flow": "merchant", "type": "photoshoot_input", "job_type": "ghost_mannequin"},
-            )
-            input2_object_path = storage.upload_bytes(
-                object_path=input2_path,
-                payload=img2.content,
-                metadata={"flow": "merchant", "type": "photoshoot_input", "job_type": "ghost_mannequin"},
-            )
+        input1_path = storage.build_object_path(
+            relative_dir=f"stores/{store.store_id}/photoshoot/ghost_mannequin/{job_id}/inputs/1",
+            payload=image1_bytes,
+            stem="input1",
+        )
+        input2_path = storage.build_object_path(
+            relative_dir=f"stores/{store.store_id}/photoshoot/ghost_mannequin/{job_id}/inputs/2",
+            payload=image2_bytes,
+            stem="input2",
+        )
+        input1_object_path = storage.upload_bytes(
+            object_path=input1_path,
+            payload=image1_bytes,
+            metadata={"flow": "merchant", "type": "photoshoot_input", "job_type": "ghost_mannequin"},
+        )
+        input2_object_path = storage.upload_bytes(
+            object_path=input2_path,
+            payload=image2_bytes,
+            metadata={"flow": "merchant", "type": "photoshoot_input", "job_type": "ghost_mannequin"},
+        )
+        if not input1_object_path or not input2_object_path:
+            raise HTTPException(500, "Failed to archive ghost mannequin input images to media storage")
 
         job = PhotoshootJob(
             job_id=job_id,
             store_id=store.store_id,
             job_type="ghost_mannequin",
-            shopify_product_gid=request.shopify_product_gid,
+            shopify_product_gid=normalized_product_gid,
             processing_status="queued",
             input1_object_path=input1_object_path,
             input2_object_path=input2_object_path,
@@ -487,13 +640,13 @@ async def start_ghost_mannequin(
             _run_photoshoot_job,
             job_id=str(job_id),
             job_type="ghost_mannequin",
-            image1_bytes=img1.content,
-            image2_bytes=img2.content,
-            clothing_type=request.clothing_type,
+            image1_bytes=image1_bytes,
+            image2_bytes=image2_bytes,
+            clothing_type=clothing_type,
             usage_event_id=usage_event_id,
         )
 
-        logger.info(f"Ghost mannequin job queued: {job_id} (clothing_type={request.clothing_type})")
+        logger.info(f"Ghost mannequin job queued: {job_id} (clothing_type={clothing_type})")
         return _job_status_response(job)
 
     except HTTPException:
@@ -518,41 +671,84 @@ async def start_ghost_mannequin(
 @router.post("/try-on-model", status_code=202, response_model=PhotoshootJobResponse)
 async def start_try_on_model(
     background_tasks: BackgroundTasks,
-    shopify_product_gid: str = Form(..., description="Shopify product GID"),
-    product_image_url: str = Form(..., description="Product garment image URL (Shopify CDN)"),
+    shopify_product_gid: Optional[str] = Form(None, description="Optional Shopify product GID"),
+    product_image_url: Optional[str] = Form(None, description="Product image URL selected from store"),
+    product_image_file: Optional[UploadFile] = File(None, description="Optional uploaded product image"),
     library_id: Optional[str] = Form(None, description="ID of a built-in model photo"),
+    model_library_id: Optional[str] = Form(None, description="Alias for library_id"),
     photo_upload: Optional[UploadFile] = File(None, description="Uploaded model photo"),
+    model_image: Optional[UploadFile] = File(None, description="Alias for photo_upload"),
     store: Store = Depends(get_current_merchant_store),
     db: DBSession = Depends(get_db),
 ):
     """
     Start a try-on for model job.
 
-    Provide the product image URL (from the ResourcePicker) and either:
+    Provide one product source (URL from store product gallery or local file) and either:
     - library_id — pick from the built-in model library
     - photo_upload — upload your own model photo
 
     Returns 202 immediately. Poll GET /jobs/{job_id}/status for result.
     """
-    import requests as req_lib
+    _require_storage_enabled()
 
-    if not library_id and not photo_upload:
-        raise HTTPException(422, "Provide either library_id or upload a photo_upload file")
-    if library_id and photo_upload and photo_upload.filename:
-        raise HTTPException(422, "Provide only one of library_id or photo_upload, not both")
+    normalized_product_gid = _normalize_shopify_product_gid(shopify_product_gid)
+    resolved_library_id = (library_id or "").strip() or None
+    alias_library_id = (model_library_id or "").strip() or None
+    if resolved_library_id and alias_library_id and resolved_library_id != alias_library_id:
+        raise HTTPException(422, "library_id and model_library_id must match when both are provided")
+    if not resolved_library_id:
+        resolved_library_id = alias_library_id
+
+    resolved_photo_upload = photo_upload if photo_upload and photo_upload.filename else None
+    alias_photo_upload = model_image if model_image and model_image.filename else None
+    if resolved_photo_upload and alias_photo_upload:
+        raise HTTPException(422, "Provide only one of photo_upload or model_image")
+    if not resolved_photo_upload:
+        resolved_photo_upload = alias_photo_upload
+
+    has_product_url = bool((product_image_url or "").strip())
+    has_product_file = bool(product_image_file and product_image_file.filename)
+    if has_product_url == has_product_file:
+        raise HTTPException(422, "Provide exactly one of product_image_url or product_image_file")
+
+    if not resolved_library_id and not resolved_photo_upload:
+        raise HTTPException(422, "Provide either library_id/model_library_id or upload a model image")
+    if resolved_library_id and resolved_photo_upload:
+        raise HTTPException(422, "Provide only one model source: library or upload")
+
+    selected_product: Optional[Product] = None
+    if has_product_url:
+        selected_product = _resolve_product_for_store(
+            db=db,
+            store=store,
+            shopify_product_gid=normalized_product_gid,
+        )
+        _validate_store_image_url(
+            product=selected_product,
+            image_url=(product_image_url or "").strip(),
+            field_name="product_image_url",
+        )
+    elif normalized_product_gid:
+        _resolve_product_for_store(
+            db=db,
+            store=store,
+            shopify_product_gid=normalized_product_gid,
+        )
 
     usage_event_id: Optional[str] = None
     try:
-        try:
-            product_resp = req_lib.get(product_image_url, timeout=15)
-            product_resp.raise_for_status()
-            product_bytes = product_resp.content
-        except Exception as e:
-            raise HTTPException(422, f"Could not download product image: {e}")
+        if has_product_url:
+            product_bytes = _download_image_from_url(
+                image_url=(product_image_url or "").strip(),
+                field_name="product_image_url",
+            )
+        else:
+            product_bytes = await _read_upload_image(product_image_file, field_name="product_image_file")
 
-        if library_id:
+        if resolved_library_id:
             model_record = db.query(PhotoshootModel).filter_by(
-                id=library_id, is_active=True
+                id=resolved_library_id, is_active=True
             ).first()
             if not model_record:
                 raise HTTPException(404, "Model not found in library")
@@ -561,9 +757,7 @@ async def start_try_on_model(
                 image_path=model_record.image_path,
             )
         else:
-            model_bytes = await photo_upload.read()
-            if not model_bytes:
-                raise HTTPException(422, "Uploaded photo is empty")
+            model_bytes = await _read_upload_image(resolved_photo_upload, field_name="photo_upload")
 
         usage = UsageGovernanceService(db)
         reservation = await usage.reserve_generation(
@@ -577,35 +771,34 @@ async def start_try_on_model(
 
         job_id = uuid.uuid4()
         storage = get_media_storage_service()
-        input1_object_path = None
-        input2_object_path = None
-        if storage.enabled:
-            input1_path = storage.build_object_path(
-                relative_dir=f"stores/{store.store_id}/photoshoot/try_on_model/{job_id}/inputs/1",
-                payload=product_bytes,
-                stem="input1",
-            )
-            input2_path = storage.build_object_path(
-                relative_dir=f"stores/{store.store_id}/photoshoot/try_on_model/{job_id}/inputs/2",
-                payload=model_bytes,
-                stem="input2",
-            )
-            input1_object_path = storage.upload_bytes(
-                object_path=input1_path,
-                payload=product_bytes,
-                metadata={"flow": "merchant", "type": "photoshoot_input", "job_type": "try_on_model"},
-            )
-            input2_object_path = storage.upload_bytes(
-                object_path=input2_path,
-                payload=model_bytes,
-                metadata={"flow": "merchant", "type": "photoshoot_input", "job_type": "try_on_model"},
-            )
+        input1_path = storage.build_object_path(
+            relative_dir=f"stores/{store.store_id}/photoshoot/try_on_model/{job_id}/inputs/1",
+            payload=product_bytes,
+            stem="input1",
+        )
+        input2_path = storage.build_object_path(
+            relative_dir=f"stores/{store.store_id}/photoshoot/try_on_model/{job_id}/inputs/2",
+            payload=model_bytes,
+            stem="input2",
+        )
+        input1_object_path = storage.upload_bytes(
+            object_path=input1_path,
+            payload=product_bytes,
+            metadata={"flow": "merchant", "type": "photoshoot_input", "job_type": "try_on_model"},
+        )
+        input2_object_path = storage.upload_bytes(
+            object_path=input2_path,
+            payload=model_bytes,
+            metadata={"flow": "merchant", "type": "photoshoot_input", "job_type": "try_on_model"},
+        )
+        if not input1_object_path or not input2_object_path:
+            raise HTTPException(500, "Failed to archive try-on model input images to media storage")
 
         job = PhotoshootJob(
             job_id=job_id,
             store_id=store.store_id,
             job_type="try_on_model",
-            shopify_product_gid=shopify_product_gid,
+            shopify_product_gid=normalized_product_gid,
             processing_status="queued",
             input1_object_path=input1_object_path,
             input2_object_path=input2_object_path,
@@ -647,17 +840,20 @@ async def start_try_on_model(
 @router.post("/model-swap", status_code=202, response_model=PhotoshootJobResponse)
 async def start_model_swap(
     background_tasks: BackgroundTasks,
-    shopify_product_gid: str = Form(..., description="Shopify product GID"),
-    original_image_url: str = Form(..., description="Image of original model wearing the product (Shopify CDN)"),
+    shopify_product_gid: Optional[str] = Form(None, description="Optional Shopify product GID"),
+    original_image_url: Optional[str] = Form(None, description="Original image URL from selected store product"),
+    original_image_file: Optional[UploadFile] = File(None, description="Optional uploaded original image"),
     face_library_id: Optional[str] = Form(None, description="ID of a face photo from the face library"),
+    new_model_library_id: Optional[str] = Form(None, description="Alias for face_library_id"),
     face_image: Optional[UploadFile] = File(None, description="Uploaded face/headshot photo"),
+    new_model_image: Optional[UploadFile] = File(None, description="Alias for face_image"),
     store: Store = Depends(get_current_merchant_store),
     db: DBSession = Depends(get_db),
 ):
     """
     Start a model swap job (face-only swap).
 
-    Provide an image of the original model wearing the product and either:
+    Provide one original image source (URL from store product gallery or local file) and either:
     - face_library_id — pick a replacement face from the built-in face library
     - face_image — upload a headshot photo
 
@@ -666,25 +862,66 @@ async def start_model_swap(
 
     Returns 202 immediately. Poll GET /jobs/{job_id}/status for result.
     """
-    import requests as req_lib
+    _require_storage_enabled()
 
-    if not face_library_id and not face_image:
-        raise HTTPException(422, "Provide either face_library_id or upload a face_image file")
-    if face_library_id and face_image and face_image.filename:
-        raise HTTPException(422, "Provide only one of face_library_id or face_image, not both")
+    normalized_product_gid = _normalize_shopify_product_gid(shopify_product_gid)
+
+    resolved_face_library_id = (face_library_id or "").strip() or None
+    alias_face_library_id = (new_model_library_id or "").strip() or None
+    if resolved_face_library_id and alias_face_library_id and resolved_face_library_id != alias_face_library_id:
+        raise HTTPException(422, "face_library_id and new_model_library_id must match when both are provided")
+    if not resolved_face_library_id:
+        resolved_face_library_id = alias_face_library_id
+
+    resolved_face_upload = face_image if face_image and face_image.filename else None
+    alias_face_upload = new_model_image if new_model_image and new_model_image.filename else None
+    if resolved_face_upload and alias_face_upload:
+        raise HTTPException(422, "Provide only one of face_image or new_model_image")
+    if not resolved_face_upload:
+        resolved_face_upload = alias_face_upload
+
+    has_original_url = bool((original_image_url or "").strip())
+    has_original_file = bool(original_image_file and original_image_file.filename)
+    if has_original_url == has_original_file:
+        raise HTTPException(422, "Provide exactly one of original_image_url or original_image_file")
+
+    if not resolved_face_library_id and not resolved_face_upload:
+        raise HTTPException(422, "Provide either face_library_id/new_model_library_id or upload a face image")
+    if resolved_face_library_id and resolved_face_upload:
+        raise HTTPException(422, "Provide only one face source: library or upload")
+
+    selected_product: Optional[Product] = None
+    if has_original_url:
+        selected_product = _resolve_product_for_store(
+            db=db,
+            store=store,
+            shopify_product_gid=normalized_product_gid,
+        )
+        _validate_store_image_url(
+            product=selected_product,
+            image_url=(original_image_url or "").strip(),
+            field_name="original_image_url",
+        )
+    elif normalized_product_gid:
+        _resolve_product_for_store(
+            db=db,
+            store=store,
+            shopify_product_gid=normalized_product_gid,
+        )
 
     usage_event_id: Optional[str] = None
     try:
-        try:
-            orig_resp = req_lib.get(original_image_url, timeout=15)
-            orig_resp.raise_for_status()
-            original_bytes = orig_resp.content
-        except Exception as e:
-            raise HTTPException(422, f"Could not download original image: {e}")
+        if has_original_url:
+            original_bytes = _download_image_from_url(
+                image_url=(original_image_url or "").strip(),
+                field_name="original_image_url",
+            )
+        else:
+            original_bytes = await _read_upload_image(original_image_file, field_name="original_image_file")
 
-        if face_library_id:
+        if resolved_face_library_id:
             face_record = db.query(PhotoshootModelFace).filter_by(
-                id=face_library_id, is_active=True
+                id=resolved_face_library_id, is_active=True
             ).first()
             if not face_record:
                 raise HTTPException(404, "Face not found in library")
@@ -693,9 +930,7 @@ async def start_model_swap(
                 image_path=face_record.image_path,
             )
         else:
-            face_bytes = await face_image.read()
-            if not face_bytes:
-                raise HTTPException(422, "Uploaded face image is empty")
+            face_bytes = await _read_upload_image(resolved_face_upload, field_name="face_image")
 
         usage = UsageGovernanceService(db)
         reservation = await usage.reserve_generation(
@@ -709,35 +944,34 @@ async def start_model_swap(
 
         job_id = uuid.uuid4()
         storage = get_media_storage_service()
-        input1_object_path = None
-        input2_object_path = None
-        if storage.enabled:
-            input1_path = storage.build_object_path(
-                relative_dir=f"stores/{store.store_id}/photoshoot/model_swap/{job_id}/inputs/1",
-                payload=original_bytes,
-                stem="input1",
-            )
-            input2_path = storage.build_object_path(
-                relative_dir=f"stores/{store.store_id}/photoshoot/model_swap/{job_id}/inputs/2",
-                payload=face_bytes,
-                stem="input2",
-            )
-            input1_object_path = storage.upload_bytes(
-                object_path=input1_path,
-                payload=original_bytes,
-                metadata={"flow": "merchant", "type": "photoshoot_input", "job_type": "model_swap"},
-            )
-            input2_object_path = storage.upload_bytes(
-                object_path=input2_path,
-                payload=face_bytes,
-                metadata={"flow": "merchant", "type": "photoshoot_input", "job_type": "model_swap"},
-            )
+        input1_path = storage.build_object_path(
+            relative_dir=f"stores/{store.store_id}/photoshoot/model_swap/{job_id}/inputs/1",
+            payload=original_bytes,
+            stem="input1",
+        )
+        input2_path = storage.build_object_path(
+            relative_dir=f"stores/{store.store_id}/photoshoot/model_swap/{job_id}/inputs/2",
+            payload=face_bytes,
+            stem="input2",
+        )
+        input1_object_path = storage.upload_bytes(
+            object_path=input1_path,
+            payload=original_bytes,
+            metadata={"flow": "merchant", "type": "photoshoot_input", "job_type": "model_swap"},
+        )
+        input2_object_path = storage.upload_bytes(
+            object_path=input2_path,
+            payload=face_bytes,
+            metadata={"flow": "merchant", "type": "photoshoot_input", "job_type": "model_swap"},
+        )
+        if not input1_object_path or not input2_object_path:
+            raise HTTPException(500, "Failed to archive model swap input images to media storage")
 
         job = PhotoshootJob(
             job_id=job_id,
             store_id=store.store_id,
             job_type="model_swap",
-            shopify_product_gid=shopify_product_gid,
+            shopify_product_gid=normalized_product_gid,
             processing_status="queued",
             input1_object_path=input1_object_path,
             input2_object_path=input2_object_path,
@@ -856,6 +1090,23 @@ async def approve_job(
     if job.approved_at:
         raise HTTPException(409, "Job has already been approved and pushed to Shopify.")
 
+    requested_gid = _normalize_shopify_product_gid(request.shopify_product_gid)
+    if not job.shopify_product_gid:
+        if not requested_gid:
+            raise HTTPException(
+                422,
+                "shopify_product_gid is required for approval when this job was generated without a bound product",
+            )
+        _resolve_product_for_store(
+            db=db,
+            store=store,
+            shopify_product_gid=requested_gid,
+        )
+        job.shopify_product_gid = requested_gid
+        db.commit()
+    elif requested_gid and requested_gid != job.shopify_product_gid:
+        raise HTTPException(409, "shopify_product_gid does not match the product originally attached to this job")
+
     storage = get_media_storage_service()
     if not storage.enabled:
         raise HTTPException(500, "Media storage is not configured")
@@ -888,7 +1139,7 @@ async def approve_job(
     try:
         svc = ShopifyService(store.shopify_domain, require_shopify_access_token(store))
         media_result = await svc.add_product_image(
-            shopify_product_gid=job.shopify_product_gid,
+            shopify_product_gid=str(job.shopify_product_gid),
             image_url=result_url,
             alt_text=alt_text,
         )

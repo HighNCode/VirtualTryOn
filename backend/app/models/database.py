@@ -402,6 +402,10 @@ class DataDeletionQueue(Base, TimestampMixin):
     GDPR compliance - 30 day grace period
     """
     __tablename__ = "data_deletion_queue"
+    __table_args__ = (
+        Index("idx_data_deletion_queue_store", "store_id"),
+        Index("idx_data_deletion_queue_due", "status", "scheduled_for"),
+    )
 
     deletion_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     store_id = Column(UUID(as_uuid=True), nullable=False)
@@ -411,6 +415,58 @@ class DataDeletionQueue(Base, TimestampMixin):
 
     def __repr__(self):
         return f"<DataDeletionQueue {self.store_id} - {self.status}>"
+
+
+class WebhookDelivery(Base, TimestampMixin):
+    """
+    Idempotency record for inbound Shopify webhooks.
+    """
+    __tablename__ = "webhook_deliveries"
+    __table_args__ = (
+        UniqueConstraint("topic", "webhook_id", name="uq_webhook_delivery_topic_id"),
+        Index("idx_webhook_deliveries_topic_created", "topic", "created_at"),
+    )
+
+    delivery_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    topic = Column(String(120), nullable=False)
+    webhook_id = Column(String(120), nullable=False)
+    shop_domain = Column(String(255), nullable=True)
+    triggered_at = Column(DateTime, nullable=True)
+
+    def __repr__(self):
+        return f"<WebhookDelivery {self.topic} {self.webhook_id}>"
+
+
+class ConsentedResearchDataset(Base, TimestampMixin):
+    """
+    Consented retention dataset for model research.
+    Not linked via FK to store/session so it survives uninstall purges by policy.
+    """
+    __tablename__ = "consented_research_datasets"
+    __table_args__ = (
+        Index("idx_research_dataset_expiry", "expires_at"),
+        Index("idx_research_dataset_store_time", "source_store_id", "created_at"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_store_id = Column(UUID(as_uuid=True), nullable=True)
+    source_session_id = Column(UUID(as_uuid=True), nullable=True)
+    source_measurement_id = Column(UUID(as_uuid=True), nullable=True)
+
+    consent_granted_at = Column(DateTime, nullable=False)
+    consent_policy_version = Column(String(50), nullable=False)
+    consent_source = Column(String(100), nullable=False, default="storefront_widget")
+
+    front_image_object_path = Column(String(500), nullable=False)
+    side_image_object_path = Column(String(500), nullable=False)
+    measurements = Column(JSONB, nullable=False, default=dict)
+    height_cm = Column(Float, nullable=True)
+    weight_kg = Column(Float, nullable=True)
+    gender = Column(String(10), nullable=True)
+    expires_at = Column(DateTime, nullable=False)
+
+    def __repr__(self):
+        return f"<ConsentedResearchDataset {self.id} expires={self.expires_at}>"
 
 
 class PhotoshootModel(Base, TimestampMixin):
@@ -487,7 +543,7 @@ class PhotoshootJob(Base, TimestampMixin):
     store_id = Column(UUID(as_uuid=True), ForeignKey('stores.store_id', ondelete='CASCADE'), nullable=False)
     job_type = Column(String(20), nullable=False)
     # values: 'ghost_mannequin' | 'try_on_model' | 'model_swap'
-    shopify_product_gid = Column(String(255), nullable=False)  # e.g. gid://shopify/Product/123
+    shopify_product_gid = Column(String(255), nullable=True)  # e.g. gid://shopify/Product/123
     processing_status = Column(String(20), default='queued', nullable=False)
     # values: 'queued' | 'processing' | 'completed' | 'failed'
     result_cache_key = Column(String(200), nullable=True)   # Redis key for result image

@@ -22,6 +22,8 @@ from app.models.database import (
     UsageEvent,
     UsageCustomerWeek,
     UsageStoreCycle,
+    WebhookDelivery,
+    ConsentedResearchDataset,
 )
 
 __all__ = [
@@ -43,4 +45,6 @@ __all__ = [
     "UsageEvent",
     "UsageCustomerWeek",
     "UsageStoreCycle",
+    "WebhookDelivery",
+    "ConsentedResearchDataset",
 ]

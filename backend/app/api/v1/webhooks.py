@@ -4,23 +4,27 @@ Handles webhooks from Shopify for real-time updates
 """
 
 from fastapi import APIRouter, Request, Depends, HTTPException, BackgroundTasks
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 import logging
 from typing import Optional
 
+from app.config import get_settings
 from app.core.database import get_db
 from app.core.security import verify_webhook, decrypt_token
-from app.models.database import Store, Product
+from app.models.database import DataDeletionQueue, Product, Store, WebhookDelivery
+from app.services.store_data_deletion_service import StoreDataDeletionService
 from app.services.shopify_service import ShopifyService
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
 async def verify_webhook_signature(request: Request):
     """Dependency to verify webhook signature"""
-    if not verify_webhook(request):
+    if not await verify_webhook(request):
         raise HTTPException(401, "Invalid webhook signature")
     return True
 
@@ -30,6 +34,43 @@ def _extract_shop_domain(request: Request, payload: dict) -> str:
     if shop_domain:
         return shop_domain
     return str(request.headers.get("x-shopify-shop-domain") or "").strip().lower()
+
+
+def _normalize_webhook_topic(value: Optional[str]) -> str:
+    return str(value or "").strip().lower()
+
+
+def _parse_triggered_at(value: Optional[str]) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(raw).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def _is_duplicate_webhook(request: Request, db: Session) -> bool:
+    topic = _normalize_webhook_topic(request.headers.get("x-shopify-topic"))
+    webhook_id = str(request.headers.get("x-shopify-webhook-id") or "").strip()
+    if not topic or not webhook_id:
+        return False
+
+    record = WebhookDelivery(
+        topic=topic,
+        webhook_id=webhook_id,
+        shop_domain=str(request.headers.get("x-shopify-shop-domain") or "").strip().lower() or None,
+        triggered_at=_parse_triggered_at(request.headers.get("x-shopify-triggered-at")),
+    )
+    db.add(record)
+    try:
+        db.flush()
+        return False
+    except IntegrityError:
+        db.rollback()
+        return True
 
 
 @router.post("/shop/update")
@@ -291,19 +332,24 @@ async def handle_app_uninstall(
         Success response
     """
     try:
+        if _is_duplicate_webhook(request, db):
+            return {"status": "success", "message": "Duplicate uninstall webhook ignored"}
+
         data = await request.json()
-        shop_domain = data.get('shop_domain')
+        shop_domain = _extract_shop_domain(request, data)
 
         logger.info(f"App uninstalled webhook: {shop_domain}")
 
         # Get store
         store = db.query(Store).filter_by(shopify_domain=shop_domain).first()
         if not store:
-            return {"status": "error", "message": "Store not found"}
+            db.commit()
+            return {"status": "success", "message": "Store not found; uninstall already reconciled"}
 
         # Mark as uninstalled
         store.installation_status = 'uninstalled'
-        store.uninstalled_at = datetime.utcnow()
+        now_utc = datetime.utcnow()
+        store.uninstalled_at = now_utc
 
         # Delete script tag from Shopify (if still exists)
         if store.script_tag_id:
@@ -312,27 +358,33 @@ async def handle_app_uninstall(
                 shopify_service = ShopifyService(shop_domain, access_token)
                 await shopify_service.delete_script_tag(store.script_tag_id)
                 logger.info(f"Script tag deleted: {store.script_tag_id}")
+                store.script_tag_id = None
             except Exception as e:
                 logger.warning(f"Script tag deletion failed: {e}")
                 # Continue anyway - script tag might already be deleted
 
-        # Schedule data deletion (30 days grace period)
-        from app.models.database import DataDeletionQueue
-        deletion_date = datetime.utcnow() + timedelta(days=30)
-
-        deletion_task = DataDeletionQueue(
-            store_id=store.store_id,
-            scheduled_for=deletion_date,
-            status='pending'
+        # Schedule fallback deletion.
+        deletion_date = now_utc + timedelta(days=max(1, int(settings.UNINSTALL_FALLBACK_DELETE_DAYS or 30)))
+        pending_task = (
+            db.query(DataDeletionQueue)
+            .filter(DataDeletionQueue.store_id == store.store_id)
+            .filter(DataDeletionQueue.status == "pending")
+            .first()
         )
-        db.add(deletion_task)
+        if pending_task:
+            pending_task.scheduled_for = deletion_date
+            pending_task.executed_at = None
+        else:
+            deletion_task = DataDeletionQueue(
+                store_id=store.store_id,
+                scheduled_for=deletion_date,
+                status='pending'
+            )
+            db.add(deletion_task)
 
         db.commit()
 
         logger.info(f"Uninstall processed for {shop_domain}. Data deletion scheduled for {deletion_date}")
-
-        # TODO: Send notification to admin
-        # TODO: Implement background worker to execute deletion after 30 days
 
         return {
             "status": "success",
@@ -349,7 +401,8 @@ async def handle_app_uninstall(
 @router.post("/gdpr/customers/data_request")
 async def handle_customer_data_request(
     request: Request,
-    verified: bool = Depends(verify_webhook_signature)
+    verified: bool = Depends(verify_webhook_signature),
+    db: Session = Depends(get_db),
 ):
     """
     Handle GDPR customer data request webhook
@@ -360,6 +413,9 @@ async def handle_customer_data_request(
         Success response (data export handled separately)
     """
     try:
+        if _is_duplicate_webhook(request, db):
+            return {"status": "success", "message": "Duplicate customer data request webhook ignored"}
+
         data = await request.json()
         shop_domain = data.get('shop_domain')
         customer_id = data.get('customer', {}).get('id')
@@ -369,6 +425,7 @@ async def handle_customer_data_request(
         # TODO: Implement data export logic
         # For this app, we don't store customer personal data (only anonymous measurements)
         # Return empty data or minimal info
+        db.commit()
 
         return {
             "status": "success",
@@ -395,6 +452,9 @@ async def handle_customer_redact(
         Success response
     """
     try:
+        if _is_duplicate_webhook(request, db):
+            return {"status": "success", "message": "Duplicate customer redact webhook ignored"}
+
         data = await request.json()
         shop_domain = data.get('shop_domain')
         customer_id = data.get('customer', {}).get('id')
@@ -404,6 +464,7 @@ async def handle_customer_redact(
         # TODO: Delete customer-related data
         # For this app, measurements are anonymous and auto-deleted after 24h
         # No action needed beyond logging
+        db.commit()
 
         return {
             "status": "success",
@@ -431,23 +492,26 @@ async def handle_shop_redact(
         Success response
     """
     try:
+        if _is_duplicate_webhook(request, db):
+            return {"status": "success", "message": "Duplicate shop redact webhook ignored"}
+
         data = await request.json()
-        shop_domain = data.get('shop_domain')
+        shop_domain = _extract_shop_domain(request, data)
 
         logger.info(f"GDPR shop redaction: {shop_domain}")
 
         # Get store
         store = db.query(Store).filter_by(shopify_domain=shop_domain).first()
         if not store:
+            db.commit()
             return {"status": "success", "message": "Store not found (already deleted)"}
 
-        # Execute immediate deletion
-        # TODO: Implement complete data deletion
-        # For now, just mark for deletion
-        store.installation_status = 'deleted'
-        db.commit()
+        deletion_result = StoreDataDeletionService(db).hard_delete_store(
+            store=store,
+            reason="shop_redact_webhook",
+        )
 
-        logger.info(f"Shop data deleted: {shop_domain}")
+        logger.info("Shop data hard deleted for %s: %s", shop_domain, deletion_result)
 
         return {
             "status": "success",

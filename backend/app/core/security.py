@@ -52,7 +52,7 @@ def verify_shopify_hmac(params: Dict[str, str], hmac_to_verify: str) -> bool:
     return hmac.compare_digest(computed_hmac, hmac_to_verify)
 
 
-def verify_webhook(request: Request) -> bool:
+async def verify_webhook(request: Request) -> bool:
     """
     Verify Shopify webhook authenticity using HMAC
 
@@ -75,7 +75,7 @@ def verify_webhook(request: Request) -> bool:
         return False
 
     # Get request body
-    body = request._body if hasattr(request, '_body') else b''
+    body = await request.body()
 
     # Calculate HMAC
     computed_hmac = base64.b64encode(
@@ -109,7 +109,7 @@ async def verify_webhook_dependency(
             if not verified:
                 raise HTTPException(401, "Invalid webhook")
     """
-    if not verify_webhook(request):
+    if not await verify_webhook(request):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
     return True
 

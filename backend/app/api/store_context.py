@@ -115,6 +115,15 @@ def _get_store_by_id(store_id: str, db: DBSession) -> Optional[Store]:
     return db.query(Store).filter_by(store_id=store_id).first()
 
 
+def _ensure_store_operational(store: Store) -> None:
+    status_value = (store.installation_status or "").strip().lower()
+    if status_value in {"uninstalled", "deleted"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Store is not active. Reinstall the app to continue.",
+        )
+
+
 def get_public_store(
     request: Request,
     x_shopify_shop_domain: Optional[str] = Header(None, alias="X-Shopify-Shop-Domain"),
@@ -136,6 +145,7 @@ def get_public_store(
     if header_shop_domain:
         store = _get_store_by_shop_domain(header_shop_domain, db)
         if store:
+            _ensure_store_operational(store)
             return store
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -145,6 +155,7 @@ def get_public_store(
     if normalized_store_id:
         store = _get_store_by_id(normalized_store_id, db)
         if store:
+            _ensure_store_operational(store)
             return store
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -310,11 +321,13 @@ def get_current_merchant_store(
     if authenticated_shop_domain:
         store = _get_store_by_shop_domain(authenticated_shop_domain, db)
         if store:
+            _ensure_store_operational(store)
             return store
     else:
         if header_shop_domain:
             store = _get_store_by_shop_domain(header_shop_domain, db)
             if store:
+                _ensure_store_operational(store)
                 return store
 
         if normalized_store_id:
@@ -325,6 +338,7 @@ def get_current_merchant_store(
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail="Requested store does not match requested shop",
                     )
+                _ensure_store_operational(store)
                 return store
 
     if authenticated_shop_domain:

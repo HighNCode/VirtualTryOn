@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session as DBSession
 from datetime import datetime
 import time
 import logging
+from typing import Optional
 
 from app.api.store_context import get_public_store
 from app.core.database import get_db
@@ -19,10 +20,18 @@ from app.services.image_validator import ImageValidator
 from app.services.measurement_service import MeasurementService
 from app.services.cache_service import CacheService
 from app.services.media_archive_service import get_media_archive_service
+from app.services.research_retention_service import ResearchRetentionService
 
 router = APIRouter(prefix="/measurements", tags=["Measurements"])
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+def _parse_form_bool(value: str | bool | None) -> bool:
+    if isinstance(value, bool):
+        return value
+    raw = str(value or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 async def get_session_from_header(
@@ -160,6 +169,9 @@ async def extract_measurements(
     height_cm: float = Form(...),
     weight_kg: float = Form(...),
     gender: str = Form(...),
+    research_consent: str = Form("false"),
+    research_consent_policy_version: Optional[str] = Form(None),
+    research_consent_source: Optional[str] = Form(None),
     session: Session = Depends(get_session_from_header),
     db: DBSession = Depends(get_db)
 ):
@@ -192,6 +204,10 @@ async def extract_measurements(
 
         if gender not in ["male", "female", "unisex"]:
             raise HTTPException(400, "Gender must be 'male', 'female', or 'unisex'")
+
+        consent_granted = _parse_form_bool(research_consent)
+        if settings.RESEARCH_CONSENT_REQUIRED and not consent_granted:
+            raise HTTPException(400, "Research consent is required before continuing.")
 
         # Read images
         front_data = await front_image.read()
@@ -248,6 +264,24 @@ async def extract_measurements(
             )
         measurement.front_image_object_path = front_object_path
         measurement.side_image_object_path = side_object_path
+
+        if consent_granted:
+            policy_version = (research_consent_policy_version or settings.RESEARCH_CONSENT_VERSION or "v1").strip() or "v1"
+            consent_source = (research_consent_source or "storefront_widget_step1").strip() or "storefront_widget_step1"
+            ResearchRetentionService(db).archive_consented_measurement_data(
+                store_id=session.store_id,
+                session_id=session.session_id,
+                measurement_id=measurement.measurement_id,
+                front_image_bytes=front_data,
+                side_image_bytes=side_data,
+                measurements=result.get("measurements") or {},
+                height_cm=height_cm,
+                weight_kg=weight_kg,
+                gender=gender,
+                consent_policy_version=policy_version,
+                consent_source=consent_source,
+                consent_granted_at=datetime.utcnow(),
+            )
 
         db.commit()
         db.refresh(measurement)

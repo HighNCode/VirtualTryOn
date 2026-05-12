@@ -8,7 +8,7 @@ import os
 import re
 import time
 from io import BytesIO
-from typing import Optional
+from typing import Optional, List, Tuple
 
 from google import genai
 from google.genai import types
@@ -16,6 +16,13 @@ from PIL import Image
 
 from app.config import Settings
 from app.services.image_providers.base import ImageGenerationProvider
+from app.services.image_providers.hardening import (
+    ImageEchoError,
+    build_tryon_prompt,
+    compute_reference_hashes,
+    download_and_validate_product_image,
+    select_best_non_echo_candidate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,22 +43,47 @@ class GeminiProvider(ImageGenerationProvider):
         category: str,
     ) -> bytes:
         start = time.time()
-        product_bytes = self._download_image(product_image_url)
-        prompt = self._build_tryon_prompt(product_title, category)
+        product_bytes = download_and_validate_product_image(
+            product_image_url,
+            timeout_seconds=15,
+            logger=logger,
+        )
+        prompt = build_tryon_prompt(product_title, category, strict=False)
 
         logger.info("Calling Vertex AI model=%s prompt_len=%s", self._model, len(prompt))
 
-        response = self._client.models.generate_content(
-            model=self._model,
-            contents=[
-                types.Part.from_bytes(data=person_image, mime_type=self._detect_mime_type(person_image)),
-                types.Part.from_bytes(data=product_bytes, mime_type=self._detect_mime_type(product_bytes)),
-                prompt,
-            ],
-            config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
-        )
+        def _call_model(prompt_text: str):
+            return self._client.models.generate_content(
+                model=self._model,
+                contents=[
+                    types.Part.from_bytes(data=person_image, mime_type=self._detect_mime_type(person_image)),
+                    types.Part.from_bytes(data=product_bytes, mime_type=self._detect_mime_type(product_bytes)),
+                    prompt_text,
+                ],
+                config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
+            )
 
-        result_image = self._normalize_image_bytes(self._extract_image(response))
+        reference_hashes = compute_reference_hashes(
+            person_image,
+            product_bytes,
+            normalize_fn=self._normalize_image_bytes,
+        )
+        response = _call_model(prompt)
+        try:
+            result_image = self._normalize_image_bytes(
+                self._extract_image(response, reference_hashes=reference_hashes)
+            )
+        except ImageEchoError:
+            retry_prompt = build_tryon_prompt(product_title, category, strict=True)
+            logger.warning("retry_attempted event=tryon_echo_rejected reason=echo_output_detected")
+            retry_response = _call_model(retry_prompt)
+            try:
+                result_image = self._normalize_image_bytes(
+                    self._extract_image(retry_response, reference_hashes=reference_hashes)
+                )
+            except ImageEchoError as exc:
+                raise ValueError("TRYON_OUTPUT_INVALID_OR_ECHO: model returned echoed input image") from exc
+
         logger.info("Try-on generation completed in %.1fs", time.time() - start)
         return result_image
 
@@ -212,67 +244,36 @@ class GeminiProvider(ImageGenerationProvider):
             location=self._settings.GOOGLE_CLOUD_LOCATION,
         )
 
-    def _build_tryon_prompt(self, product_title: str, category: str) -> str:
-        category_hint = {
-            "tops": "upper body garment",
-            "bottoms": "lower body garment (pants/jeans)",
-            "dresses": "full-body dress",
-            "outerwear": "outer layer jacket/coat",
-        }.get(category, "garment")
-
-        return (
-            "Using the provided person photo and product photo, generate a single "
-            f"photorealistic image of the person wearing the {product_title} ({category_hint}). "
-            "Keep the person's face, body, pose, and background exactly the same. "
-            "Keep the product's color, texture, and design exactly the same. "
-            "Fit the product naturally on the person's body. "
-            "The result should look like a real photograph, not a collage."
-        )
-
-    def _download_image(self, url: str) -> bytes:
-        import requests
-
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-        image_bytes = resp.content
-
-        content_type = resp.headers.get("Content-Type", "")
-        content_length = resp.headers.get("Content-Length")
-        width = None
-        height = None
-        try:
-            with Image.open(BytesIO(image_bytes)) as img:
-                width, height = img.size
-        except Exception:
-            width, height = None, None
-
-        logger.info(
-            "Product image downloaded: request_url=%s final_url=%s status=%s content_type=%s content_length=%s bytes=%s width=%s height=%s",
-            url,
-            resp.url,
-            resp.status_code,
-            content_type,
-            content_length,
-            len(image_bytes),
-            width,
-            height,
-        )
-        return image_bytes
-
-    def _extract_image(self, response) -> bytes:
+    def _extract_image(self, response, reference_hashes: Optional[dict] = None) -> bytes:
         text_fallback_samples = []
+        candidates: List[Tuple[bytes, str]] = []
         for candidate in (response.candidates or []):
             for part in (getattr(candidate, "content", None).parts or []):
                 if part.inline_data is not None and part.inline_data.data:
                     raw = part.inline_data.data
                     image_bytes = self._coerce_image_bytes(raw)
                     if image_bytes:
-                        return image_bytes
+                        candidates.append((image_bytes, "inline_data"))
                 if getattr(part, "text", None):
                     text_fallback_samples.append(str(part.text)[:180])
                     image_bytes = self._coerce_image_bytes(part.text)
                     if image_bytes:
-                        return image_bytes
+                        candidates.append((image_bytes, "text_part"))
+
+        if candidates:
+            selected, meta = select_best_non_echo_candidate(
+                candidates,
+                reference_hashes=reference_hashes or {},
+                normalize_fn=self._normalize_image_bytes,
+                logger=logger,
+            )
+            logger.info(
+                "Try-on candidate selection: total=%s selected_source=%s selected_bytes=%s",
+                len(candidates),
+                meta,
+                len(selected),
+            )
+            return selected
 
         if text_fallback_samples:
             logger.warning(
@@ -284,6 +285,7 @@ class GeminiProvider(ImageGenerationProvider):
             "Vertex AI response did not contain a generated image. "
             "Check that the model supports image output and the prompt is valid."
         )
+
 
     def _coerce_image_bytes(self, raw) -> Optional[bytes]:
         if raw is None:
