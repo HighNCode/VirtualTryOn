@@ -16,8 +16,6 @@ from app.core.redis import get_redis
 from app.config import get_settings
 from app.models.database import Store, Session, UserMeasurement, PhotoValidationEvent
 from app.models.schemas import MeasurementResponse
-from app.services.image_validator import ImageValidator
-from app.services.measurement_service import MeasurementService
 from app.services.cache_service import CacheService
 from app.services.media_archive_service import get_media_archive_service
 from app.services.research_retention_service import ResearchRetentionService
@@ -84,6 +82,8 @@ async def validate_image(
         }
     """
     try:
+        from app.services.image_validator import ImageValidator
+
         # Validate pose_type
         if pose_type not in ["front", "side"]:
             raise HTTPException(400, "pose_type must be 'front' or 'side'")
@@ -225,6 +225,8 @@ async def extract_measurements(
         logger.info(f"Images cached for session: {session.session_id}")
 
         # Extract measurements
+        from app.services.measurement_service import MeasurementService
+
         measurement_service = MeasurementService()
         result = await measurement_service.extract_measurements(
             front_data,
