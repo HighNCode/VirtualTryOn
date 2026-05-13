@@ -193,7 +193,11 @@ def _download_image_from_url(*, image_url: str, field_name: str) -> bytes:
 def _require_storage_enabled() -> None:
     storage = get_media_storage_service()
     if not storage.enabled:
-        raise HTTPException(500, "Media storage is not configured. Ensure GCS bucket access is available.")
+        reason = storage.disabled_reason or "unknown configuration error"
+        raise HTTPException(
+            500,
+            f"Media storage is not configured. Ensure GCS bucket access is available. Reason: {reason}",
+        )
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1109,7 +1113,8 @@ async def approve_job(
 
     storage = get_media_storage_service()
     if not storage.enabled:
-        raise HTTPException(500, "Media storage is not configured")
+        reason = storage.disabled_reason or "unknown configuration error"
+        raise HTTPException(500, f"Media storage is not configured. Reason: {reason}")
 
     if not job.output_object_path:
         cache = CacheService()
