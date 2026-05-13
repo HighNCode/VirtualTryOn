@@ -38,6 +38,14 @@ def require_admin(x_admin_key: str = Header(..., alias="X-Admin-Key")):
         raise HTTPException(401, "Invalid admin key")
 
 
+def _require_media_storage():
+    storage = get_media_storage_service()
+    if storage.enabled:
+        return storage
+    reason = storage.disabled_reason or "unknown configuration error"
+    raise HTTPException(500, f"Media storage is not configured: {reason}")
+
+
 def _safe_filename(original: str, ext: str) -> str:
     """Sanitise filename: keep alphanumerics, hyphens, underscores."""
     stem = os.path.splitext(original)[0]
@@ -87,9 +95,7 @@ async def upload_model_photos(
     if not images:
         raise HTTPException(422, "No images provided")
 
-    storage = get_media_storage_service()
-    if not storage.enabled:
-        raise HTTPException(500, "Media storage is not configured")
+    storage = _require_media_storage()
 
     created = []
     errors = []
@@ -279,9 +285,7 @@ async def upload_model_faces(
     if not images:
         raise HTTPException(422, "No images provided")
 
-    storage = get_media_storage_service()
-    if not storage.enabled:
-        raise HTTPException(500, "Media storage is not configured")
+    storage = _require_media_storage()
 
     created = []
     errors = []
@@ -469,9 +473,7 @@ async def upload_ghost_mannequin_ref(
     if not image_data:
         raise HTTPException(422, "Image file is empty")
 
-    storage = get_media_storage_service()
-    if not storage.enabled:
-        raise HTTPException(500, "Media storage is not configured")
+    storage = _require_media_storage()
 
     filename = f"{pose}{ext}"
     relative_path = f"ghost_mannequin/{clothing_type}/{filename}"

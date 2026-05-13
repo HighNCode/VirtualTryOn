@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import timedelta
 from functools import lru_cache
 import logging
+import os
 import uuid
 from typing import Dict, Optional
 
@@ -33,24 +34,43 @@ class MediaStorageService:
         self._prefix = (settings.GCS_MEDIA_PREFIX or "v1").strip().strip("/")
         self._signed_ttl_seconds = max(60, int(settings.GCS_SIGNED_URL_TTL_SECONDS))
 
+        self._disabled_reason: Optional[str] = None
         self._enabled = self._backend == "gcs" and bool(self._bucket_name)
         self._client = None
         self._bucket = None
 
         if not self._enabled:
+            if self._backend != "gcs":
+                self._disabled_reason = f"unsupported MEDIA_STORAGE_BACKEND={self._backend!r}"
+            elif not self._bucket_name:
+                self._disabled_reason = "GCS_BUCKET_NAME is missing"
             return
         if gcs_storage is None:
             logger.warning(
                 "MEDIA_STORAGE_BACKEND=gcs but google-cloud-storage is unavailable. "
                 "Durable media storage is disabled."
             )
+            self._disabled_reason = "google-cloud-storage dependency is unavailable"
             self._enabled = False
             return
         try:
-            self._client = gcs_storage.Client()
+            credentials_path = (settings.GOOGLE_APPLICATION_CREDENTIALS or "").strip()
+            if credentials_path:
+                os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", credentials_path)
+                if not os.path.isfile(credentials_path):
+                    raise ValueError(
+                        f"GOOGLE_APPLICATION_CREDENTIALS path does not exist: {credentials_path}"
+                    )
+
+            client_kwargs = {}
+            if settings.GOOGLE_CLOUD_PROJECT:
+                client_kwargs["project"] = settings.GOOGLE_CLOUD_PROJECT
+
+            self._client = gcs_storage.Client(**client_kwargs)
             self._bucket = self._client.bucket(self._bucket_name)
         except Exception as exc:
             logger.warning("Failed to initialize GCS client for media storage: %s", exc)
+            self._disabled_reason = str(exc)
             self._enabled = False
 
     @property
@@ -60,6 +80,12 @@ class MediaStorageService:
     @property
     def backend(self) -> str:
         return self._backend
+
+    @property
+    def disabled_reason(self) -> Optional[str]:
+        if self.enabled:
+            return None
+        return self._disabled_reason or "unknown media storage configuration error"
 
     def upload_bytes(
         self,
