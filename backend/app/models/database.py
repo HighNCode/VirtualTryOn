@@ -42,7 +42,7 @@ class Store(Base, TimestampMixin):
     # values: 'welcome' | 'goals' | 'referral' | 'widget_scope' | 'theme_setup' | 'plan' | 'complete'
     onboarding_completed_at = Column(DateTime, nullable=True)
     plan_name = Column(String(50), default='free', nullable=False)
-    # values: 'free' | 'free_trial' | 'founding_trial' | 'starter' | 'growth'
+    # values: 'free' | 'free_trial' | 'founding_trial' | 'starter' | 'growth' | 'professional' | 'scale'
     trial_mode = Column(String(20), nullable=False, default='none')
     # values: 'none' | 'intro_free' | 'plan_trial'
     has_used_intro_trial = Column(Boolean, nullable=False, default=False)
@@ -261,15 +261,15 @@ class PhotoValidationEvent(Base, TimestampMixin):
 
 class Plan(Base, TimestampMixin):
     """
-    Subscription plan definitions (Starter, Growth).
+    Subscription plan definitions (Starter, Growth, Professional, Scale).
     Stored in DB so plans can be updated without code deploys.
     Free plan is implied when a store has no plan_name match in this table.
     """
     __tablename__ = "plans"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(String(50), unique=True, nullable=False)          # 'starter' | 'growth'
-    display_name = Column(String(100), nullable=False)              # 'Starter' | 'Growth'
+    name = Column(String(50), unique=True, nullable=False)          # 'starter' | 'growth' | 'professional' | 'scale'
+    display_name = Column(String(100), nullable=False)              # 'Starter' | 'Growth' | 'Professional' | 'Scale'
     price_monthly = Column(Numeric(8, 2), nullable=False)          # 17.00
     price_annual_total = Column(Numeric(8, 2), nullable=False)     # 179.00 (charged by Shopify)
     price_annual_per_month = Column(Numeric(8, 2), nullable=False) # 14.00 (display only)

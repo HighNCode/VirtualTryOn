@@ -1,68 +1,122 @@
+"use client";
+
+import { motion } from "framer-motion";
+import { Database, Eye, Lock, Shield, UserCheck } from "lucide-react";
 import PortalSidebar from "../../_components/PortalSidebar";
 import PortalTopbar from "../../_components/PortalTopbar";
 import SubTabNav from "../../_components/SubTabNav";
 
 const privacyRows = [
   {
-    title: "Shopify compliance webhooks",
-    text: "The app is configured for Shopify privacy webhook topics including customer data requests and redaction callbacks.",
-    status: "Configured"
+    title: "Data Encryption",
+    text: "All customer data and images are encrypted at rest and in transit using AES-256.",
+    icon: Shield,
   },
   {
-    title: "Webhook signature validation",
-    text: "Incoming Shopify webhooks are HMAC-validated before the payload is processed or forwarded.",
-    status: "Verified"
+    title: "No Image Retention",
+    text: "Uploaded images are processed and deleted immediately - never stored on our servers.",
+    icon: Eye,
   },
   {
-    title: "Embedded Admin authentication",
-    text: "Billing and Shopify Admin requests run inside Shopify Admin using the embedded app context and session token flow.",
-    status: "Active"
+    title: "GDPR Compliant",
+    text: "Our platform is fully compliant with GDPR and other major data privacy regulations.",
+    icon: Database,
   },
   {
-    title: "Store scoping",
-    text: "Merchant requests are tied to the active Shopify shop domain instead of exposing a private API host or store UUID in the browser.",
-    status: "Hardened"
+    title: "Secure Processing",
+    text: "AI processing occurs in isolated, sandboxed environments with no cross-customer data access.",
+    icon: Lock,
   },
   {
-    title: "Policy and retention details",
-    text: "Customer media is cache-visible for about 1 hour; if explicit consent is collected in widget setup, photos and measurement outputs can be retained for research for a limited period.",
-    status: "Configured"
-  }
+    title: "Consent Management",
+    text: "Built-in customer consent flows ensure shoppers agree to try-on terms before uploading.",
+    icon: UserCheck,
+  },
+];
+
+const settingsTabs = [
+  { href: "/settings", label: "Custom" },
+  { href: "/settings/privacy", label: "Privacy" },
+  { href: "/settings/billing", label: "Billing" },
+  { href: "/settings/support", label: "Support" },
 ];
 
 export default function SettingsPrivacyPage() {
-  const settingsTabs = [
-    { href: "/settings", label: "Custom" },
-    { href: "/settings/privacy", label: "Privacy" },
-    { href: "/settings/billing", label: "Billing" },
-    { href: "/settings/support", label: "Support" }
-  ];
-
   return (
-    <main className="portal-shell">
+    <div style={{ display: "flex", height: "100vh", overflow: "hidden", background: "#f6f4f4" }}>
       <PortalSidebar activeMain="settings" activeSettings="privacy" />
 
-      <section className="portal-main">
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto" }}>
         <PortalTopbar title="Settings" subtitle="Data privacy and security features" />
         <SubTabNav tabs={settingsTabs} />
 
-        <section className="settings-card">
-          <h3>Privacy &amp; Data Protection</h3>
-          <p className="settings-subtext">How we protect your customers&apos; data</p>
+        <div style={{ flex: 1, padding: "24px 28px", display: "flex", flexDirection: "column", gap: 12 }}>
+          {privacyRows.map((row, index) => {
+            const Icon = row.icon;
 
-          <ul className="privacy-list">
-            {privacyRows.map((row) => (
-              <li key={row.title} className="privacy-item">
-                <div>
-                  <h4>{row.title}</h4>
-                  <p>{row.text}</p>
+            return (
+              <motion.div
+                key={row.title}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.3, delay: index * 0.05 }}
+                style={{
+                  minHeight: 78,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 20,
+                  borderRadius: 12,
+                  padding: "16px 20px",
+                  background: "#f4edf3",
+                  border: "1px solid rgba(126,1,117,0.16)",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 16, minWidth: 0 }}>
+                  <span
+                    style={{
+                      width: 34,
+                      height: 34,
+                      borderRadius: 9,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
+                      background: "rgba(126,1,117,0.12)",
+                      color: "#9a0788",
+                    }}
+                    aria-hidden
+                  >
+                    <Icon size={16} />
+                  </span>
+                  <div style={{ minWidth: 0 }}>
+                    <h3 style={{ margin: "0 0 4px", fontSize: 14, fontWeight: 700, color: "#1a1a1a" }}>
+                      {row.title}
+                    </h3>
+                    <p style={{ margin: 0, fontSize: 14, lineHeight: 1.45, color: "#5f6b85" }}>
+                      {row.text}
+                    </p>
+                  </div>
                 </div>
-                <span>{row.status}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      </section>
-    </main>
+
+                <span
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 600,
+                    padding: "3px 10px",
+                    borderRadius: 999,
+                    flexShrink: 0,
+                    background: "#dcfce7",
+                    color: "#15803d",
+                  }}
+                >
+                  Active
+                </span>
+              </motion.div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
   );
 }

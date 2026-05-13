@@ -3,19 +3,30 @@
   const FLOW_SNAPSHOT_TTL_MS = 60 * 60 * 1000;
   const FLOW_SNAPSHOT_PREFIX = "optimo-vts-flow";
   const FLOW_POINTER_PREFIX = "optimo-vts-flow-pointer";
-  const ACTIVE_PROGRESS_COLOR = "linear-gradient(90deg, #a4006e 0%, #f3001f 100%)";
+  const ACTIVE_PROGRESS_COLOR = "linear-gradient(90deg, #7E0175 0%, #E40206 100%)";
   const IDLE_PROGRESS_COLOR = "#d7d5d8";
   const HEATMAP_VIEWBOX = "0 0 300 620";
   const MEASUREMENT_ROWS = [
     ["height", "Height"],
-    ["chest", "Chest circumference"],
-    ["shoulder_width", "Shoulder width"],
+    ["chest", "Bust circumference"],
+    ["shoulder_width", "Bust width (shoulder to shoulder)"],
+    ["under_bust", "Under-bust circumference"],
     ["waist", "Waist circumference"],
+    ["waist_width", "Waist width"],
     ["hip", "Hip circumference"],
-    ["neck", "Neck circumference"],
+    ["hip_width", "Hip width"],
+    ["shoulder_width", "Shoulder width"],
+    ["shoulder_circumference", "Shoulder circumference"],
     ["arm_length", "Arm length"],
+    ["upper_arm", "Arm circumference"],
+    ["bicep", "Bicep circumference"],
+    ["wrist", "Wrist circumference"],
+    ["inseam", "Inseam"],
     ["thigh", "Thigh circumference"],
-    ["inseam", "Inseam"]
+    ["knee", "Knee circumference"],
+    ["calf", "Calf circumference"],
+    ["ankle", "Ankle circumference"],
+    ["torso_length", "Back length"]
   ];
 
   const FIT_LABEL_ORDER = ["tight", "snug", "perfect", "loose", "very_loose"];
@@ -202,14 +213,7 @@
       "</span>" +
       '<div class="ovts-pose-figure ' +
       poseClass +
-      '">' +
-      '<span class="ovts-pose-head"></span>' +
-      '<span class="ovts-pose-body"></span>' +
-      '<span class="ovts-pose-arm is-left"></span>' +
-      '<span class="ovts-pose-arm is-right"></span>' +
-      '<span class="ovts-pose-leg is-left"></span>' +
-      '<span class="ovts-pose-leg is-right"></span>' +
-      (quality === "bad" ? '<span class="ovts-pose-slash"></span>' : "") +
+      '" style="aspect-ratio:3/4;min-height:0;border:1px solid #e5e5e5;border-radius:8px;background:#f0f0f0;display:block;overflow:hidden;">' +
       "</div>" +
       "</div>"
     );
@@ -2209,17 +2213,17 @@
         const key = entry[0];
         const label = entry[1];
         const value = formatNumber(measurements[key]);
-        if (value == null) {
-          return "";
-        }
         return (
           '<div class="ovts-measure-row">' +
           '<span>' +
           escapeHtml(label) +
           "</span>" +
+          (value == null
+            ? ""
+            :
           '<strong>' +
           escapeHtml(value) +
-          " cm</strong>" +
+          " cm</strong>") +
           "</div>"
         );
       }).join("");
@@ -2538,8 +2542,17 @@
         ? '<div class="ovts-banner is-note">' + escapeHtml(this.state.notice) + "</div>"
         : "";
 
+      const modalClass =
+        "ovts-modal" +
+        " is-stage-" +
+        escapeHtml(this.state.stage) +
+        (this.state.stage === "measurements" || this.state.stage === "results" ? " is-wide" : "") +
+        (this.state.stage === "setup" || this.state.stage === "front-pose" || this.state.stage === "side-pose" || this.state.stage === "analyzing" || this.state.stage === "success" ? " is-compact" : "");
+
       this.overlay.innerHTML =
-        '<div class="ovts-modal" role="dialog" aria-modal="true" aria-label="Optimo VTS virtual try-on">' +
+        '<div class="' +
+        modalClass +
+        '" role="dialog" aria-modal="true" aria-label="Optimo VTS virtual try-on">' +
         '<button type="button" class="ovts-close" data-action="close" aria-label="Close">' +
         svgIcon("close") +
         "</button>" +
@@ -2618,17 +2631,22 @@
     renderSetup() {
       const consentChecked = Boolean(this.state.form.researchConsent);
       return (
-        '<div class="ovts-stage">' +
-        '<div class="ovts-stage-head"><h2>Quick Setup <span>Guide</span></h2><p>Follow these simple steps for the best results.</p></div>' +
+        '<div class="ovts-stage ovts-stage--pose">' +
+        '<div class="ovts-stage-head"><span class="ovts-setup-camera">' +
+        svgIcon("camera") +
+        '</span><h2>Quick Setup <span>Guide</span></h2><p>Follow these simple steps for the best results.</p></div>' +
         '<form class="ovts-card ovts-setup-form" data-role="setup-form">' +
         "<h3>Add your details</h3>" +
         '<label class="ovts-field"><span>Height</span><div class="ovts-input-wrap"><input type="number" name="height" min="100" max="250" step="0.1" value="' +
         escapeHtml(this.state.form.height) +
-        '" placeholder="175" required><em>cm</em></div></label>' +
+        '" placeholder="" required><em>cm</em></div></label>' +
         '<label class="ovts-field"><span>Weight</span><div class="ovts-input-wrap"><input type="number" name="weight" min="30" max="300" step="0.1" value="' +
         escapeHtml(this.state.form.weight) +
-        '" placeholder="70" required><em>kg</em></div></label>' +
+        '" placeholder="" required><em>kg</em></div></label>' +
         '<label class="ovts-field"><span>Gender</span><div class="ovts-select-wrap"><select name="gender">' +
+        '<option value=""' +
+        (this.state.form.gender === "" ? " selected" : "") +
+        "></option>" +
         '<option value="male"' +
         (this.state.form.gender === "male" ? " selected" : "") +
         ">Male</option>" +
@@ -2667,30 +2685,28 @@
     renderPoseStep(pose) {
       const isFront = pose === "front";
       return (
-        '<div class="ovts-stage">' +
-        '<div class="ovts-pose-headline">' +
-        (isFront
-          ? ""
-          : '<button type="button" class="ovts-inline-back" data-action="back-to-setup">' + svgIcon("back") + "Back</button>") +
-        "<h2>Position: <span>" +
+        '<div class="ovts-stage ovts-stage--pose" style="display:flex;flex-direction:column;align-items:stretch;gap:16px;padding:24px 16px 20px;">' +
+        '<div class="ovts-pose-headline" style="display:block;width:100%;margin:0;">' +
+        '<h2 style="margin:0;font-size:16px;line-height:1.2;font-weight:800;color:#1a1a1a;text-align:left;">Position: <span style="color:#E40206;">' +
         escapeHtml(isFront ? "Front Pose" : "Side Pose") +
         "</span></h2></div>" +
-        '<div class="ovts-pose-grid">' +
+        '<div class="ovts-pose-grid" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;width:100%;">' +
         poseFigure(pose, "good") +
         poseFigure(pose, "bad") +
         "</div>" +
-        '<div class="ovts-pose-actions">' +
+        '<div class="ovts-pose-actions" style="display:grid;grid-template-columns:1fr;gap:10px;width:100%;">' +
         '<button type="button" class="ovts-primary" data-action="' +
         escapeHtml(isFront ? "camera-front" : "camera-side") +
-        '"><span class="ovts-btn-icon">' +
+        '" style="width:100%;min-height:36px;border-radius:8px;font-size:11px;font-weight:800;"><span class="ovts-btn-icon">' +
         svgIcon("camera") +
         "</span>Take Photo</button>" +
         '<button type="button" class="ovts-secondary" data-action="' +
         escapeHtml(isFront ? "upload-front" : "upload-side") +
-        '"><span class="ovts-btn-icon">' +
+        '" style="width:100%;min-height:36px;border-radius:8px;font-size:11px;font-weight:800;border:1px solid #e5e5e5;background:#fff;color:#1a1a1a;box-shadow:none;"><span class="ovts-btn-icon">' +
         svgIcon("upload") +
+        '</span>Upload <span class="ovts-pose-upload-accent">' +
+        escapeHtml(isFront ? "Front Pose" : "Side Pose") +
         "</span>" +
-        escapeHtml(isFront ? "Upload Front Pose" : "Upload Side Pose") +
         '</button></div><input class="ovts-file-input" type="file" accept="image/*" capture="environment" data-pose="' +
         escapeHtml(pose) +
         '" data-source="camera"><input class="ovts-file-input" type="file" accept="image/*" data-pose="' +
@@ -2702,11 +2718,11 @@
     renderAnalyzing() {
       const progress = [36, 68, 100][this.state.analysisStep] || 24;
       return (
-        '<div class="ovts-stage ovts-stage--center"><div class="ovts-spinner is-ring"></div><h2>Analyzing Your Photo</h2><p>Our AI is extracting 20+ body measurements.</p>' +
+        '<div class="ovts-stage ovts-stage--center ovts-stage--analysis"><div class="ovts-spinner is-ring"></div><h2>Analyzing Your Photo</h2><p>Our AI is extracting 20+ body measurements</p>' +
         this.renderProgressBar(progress) +
         '<div class="ovts-task-list">' +
-        this.renderTask("Detecting pose landmarks", this.state.analysisStep >= 0) +
-        this.renderTask("Extracting measurements", this.state.analysisStep >= 1) +
+        this.renderTask("Detecting pose landmarks", this.state.analysisStep >= 1 ? true : "active") +
+        this.renderTask("Extracting measurements", this.state.analysisStep >= 2 ? true : (this.state.analysisStep >= 1 ? "active" : false)) +
         this.renderTask("Calculating confidence", this.state.analysisStep >= 2) +
         "</div></div>"
       );
@@ -2719,7 +2735,7 @@
           : 86;
 
       return (
-        '<div class="ovts-stage"><div class="ovts-results-top"><div class="ovts-complete-head"><span class="ovts-check">' +
+        '<div class="ovts-stage ovts-stage--measurements"><div class="ovts-results-top"><div class="ovts-complete-head"><span class="ovts-check">' +
         svgIcon("success") +
         '</span><div><h2>Measurement Complete!</h2><p>' +
         escapeHtml(
@@ -2748,27 +2764,37 @@
     }
 
     renderFeatureTile(title, text) {
-      return '<div class="ovts-feature-tile"><strong>' + escapeHtml(title) + "</strong><p>" + escapeHtml(text) + "</p></div>";
+      return (
+        '<div class="ovts-feature-tile"><span class="ovts-feature-icon">' +
+        svgIcon(title === "Virtual Try-On" ? "sparkle" : "fit") +
+        "</span><div><strong>" +
+        escapeHtml(title) +
+        "</strong><p>" +
+        escapeHtml(text) +
+        "</p></div></div>"
+      );
     }
 
     renderGenerating() {
       const progress = [24, 58, 84, 100][this.state.generatingStep] || 18;
       return (
-        '<div class="ovts-stage ovts-stage--center"><div class="ovts-spinner is-ring"></div><h2>Generating your Fit</h2><p>Our AI is creating virtual try-on for you.</p>' +
+        '<div class="ovts-stage ovts-stage--center ovts-stage--generating"><div class="ovts-spinner is-ring"></div><h2>Generating your Fit</h2><p>Our AI is creating virtual try-on for you</p>' +
         this.renderProgressBar(progress) +
         '<div class="ovts-task-list">' +
-        this.renderTask("Loading Optimo 4o Virtual Studio", this.state.generatingStep >= 1) +
-        this.renderTask("Fitting to your size", this.state.generatingStep >= 2) +
-        this.renderTask("Enhancing overlay", this.state.generatingStep >= 3) +
+        this.renderTask("Loading Optimo 4o Virtual Studio", this.state.generatingStep >= 2 ? true : (this.state.generatingStep >= 1 ? "active" : false)) +
+        this.renderTask("Fitting to your size", this.state.generatingStep >= 3 ? true : (this.state.generatingStep >= 2 ? "active" : false)) +
+        this.renderTask("Enhancing Overlay", this.state.generatingStep >= 3 ? "active" : false) +
         "</div></div>"
       );
     }
 
-    renderTask(label, complete) {
+    renderTask(label, state) {
+      const complete = state === true;
+      const active = state === "active";
       const icon = complete
         ? '<span class="ovts-task-status is-complete">' + svgIcon("success") + "</span>"
-        : '<span class="ovts-task-status"></span>';
-      return '<div class="ovts-task-row">' + icon + "<span>" + escapeHtml(label) + "</span></div>";
+        : '<span class="ovts-task-status' + (active ? " is-active" : "") + '"></span>';
+      return '<div class="ovts-task-row' + (active ? " is-active" : "") + '">' + icon + "<span>" + escapeHtml(label) + "</span></div>";
     }
 
     renderProgressBar(value) {
@@ -2819,10 +2845,10 @@
         '>Retry</button></div><div class="ovts-share-box"><span>Share your look</span>' +
         this.renderShareActionButton() +
         '<div class="ovts-share-icons" aria-hidden="true">' +
-        this.renderShareIcon("Instagram", "#E4405F") +
-        this.renderShareIcon("Facebook", "#1877F2") +
-        this.renderShareIcon("WhatsApp", "#25D366") +
         this.renderShareIcon("TikTok", "#111111") +
+        this.renderShareIcon("Snapchat", "#FFFC00") +
+        this.renderShareIcon("Facebook", "#4267B2") +
+        this.renderShareIcon("Instagram", "#E4405F") +
         "</div></div></div></section><section class=\"ovts-heatmap-panel\"><div class=\"ovts-panel-head\"><div><h3>Heat Map</h3><span class=\"ovts-powered\">Powered by Optimo 4o</span></div></div><div class=\"ovts-heatmap-visual\"><div class=\"ovts-heatmap-body\"><div class=\"ovts-heatmap-overlay\">" +
         heatmapSvg +
         "</div>" +
@@ -2908,11 +2934,14 @@
     }
 
     renderShareIcon(label, color) {
+      const shortLabel = label === "TikTok" ? "♪" : label === "Snapchat" ? "S" : label === "Facebook" ? "f" : "◎";
       return (
-        '<span class="ovts-share-icon" style="--share-color:' +
+        '<span class="ovts-share-icon is-' +
+        escapeHtml(label.toLowerCase()) +
+        '" style="--share-color:' +
         escapeHtml(color) +
         '">' +
-        escapeHtml(label.slice(0, 2).toUpperCase()) +
+        escapeHtml(shortLabel) +
         "</span>"
       );
     }

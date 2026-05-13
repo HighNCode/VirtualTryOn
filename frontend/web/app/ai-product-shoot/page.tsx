@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type Dispatch, type SetStateAction } from "react";
 import { Download, RefreshCw } from "lucide-react";
+import AiUploadLanding from "../_components/AiUploadLanding";
 import PortalSidebar from "../_components/PortalSidebar";
 import PortalTopbar from "../_components/PortalTopbar";
 import SubTabNav from "../_components/SubTabNav";
@@ -222,34 +223,29 @@ export default function AiProductShootPage() {
         <SubTabNav tabs={aiTabs} />
 
         {!started ? (
-          <section className="ai-stage-upload">
-            <article className="ai-upload-copy">
-              <h3>
-                AI <span>Ghost Mannequin</span>
-                <br />
-                Generator for Product
-                <br />
-                Photography
-              </h3>
-              <p>Professional results in seconds, without studios or mannequins.</p>
-              <div className="ai-upload-preview" aria-hidden />
-            </article>
-
-            <aside className="ai-upload-panel">
-              <p className="ai-upgrade-banner">Upgrade Your Visuals Now</p>
-              <button type="button" className="ai-primary-btn" onClick={() => setStarted(true)}>
-                Upload Image
-              </button>
-              <button type="button" className="ai-outline-btn" onClick={() => setStarted(true)}>
-                Select from your store
-              </button>
-              <p className="ai-upload-note">
-                Any flat-lay or hanging photo works,
-                <br />
-                no professional setup needed
-              </p>
-            </aside>
-          </section>
+          <div style={{ padding: 24 }}>
+            <AiUploadLanding
+              headline={
+                <>
+                  AI{" "}
+                  <span
+                    style={{
+                      background: "linear-gradient(135deg, #7E0175 0%, #BC174A 55%, #E40206 100%)",
+                      WebkitBackgroundClip: "text",
+                      WebkitTextFillColor: "transparent",
+                      backgroundClip: "text",
+                    }}
+                  >
+                    Ghost Mannequin
+                  </span>{" "}
+                  Generator for Product Photography
+                </>
+              }
+              subtitle="Professional results in seconds, without studios or mannequins."
+              videoSrc="/Ghost Mannequin.mp4"
+              onUpload={() => setStarted(true)}
+            />
+          </div>
         ) : (
           <section className="ai-stage-result">
             <aside className="ai-generator-card">

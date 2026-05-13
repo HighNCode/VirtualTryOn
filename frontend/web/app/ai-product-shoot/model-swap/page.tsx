@@ -9,6 +9,7 @@ import {
   type ChangeEvent
 } from "react";
 import { Download, RefreshCw } from "lucide-react";
+import AiUploadLanding from "../../_components/AiUploadLanding";
 import PortalSidebar from "../../_components/PortalSidebar";
 import PortalTopbar from "../../_components/PortalTopbar";
 import SubTabNav from "../../_components/SubTabNav";
@@ -291,25 +292,28 @@ export default function ModelSwapPage() {
         <SubTabNav tabs={aiTabs} />
 
         {!started ? (
-          <section className="ai-stage-upload">
-            <article className="ai-upload-copy ai-swap-upload-copy">
-              <h3>
-                Transform Fashion Photos with
-                <br />
-                Premium <span>AI Model Swap</span>
-              </h3>
-              <p>Swap model identity while preserving garment and scene continuity.</p>
-              <div className="ai-upload-preview" aria-hidden />
-            </article>
-
-            <aside className="ai-upload-panel">
-              <p className="ai-upgrade-banner">Upgrade Your Visuals Now</p>
-              <button type="button" className="ai-primary-btn" onClick={() => setStarted(true)}>
-                Continue to model swap
-              </button>
-              <p className="ai-upload-note">Only the model identity changes. Garment and pose remain intact.</p>
-            </aside>
-          </section>
+          <div style={{ padding: 24 }}>
+            <AiUploadLanding
+              headline={
+                <>
+                  Transform Fashion Photos with Premium{" "}
+                  <span
+                    style={{
+                      background: "linear-gradient(135deg, #7E0175 0%, #BC174A 55%, #E40206 100%)",
+                      WebkitBackgroundClip: "text",
+                      WebkitTextFillColor: "transparent",
+                      backgroundClip: "text",
+                    }}
+                  >
+                    AI Model Swap
+                  </span>
+                </>
+              }
+              subtitle="Seamless, diverse, and customized visuals, perfect for any market."
+              videoSrc="/Model Swap.mp4"
+              onUpload={() => setStarted(true)}
+            />
+          </div>
         ) : (
           <section className="ai-stage-model-swap">
             <aside className="ai-swap-panel">

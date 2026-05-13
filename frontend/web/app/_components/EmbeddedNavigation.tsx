@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ComponentProps } from "react";
 
 const EMBEDDED_QUERY_KEYS = ["embedded", "host", "locale", "shop"] as const;
@@ -112,13 +112,14 @@ type EmbeddedLinkProps = Omit<ComponentProps<typeof Link>, "href"> & {
   href: string;
 };
 
-export function EmbeddedLink({ href, ...props }: EmbeddedLinkProps) {
-  const resolvedHref = buildEmbeddedHref(
-    href,
-    typeof window !== "undefined" ? window.location.search.replace(/^\?/, "") : ""
-  );
+export function EmbeddedLink({ href, style, ...props }: EmbeddedLinkProps) {
+  const [resolvedHref, setResolvedHref] = useState(() => buildEmbeddedHref(href, ""));
 
-  return <Link href={resolvedHref} {...props} />;
+  useEffect(() => {
+    setResolvedHref(buildEmbeddedHref(href, window.location.search.replace(/^\?/, "")));
+  }, [href]);
+
+  return <Link href={resolvedHref} style={{ ...style, textDecoration: "none" }} {...props} />;
 }
 
 export function useEmbeddedRouter() {

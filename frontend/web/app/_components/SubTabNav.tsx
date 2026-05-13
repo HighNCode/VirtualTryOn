@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { usePathname } from "next/navigation";
 import { EmbeddedLink } from "./EmbeddedNavigation";
@@ -13,19 +13,13 @@ type SubTabNavProps = {
 };
 
 function normalizePath(path: string): string {
-  if (!path) {
-    return "/";
-  }
-
+  if (!path) return "/";
   const trimmed = path.endsWith("/") && path !== "/" ? path.slice(0, -1) : path;
   return trimmed || "/";
 }
 
 function matchesTabPath(pathname: string, href: string): boolean {
-  if (href === "/") {
-    return pathname === "/";
-  }
-
+  if (href === "/") return pathname === "/";
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
@@ -37,21 +31,33 @@ export default function SubTabNav({ tabs }: SubTabNavProps) {
     .sort((a, b) => b.href.length - a.href.length)[0]?.href;
 
   return (
-    <nav className="portal-subtabs" aria-label="Section tabs">
-      {tabs.map((tab) => {
-        const normalizedHref = normalizePath(tab.href);
-        const isActive = normalizedHref === activeHref;
-        return (
-          <EmbeddedLink
-            key={tab.href}
-            href={tab.href}
-            className={`portal-subtab-item${isActive ? " is-active" : ""}`}
-            aria-current={isActive ? "page" : undefined}
-          >
-            {tab.label}
-          </EmbeddedLink>
-        );
-      })}
+    <nav
+      aria-label="Section tabs"
+      style={{ display: "flex", alignItems: "center", gap: 4, padding: "12px 28px", background: "#ffffff", borderBottom: "1px solid #f0f0f0" }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 4, padding: 4, borderRadius: 10, background: "#f3f4f6" }}>
+        {tabs.map((tab) => {
+          const normalizedHref = normalizePath(tab.href);
+          const isActive = normalizedHref === activeHref;
+          return (
+            <EmbeddedLink
+              key={tab.href}
+              href={tab.href}
+              aria-current={isActive ? "page" : undefined}
+            >
+              <span
+                style={
+                  isActive
+                    ? { display: "block", padding: "6px 12px", fontSize: 13, fontWeight: 500, borderRadius: 8, background: "#ffffff", color: "#7E0175", boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }
+                    : { display: "block", padding: "6px 12px", fontSize: 13, fontWeight: 500, borderRadius: 8, color: "#6b7280" }
+                }
+              >
+                {tab.label}
+              </span>
+            </EmbeddedLink>
+          );
+        })}
+      </div>
     </nav>
   );
 }

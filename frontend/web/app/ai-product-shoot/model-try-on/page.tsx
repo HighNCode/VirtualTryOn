@@ -9,6 +9,7 @@ import {
   type ChangeEvent
 } from "react";
 import { Download, RefreshCw } from "lucide-react";
+import AiUploadLanding from "../../_components/AiUploadLanding";
 import PortalSidebar from "../../_components/PortalSidebar";
 import PortalTopbar from "../../_components/PortalTopbar";
 import SubTabNav from "../../_components/SubTabNav";
@@ -292,26 +293,28 @@ export default function ModelTryOnPage() {
         <SubTabNav tabs={aiTabs} />
 
         {!started ? (
-          <section className="ai-stage-upload">
-            <article className="ai-upload-copy">
-              <h3>
-                AI <span>Model Try-On</span>
-                <br />
-                Generator for Product
-                <br />
-                Photography
-              </h3>
-              <p>Generate model-wearing visuals from your product and model source.</p>
-              <div className="ai-upload-preview" aria-hidden />
-            </article>
-            <aside className="ai-upload-panel">
-              <p className="ai-upgrade-banner">Create model-ready assets now</p>
-              <button type="button" className="ai-primary-btn" onClick={() => setStarted(true)}>
-                Continue to Try-On
-              </button>
-              <p className="ai-upload-note">Use store images or local uploads for both inputs.</p>
-            </aside>
-          </section>
+          <div style={{ padding: 24 }}>
+            <AiUploadLanding
+              headline={
+                <>
+                  Turn Garments Into Best-Selling{" "}
+                  <span
+                    style={{
+                      background: "linear-gradient(135deg, #7E0175 0%, #BC174A 55%, #E40206 100%)",
+                      WebkitBackgroundClip: "text",
+                      WebkitTextFillColor: "transparent",
+                      backgroundClip: "text",
+                    }}
+                  >
+                    Virtual Try-On Images
+                  </span>
+                </>
+              }
+              subtitle="AI On-Model Photos Generator, accurate, realistic, and built to convert."
+              videoSrc="/Try-on.mp4"
+              onUpload={() => setStarted(true)}
+            />
+          </div>
         ) : (
           <section className="ai-stage-model-tryon">
             <aside className="ai-tryon-panel">

@@ -504,8 +504,8 @@ class WidgetConfigUpdateRequest(BaseModel):
 class PlanConfigResponse(BaseModel):
     """Definition of a single subscription plan (DB-backed)"""
     id: UUID
-    name: str                       # 'starter' | 'growth'
-    display_name: str               # 'Starter' | 'Growth'
+    name: str                       # 'starter' | 'growth' | 'professional' | 'scale'
+    display_name: str               # 'Starter' | 'Growth' | 'Professional' | 'Scale'
     price_monthly: float            # 17.0
     price_annual_total: float       # 179.0  (Shopify charge amount)
     price_annual_per_month: float   # 14.0   (UI display only)
@@ -528,7 +528,7 @@ class PlansResponse(BaseModel):
 
 class CreateSubscriptionRequest(BaseModel):
     """Request to create a Shopify subscription for a paid plan"""
-    plan_name: str           # 'starter' | 'growth'
+    plan_name: str           # 'starter' | 'growth' | 'professional' | 'scale'
     billing_interval: str    # 'monthly' | 'annual'
     return_url: str          # Remix callback URL after merchant approves on Shopify
     # Trial is always applied (trial_days from the plan) Ã¢â‚¬â€ no opt-in flag
