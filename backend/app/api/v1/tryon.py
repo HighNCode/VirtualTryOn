@@ -926,7 +926,8 @@ async def debug_rehydrate_tryon_cache(
 
     storage = get_media_storage_service()
     if not storage.enabled:
-        raise HTTPException(500, "Media storage is not configured")
+        reason = storage.disabled_reason or "unknown configuration error"
+        raise HTTPException(500, f"Media storage is not configured. Reason: {reason}")
 
     payload = storage.download_bytes(record.result_object_path)
     if not payload:
