@@ -83,7 +83,7 @@ export default function SettingsSupportPage() {
                 {[
                   { href: "/settings/billing", label: "Review billing and active subscription" },
                   { href: "/settings/privacy", label: "Review privacy and compliance handling" },
-                  { href: "/step-5/not-detected", label: "Re-open theme activation guidance" },
+                  { href: "/step-5", label: "Re-open theme activation guidance" },
                 ].map((link) => (
                   <EmbeddedLink key={link.href} href={link.href}>
                     <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderRadius: 10, fontSize: 14, fontWeight: 500, background: "rgba(126,1,117,0.04)", color: "#7E0175", border: "1px solid rgba(126,1,117,0.1)" }}>

@@ -104,12 +104,12 @@ export default function SelectProductsPage() {
   };
 
   const handleSave = async () => {
-    if (!storeId) { router.push("/step-4/configured"); return; }
+    if (!storeId) { router.push("/step-4"); return; }
     setIsSaving(true);
     setErrorMessage("");
     try {
       await saveWidgetScope({ storeId, scopeType: "selected_products", enabledCollectionIds, enabledProductIds: selectedIds });
-      router.push("/step-4/configured");
+      router.push("/step-4");
     } catch (error: unknown) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to save selected products.");
     } finally {

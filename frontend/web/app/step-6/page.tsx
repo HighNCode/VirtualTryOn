@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useEmbeddedRouter } from "../_components/EmbeddedNavigation";
+import { EmbeddedLink, useEmbeddedRouter } from "../_components/EmbeddedNavigation";
 import {
   activateBillingPlan,
   completeOnboardingFromBilling,
@@ -211,6 +211,18 @@ export default function StepSixPage() {
 
         {/* Content */}
         <div style={{ padding: "24px 24px 16px" }}>
+          <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
+            <EmbeddedLink
+              href="/step-5"
+              style={{ width: 32, height: 32, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", background: "#f3f4f6", color: "#6b7280" }}
+              aria-label="Go to previous screen"
+            >
+              <svg viewBox="0 0 24 24" width={16} height={16}>
+                <path d="M14.6 5.5L8.2 12L14.6 18.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.8" />
+              </svg>
+            </EmbeddedLink>
+          </div>
+
           <div style={{ textAlign: "center", marginBottom: 20 }}>
             <h1 style={{ margin: "0 0 4px", fontSize: 22, fontWeight: 800, color: "#1a1a1a" }}>Choose Your Plan</h1>
             <p style={{ margin: 0, fontSize: 14, color: "#6b7280" }}>
