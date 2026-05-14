@@ -17,7 +17,7 @@ const STEP_ROUTES: Record<string, string> = {
   goals: "/step-2",
   referral: "/step-3",
   widget_scope: "/step-4",
-  theme_setup: "/step-5/not-detected",
+  theme_setup: "/step-5",
   plan: "/step-6",
   complete: "/dashboard"
 };
@@ -33,6 +33,10 @@ export default function Home() {
         if (status.billing_lock_reason) { router.replace("/settings/billing"); return; }
         const route = STEP_ROUTES[status.onboarding_step];
         if (!route || route === "/step-2") return;
+        if (status.onboarding_step === "complete") {
+          router.replace("/dashboard");
+          return;
+        }
         if (typeof window === "undefined") return;
         const alreadyAutoResumed = window.sessionStorage.getItem(ONBOARDING_AUTO_RESUME_DONE_KEY) === "1";
         if (alreadyAutoResumed) return;

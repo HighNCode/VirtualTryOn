@@ -83,12 +83,12 @@ export default function SelectCollectionsPage() {
   };
 
   const handleSave = async () => {
-    if (!storeId) { router.push("/step-4/configured"); return; }
+    if (!storeId) { router.push("/step-4"); return; }
     setIsSaving(true);
     setErrorMessage("");
     try {
       await saveWidgetScope({ storeId, scopeType: "selected_collections", enabledCollectionIds: selectedIds, enabledProductIds });
-      router.push("/step-4/configured");
+      router.push("/step-4");
     } catch (error: unknown) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to save selected collections.");
     } finally {
