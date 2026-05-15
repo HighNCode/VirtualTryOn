@@ -109,7 +109,7 @@ export function Step1Setup({ onNext }: Props) {
           onChange={(event) => setResearchConsent(event.target.checked)}
           className="mt-0.5"
         />
-        <span>I agree to research retention of my photos and measurement outputs as described in the privacy notice.</span>
+        <span>I agree to Terms of Service and Privacy Policy.</span>
       </label>
 
       <div className="w-full bg-[#f9f9f9] rounded-[10px] px-4 py-3 text-center">

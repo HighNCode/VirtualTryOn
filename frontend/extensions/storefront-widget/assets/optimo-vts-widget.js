@@ -2657,7 +2657,7 @@
         (this.state.form.gender === "unisex" ? " selected" : "") +
         '>Prefer not to say</option></select></div></label><label class="ovts-field ovts-consent-field"><div class="ovts-consent-wrap"><input type="checkbox" name="researchConsent" value="true"' +
         (consentChecked ? " checked" : "") +
-        '><span>I agree to research retention of my photos and measurement outputs as described in the privacy notice.</span></div></label></form>' +
+        '><span>I agree to Terms of Service and Privacy Policy.</span></div></label></form>' +
         '<div class="ovts-guides">' +
         this.renderGuideRow("plain", "Plain Background", "Position yourself in front of a plain wall.") +
         this.renderGuideRow("distance", "Stand 1.5m Away", "Step back so your full body is visible in frame.") +
