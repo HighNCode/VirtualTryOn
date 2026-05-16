@@ -314,8 +314,11 @@ export default function AiProductShootPage() {
         shopifyProductGid: submittedGid,
         image1Url: originalSlot.url,
         image1File: originalSlot.file,
-        image2Url: null,
-        image2File: null
+        // Keep the merchant UI as a single-image flow, but send the same image
+        // into the legacy second slot so older backend deployments that still
+        // require image2 do not reject the request.
+        image2Url: originalSlot.url,
+        image2File: originalSlot.file
       });
 
       setStatusMessage(`Job ${startedJob.job_id} started. Processing...`);
