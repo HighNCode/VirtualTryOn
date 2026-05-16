@@ -123,6 +123,7 @@ class SeedreamProvider(ImageGenerationProvider):
         image1_bytes: bytes,
         image2_bytes: bytes,
         clothing_type: Optional[str] = None,
+        reference_pose: Optional[str] = None,
     ) -> bytes:
         garment_hints = {
             "tops": "Pay special attention to the collar, neckline, and sleeve openings.",
@@ -131,16 +132,26 @@ class SeedreamProvider(ImageGenerationProvider):
             "outerwear": "Show the collar, lapels, and front closure detail.",
         }
         garment_detail = garment_hints.get(clothing_type or "", "")
+        reference_instruction = (
+            f"The second image is a {reference_pose} style template/reference only. "
+            "Use it to understand the desired ghost mannequin angle and silhouette, "
+            "but do not copy its garment design, color, pattern, buttons, labels, or texture. "
+            "The final garment must come from the first uploaded product image. "
+            if reference_pose
+            else (
+                "Use both images to construct the best possible result: if one shows the front and "
+                "the other shows the back or inside, composite them to reveal interior collar lining "
+                "or label detail. "
+            )
+        )
 
         prompt = (
-            "You are given two photos of the same garment. "
+            "You are given a product garment image and an optional supporting reference image. "
             "Create a single professional ghost mannequin (invisible mannequin) product photo: "
             "the garment should appear as if worn by an invisible torso, showing the garment's "
             "full 3D shape, neckline, armholes, and bottom hem. "
             "Remove any visible model, mannequin, hanger, or background from the output. "
-            "Use both images to construct the best possible result: if one shows the front and "
-            "the other shows the back or inside, composite them to reveal interior collar lining "
-            "or label detail. "
+            f"{reference_instruction}"
             f"{garment_detail} "
             "Output a clean, professional product photo on a white or light grey background."
         )

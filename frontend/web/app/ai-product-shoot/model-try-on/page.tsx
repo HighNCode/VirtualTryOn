@@ -1,14 +1,7 @@
 "use client";
 
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-  type ChangeEvent
-} from "react";
-import { Download, RefreshCw } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
+import { ChevronRight, Download, PencilLine, RefreshCw, Trash2, Upload, UserRound, X } from "lucide-react";
 import AiUploadLanding from "../../_components/AiUploadLanding";
 import PortalSidebar from "../../_components/PortalSidebar";
 import PortalTopbar from "../../_components/PortalTopbar";
@@ -20,6 +13,7 @@ import {
   isFailureStatus,
   listPhotoshootModels,
   pollPhotoshootJob,
+  resolvePhotoshootImageUrl,
   resolveBackendUrl,
   startTryOnModelJob,
   type PhotoshootModelResponse
@@ -29,9 +23,18 @@ import { extractProductImageUrls, usePhotoshootProducts } from "../_components/u
 const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 const ALLOWED_IMAGE_MIME = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp"]);
 
+type GeneratedResult = {
+  id: string;
+  imageUrl: string;
+  jobId: string;
+  needsProductAtApprove: boolean;
+};
+
 function tileStyle(imageUrl: string): CSSProperties {
+  const resolvedImageUrl = resolvePhotoshootImageUrl(imageUrl);
+
   return {
-    backgroundImage: `url(${resolveBackendUrl(imageUrl)})`,
+    backgroundImage: `url(${resolvedImageUrl})`,
     backgroundSize: "cover",
     backgroundPosition: "center"
   };
@@ -47,14 +50,14 @@ function validateImageFile(file: File): string | null {
   return null;
 }
 
+const aiTabs = [
+  { href: "/ai-product-shoot", label: "Ghost Mannequin" },
+  { href: "/ai-product-shoot/model-try-on", label: "Model Try-on" },
+  { href: "/ai-product-shoot/model-swap", label: "Model Swap" }
+];
+
 export default function ModelTryOnPage() {
   const storeId = useMemo(() => getDefaultStoreId(), []);
-  const aiTabs = [
-    { href: "/ai-product-shoot", label: "Ghost Mannequin" },
-    { href: "/ai-product-shoot/model-try-on", label: "Model Try-on" },
-    { href: "/ai-product-shoot/model-swap", label: "Model Swap" }
-  ];
-
   const {
     visibleProducts,
     selectedProduct,
@@ -68,11 +71,13 @@ export default function ModelTryOnPage() {
     isSyncing,
     errorMessage: productError,
     canLoadMore,
-    loadMoreProducts,
-    syncNow
+    loadMoreProducts
   } = usePhotoshootProducts(storeId);
 
   const [started, setStarted] = useState(false);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [storePickerOpen, setStorePickerOpen] = useState(false);
+
   const [productImageUrl, setProductImageUrl] = useState<string | null>(null);
   const [productImageFile, setProductImageFile] = useState<File | null>(null);
   const [productImagePreview, setProductImagePreview] = useState<string | null>(null);
@@ -89,11 +94,10 @@ export default function ModelTryOnPage() {
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
+  const [approvingResultId, setApprovingResultId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
-  const [resultImageUrl, setResultImageUrl] = useState<string | null>(null);
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [jobNeedsProductAtApprove, setJobNeedsProductAtApprove] = useState(false);
+  const [generatedResults, setGeneratedResults] = useState<GeneratedResult[]>([]);
   const previewUrlsRef = useRef<string[]>([]);
 
   useEffect(() => {
@@ -104,9 +108,10 @@ export default function ModelTryOnPage() {
   }, []);
 
   useEffect(() => {
-    if (!storeId.trim() || modelSource !== "library") {
+    if (!modelPickerOpen || !storeId.trim() || modelSource !== "library") {
       return;
     }
+
     const controller = new AbortController();
     setIsLoadingModels(true);
     listPhotoshootModels({
@@ -122,7 +127,7 @@ export default function ModelTryOnPage() {
           if (current && payload.some((item) => item.id === current)) {
             return current;
           }
-          return payload[0]?.id ?? null;
+          return null;
         });
       })
       .catch((error: unknown) => {
@@ -137,8 +142,9 @@ export default function ModelTryOnPage() {
           setIsLoadingModels(false);
         }
       });
+
     return () => controller.abort();
-  }, [modelAge, modelBodyType, modelGender, modelSource, storeId]);
+  }, [modelAge, modelBodyType, modelGender, modelPickerOpen, modelSource, storeId]);
 
   const productImages = useMemo(() => extractProductImageUrls(selectedProduct), [selectedProduct]);
   const selectedModel = useMemo(
@@ -146,23 +152,30 @@ export default function ModelTryOnPage() {
     [models, selectedModelId]
   );
 
-  const onProductUpload = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) {
-      return;
-    }
+  const applyUploadedProductFile = (file: File) => {
     const validation = validateImageFile(file);
     if (validation) {
       setErrorMessage(validation);
-      event.currentTarget.value = "";
       return;
     }
+
     const preview = URL.createObjectURL(file);
     previewUrlsRef.current.push(preview);
     setProductImageFile(file);
     setProductImageUrl(null);
     setProductImagePreview(preview);
+    setStarted(true);
+    setStorePickerOpen(false);
     setErrorMessage("");
+  };
+
+  const onProductUpload = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    applyUploadedProductFile(file);
     event.currentTarget.value = "";
   };
 
@@ -182,6 +195,7 @@ export default function ModelTryOnPage() {
     setModelImageFile(file);
     setModelImagePreview(preview);
     setModelSource("upload");
+    setModelPickerOpen(false);
     setErrorMessage("");
     event.currentTarget.value = "";
   };
@@ -190,7 +204,24 @@ export default function ModelTryOnPage() {
     setProductImageUrl(imageUrl);
     setProductImageFile(null);
     setProductImagePreview(imageUrl);
+    setStarted(true);
+    setStorePickerOpen(false);
     setErrorMessage("");
+  };
+
+  const selectLibraryModel = (modelId: string) => {
+    setSelectedModelId(modelId);
+    setModelSource("library");
+    setModelImageFile(null);
+    setModelImagePreview(null);
+    setModelPickerOpen(false);
+  };
+
+  const clearSelectedModel = () => {
+    setSelectedModelId(null);
+    setModelImageFile(null);
+    setModelImagePreview(null);
+    setModelSource("library");
   };
 
   const generateResults = async () => {
@@ -199,20 +230,22 @@ export default function ModelTryOnPage() {
       return;
     }
     if (!productImageUrl && !productImageFile) {
+      setStorePickerOpen(true);
       setErrorMessage("Select a product image from store or upload one.");
       return;
     }
     if (modelSource === "library" && !selectedModelId) {
-      setErrorMessage("Select a model from library.");
+      setModelPickerOpen(true);
+      setErrorMessage("Select a model before generating.");
       return;
     }
     if (modelSource === "upload" && !modelImageFile) {
+      setModelPickerOpen(true);
       setErrorMessage("Upload a model image.");
       return;
     }
 
     setIsGenerating(true);
-    setResultImageUrl(null);
     setStatusMessage("Starting try-on model job...");
     setErrorMessage("");
 
@@ -227,8 +260,6 @@ export default function ModelTryOnPage() {
         modelImage: modelSource === "upload" ? modelImageFile : null
       });
 
-      setJobId(startedJob.job_id);
-      setJobNeedsProductAtApprove(!submittedGid);
       setStatusMessage(`Job ${startedJob.job_id} started. Processing...`);
 
       const finishedJob = await pollPhotoshootJob(storeId.trim(), startedJob.job_id, {
@@ -246,7 +277,15 @@ export default function ModelTryOnPage() {
         ? resolveBackendUrl(finishedJob.result_image_url)
         : buildJobResultUrl(startedJob.job_id);
 
-      setResultImageUrl(imageUrl);
+      setGeneratedResults((current) => [
+        {
+          id: `${startedJob.job_id}-${Date.now()}`,
+          imageUrl,
+          jobId: startedJob.job_id,
+          needsProductAtApprove: !submittedGid
+        },
+        ...current
+      ]);
       setStatusMessage("Generation complete.");
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Failed to generate model try-on image.";
@@ -257,32 +296,45 @@ export default function ModelTryOnPage() {
     }
   };
 
-  const approveToShopify = async () => {
-    if (!jobId || !storeId.trim()) {
+  const approveToShopify = async (result: GeneratedResult) => {
+    if (!result.jobId || !storeId.trim()) {
       return;
     }
-    if (jobNeedsProductAtApprove && !selectedProductGid) {
+    if (result.needsProductAtApprove && !selectedProductGid) {
+      setStorePickerOpen(true);
       setErrorMessage("Select a store product before approving this result.");
       return;
     }
 
     setIsApproving(true);
+    setApprovingResultId(result.id);
     setErrorMessage("");
     try {
       const response = await approvePhotoshootJob({
         storeId: storeId.trim(),
-        jobId,
-        shopifyProductGid: jobNeedsProductAtApprove ? selectedProductGid : null
+        jobId: result.jobId,
+        shopifyProductGid: result.needsProductAtApprove ? selectedProductGid : null
       });
       setStatusMessage(response.message);
-      setJobNeedsProductAtApprove(false);
+      setGeneratedResults((current) =>
+        current.map((item) => (item.id === result.id ? { ...item, needsProductAtApprove: false } : item))
+      );
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Failed to approve generated image.";
       setErrorMessage(message);
     } finally {
       setIsApproving(false);
+      setApprovingResultId(null);
     }
   };
+
+  const openModelPicker = () => {
+    setModelPickerOpen(true);
+    setErrorMessage("");
+  };
+
+  const selectedModelPreview =
+    modelSource === "library" ? selectedModel?.image_url ?? null : modelImagePreview;
 
   return (
     <main className="portal-shell">
@@ -303,7 +355,7 @@ export default function ModelTryOnPage() {
                       background: "linear-gradient(135deg, #7E0175 0%, #BC174A 55%, #E40206 100%)",
                       WebkitBackgroundClip: "text",
                       WebkitTextFillColor: "transparent",
-                      backgroundClip: "text",
+                      backgroundClip: "text"
                     }}
                   >
                     Virtual Try-On Images
@@ -312,141 +364,60 @@ export default function ModelTryOnPage() {
               }
               subtitle="AI On-Model Photos Generator, accurate, realistic, and built to convert."
               videoSrc="/Try-on.mp4"
-              onUpload={() => setStarted(true)}
+              onFileSelected={applyUploadedProductFile}
+              onSelectStore={() => setStorePickerOpen(true)}
             />
           </div>
         ) : (
-          <section className="ai-stage-model-tryon">
-            <aside className="ai-tryon-panel">
-              <h3>Model Try-On</h3>
-              <p>Product Image</p>
+          <section className={`ai-tryon-workspace${generatedResults.length > 0 ? " has-result" : ""}`}>
+            <aside className="ai-tryon-setup-card">
+              <h3>Fashion Model</h3>
 
-              <h4>Store context</h4>
-              <p className="ai-status-note">
-                {storeId ? "Connected to the current Shopify store." : "Open the app from Shopify Admin to load store context."}
-              </p>
-
-              <h4>Product Search</h4>
-              <label className="ai-text-field">
-                <input
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Search synced products"
-                  autoComplete="off"
-                />
-              </label>
-              {isLoading ? <p className="ai-status-note">Loading products...</p> : null}
-              {isSyncing ? <p className="ai-status-note">Syncing products from Shopify...</p> : null}
-              {productError ? <p className="ai-error-note">{productError}</p> : null}
-
-              <div className="ai-product-list">
-                {visibleProducts.map((product) => (
-                  <button
-                    key={product.product_id}
-                    type="button"
-                    className={`ai-template-item ${selectedProductId === product.product_id ? "is-selected" : ""}`}
-                    onClick={() => setSelectedProductId(product.product_id)}
-                    aria-label={product.title}
-                  >
-                    <span>{product.title}</span>
-                  </button>
-                ))}
-              </div>
-              <div className="ai-inline-actions">
-                <button type="button" className="ai-outline-btn" onClick={syncNow} disabled={isSyncing}>
-                  {isSyncing ? "Syncing..." : "Sync products"}
-                </button>
-                {canLoadMore ? (
-                  <button type="button" className="ai-outline-btn" onClick={loadMoreProducts} disabled={isLoadingMore}>
-                    {isLoadingMore ? "Loading..." : "Load more"}
-                  </button>
-                ) : null}
+              <p className="ai-tryon-field-label">Product Image</p>
+              <div className="ai-tryon-product-preview">
+                {productImagePreview ? <span style={tileStyle(productImagePreview)} /> : null}
               </div>
 
-              <h4>Store product images</h4>
-              <div className="ai-template-grid">
-                {productImages.map((imageUrl) => (
-                  <button key={imageUrl} type="button" className="ai-template-item is-selected" onClick={() => chooseStoreProductImage(imageUrl)}>
-                    <span style={tileStyle(imageUrl)} />
-                    <strong>Use image</strong>
-                  </button>
-                ))}
-              </div>
-
-              <label className="ai-outline-btn">
-                <input type="file" accept="image/jpeg,image/png,image/webp" onChange={onProductUpload} />
-                Upload Product Image
+              <label className="ai-tryon-field">
+                <span>Try-on Item</span>
+                <select aria-label="Try-on Item" value="auto" onChange={() => undefined}>
+                  <option value="auto">Auto</option>
+                </select>
               </label>
 
-              <h4>Model Source</h4>
-              <div className="ai-inline-actions">
-                <button
-                  type="button"
-                  className={`ai-outline-btn${modelSource === "library" ? " is-selected" : ""}`}
-                  onClick={() => setModelSource("library")}
-                >
-                  Model Library
-                </button>
-                <button
-                  type="button"
-                  className={`ai-outline-btn${modelSource === "upload" ? " is-selected" : ""}`}
-                  onClick={() => setModelSource("upload")}
-                >
-                  Upload Model
-                </button>
-              </div>
+              <section className="ai-tryon-model-card">
+                <div className="ai-tryon-model-thumb-wrap">
+                  {selectedModelPreview ? (
+                    <span style={tileStyle(selectedModelPreview)} />
+                  ) : (
+                    <UserRound size={24} aria-hidden />
+                  )}
+                </div>
 
-              {modelSource === "library" ? (
-                <>
-                  <div className="ai-inline-actions">
-                    <label className="ai-select-wrap">
-                      <select value={modelGender} onChange={(event) => setModelGender(event.target.value)} aria-label="Gender">
-                        <option value="unisex">All</option>
-                        <option value="female">Women</option>
-                        <option value="male">Men</option>
-                      </select>
-                    </label>
-                    <label className="ai-select-wrap">
-                      <select value={modelAge} onChange={(event) => setModelAge(event.target.value)} aria-label="Age">
-                        <option value="">Age</option>
-                        <option value="18-25">18-25</option>
-                        <option value="26-35">26-35</option>
-                        <option value="36-45">36-45</option>
-                        <option value="45+">45+</option>
-                      </select>
-                    </label>
-                    <label className="ai-select-wrap">
-                      <select value={modelBodyType} onChange={(event) => setModelBodyType(event.target.value)} aria-label="Body Type">
-                        <option value="">Body Type</option>
-                        <option value="slim">Slim</option>
-                        <option value="athletic">Athletic</option>
-                        <option value="regular">Regular</option>
-                        <option value="plus">Plus</option>
-                      </select>
-                    </label>
-                  </div>
-                  {isLoadingModels ? <p className="ai-status-note">Loading models...</p> : null}
-                  <div className="ai-template-grid">
-                    {models.map((model) => (
-                      <button
-                        key={model.id}
-                        type="button"
-                        className={`ai-template-item ${selectedModelId === model.id ? "is-selected" : ""}`}
-                        onClick={() => setSelectedModelId(model.id)}
-                      >
-                        <span style={tileStyle(model.image_url)} />
+                <div className="ai-tryon-model-summary">
+                  <strong>Try on model</strong>
+                  <span>{selectedModelPreview ? "Selected 1 model" : "No model selected"}</span>
+
+                  <div className="ai-tryon-model-actions">
+                    <button type="button" onClick={openModelPicker}>
+                      <PencilLine size={15} />
+                      {selectedModelPreview ? "Edit selection" : "Select model"}
+                    </button>
+                    {selectedModelPreview ? (
+                      <button type="button" onClick={clearSelectedModel}>
+                        <Trash2 size={15} />
+                        Clear
                       </button>
-                    ))}
+                    ) : null}
                   </div>
-                </>
-              ) : (
-                <label className="ai-outline-btn">
-                  <input type="file" accept="image/jpeg,image/png,image/webp" onChange={onModelUpload} />
-                  Upload Model Image
-                </label>
-              )}
+                </div>
 
-              <button type="button" className="ai-primary-btn ai-tryon-generate-btn" onClick={generateResults} disabled={isGenerating}>
+                <button type="button" className="ai-tryon-model-open" onClick={openModelPicker} aria-label="Select model">
+                  <ChevronRight size={18} />
+                </button>
+              </section>
+
+              <button type="button" className="ai-primary-btn ai-tryon-generate-main" onClick={generateResults} disabled={isGenerating}>
                 {isGenerating ? "Generating..." : "Generate"}
               </button>
 
@@ -454,53 +425,188 @@ export default function ModelTryOnPage() {
               {errorMessage ? <p className="ai-error-note">{errorMessage}</p> : null}
             </aside>
 
-            <section className="ai-tryon-right">
-              <div className="ai-results-grid ai-tryon-results-grid">
-                <article className="ai-result-card">
-                  <header>
-                    <p>Original</p>
-                  </header>
-                  <div className="ai-result-image ai-result-image-original" aria-hidden>
+            {generatedResults.length > 0 ? (
+              <section className="ai-clean-results-grid ai-tryon-clean-results" aria-label="Generated try-on results">
+                <article className="ai-clean-result-card is-original">
+                  <p className="ai-clean-result-title">
+                    <strong>Original</strong>
+                    <span> - Image</span>
+                  </p>
+                  <div className="ai-clean-result-frame" aria-hidden>
                     {productImagePreview ? <span className="ai-result-photo" style={tileStyle(productImagePreview)} /> : null}
                   </div>
                 </article>
 
-                <article className="ai-result-card">
-                  <header>
-                    <p>Generated</p>
-                    {resultImageUrl ? (
+                {generatedResults.map((result, index) => (
+                  <article key={result.id} className="ai-clean-result-card is-enhanced">
+                    <p className="ai-clean-result-title">
+                      <strong>Enhanced</strong>
+                      <span>{index === 0 ? " - OptimoVTS" : ` - OptimoVTS (${index})`}</span>
+                    </p>
+                    <div className="ai-clean-result-frame" aria-hidden>
                       <div className="ai-result-actions">
-                        <a href={resultImageUrl} download="model-try-on-result.jpg">
+                        <a href={result.imageUrl} download="model-try-on-result.jpg">
                           <Download size={11} />
                         </a>
-                        <button type="button" onClick={generateResults} disabled={isGenerating}>
-                          <RefreshCw size={11} />
-                        </button>
+                        {index === 0 ? (
+                          <button type="button" onClick={generateResults} disabled={isGenerating}>
+                            <RefreshCw size={11} />
+                          </button>
+                        ) : null}
                       </div>
-                    ) : null}
-                  </header>
-                  <div className="ai-result-image ai-result-image-enhanced-a" aria-hidden>
-                    {resultImageUrl ? <span className="ai-result-photo" style={tileStyle(resultImageUrl)} /> : null}
-                  </div>
-                  <button
-                    type="button"
-                    className="ai-primary-btn"
-                    onClick={approveToShopify}
-                    disabled={!jobId || isApproving || (jobNeedsProductAtApprove && !selectedProductGid)}
-                  >
-                    {isApproving ? "Approving..." : "Approve & Push to Shopify"}
-                  </button>
-                </article>
-              </div>
-              {modelSource === "library" && selectedModel ? (
-                <p className="ai-status-note">Selected library model is ready for generation.</p>
-              ) : null}
-              {modelSource === "upload" && modelImagePreview ? (
-                <p className="ai-status-note">Uploaded model image is ready for generation.</p>
-              ) : null}
-            </section>
+                      <span className="ai-result-photo" style={tileStyle(result.imageUrl)} />
+                      <button
+                        type="button"
+                        className="ai-clean-store-hover-btn"
+                        onClick={() => approveToShopify(result)}
+                        disabled={isApproving || (result.needsProductAtApprove && !selectedProductGid)}
+                      >
+                        {approvingResultId === result.id ? "Uploading..." : "Upload on your store"}
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </section>
+            ) : null}
           </section>
         )}
+
+        {modelPickerOpen ? (
+          <div className="ai-picker-backdrop" role="presentation">
+            <section className="ai-picker-modal" role="dialog" aria-modal="true" aria-label="Select try on model">
+              <header className="ai-picker-head">
+                <div>
+                  <h3>Select Try on model</h3>
+                  <p>Recommended</p>
+                </div>
+                <button type="button" onClick={() => setModelPickerOpen(false)} aria-label="Close picker">
+                  <X size={15} />
+                </button>
+              </header>
+
+              <div className="ai-picker-filters">
+                <label>
+                  <select value={modelGender} onChange={(event) => setModelGender(event.target.value)} aria-label="Gender">
+                    <option value="unisex">Gender</option>
+                    <option value="female">Women</option>
+                    <option value="male">Men</option>
+                  </select>
+                </label>
+                <label>
+                  <select value={modelAge} onChange={(event) => setModelAge(event.target.value)} aria-label="Age Range">
+                    <option value="">Age Range</option>
+                    <option value="18-25">18-25</option>
+                    <option value="26-35">26-35</option>
+                    <option value="36-45">36-45</option>
+                    <option value="45+">45+</option>
+                  </select>
+                </label>
+                <label>
+                  <select value={modelBodyType} onChange={(event) => setModelBodyType(event.target.value)} aria-label="Body Type">
+                    <option value="">Body Type</option>
+                    <option value="slim">Slim</option>
+                    <option value="athletic">Athletic</option>
+                    <option value="regular">Regular</option>
+                    <option value="plus">Plus</option>
+                  </select>
+                </label>
+              </div>
+
+              <div className="ai-picker-grid">
+                <label className="ai-picker-upload-tile">
+                  <input type="file" accept="image/jpeg,image/png,image/webp" onChange={onModelUpload} />
+                  <Upload size={18} />
+                  <strong>Upload</strong>
+                  <span>Model image</span>
+                </label>
+                {isLoadingModels ? <p className="ai-inline-note">Loading models...</p> : null}
+                {!isLoadingModels && models.length === 0 ? <p className="ai-inline-note">No models returned for current filters.</p> : null}
+                {models.map((model) => (
+                  <button
+                    key={model.id}
+                    type="button"
+                    className={`ai-picker-tile${modelSource === "library" && selectedModelId === model.id ? " is-selected" : ""}`}
+                    onClick={() => selectLibraryModel(model.id)}
+                    aria-label={model.id}
+                  >
+                    <span style={tileStyle(model.image_url)} />
+                  </button>
+                ))}
+              </div>
+            </section>
+          </div>
+        ) : null}
+
+        {storePickerOpen ? (
+          <div className="ai-picker-backdrop" role="presentation">
+            <section className="ai-picker-modal" role="dialog" aria-modal="true" aria-label="Select product image">
+              <header className="ai-picker-head">
+                <div>
+                  <h3>Select product image</h3>
+                  <p>From your store</p>
+                </div>
+                <button type="button" onClick={() => setStorePickerOpen(false)} aria-label="Close picker">
+                  <X size={15} />
+                </button>
+              </header>
+
+              <label className="ai-picker-search">
+                <input
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search synced products"
+                  autoComplete="off"
+                />
+              </label>
+              {productError ? <p className="ai-error-note">{productError}</p> : null}
+
+              <div className="ai-picker-store-list">
+                {visibleProducts.map((product) => (
+                  <button
+                    key={product.product_id}
+                    type="button"
+                    className={selectedProductId === product.product_id ? "is-selected" : ""}
+                    onClick={() => setSelectedProductId(product.product_id)}
+                  >
+                    {product.title}
+                  </button>
+                ))}
+              </div>
+
+              <div className="ai-picker-grid ai-picker-store-grid">
+                <label className="ai-picker-upload-tile">
+                  <input type="file" accept="image/jpeg,image/png,image/webp" onChange={onProductUpload} />
+                  <Upload size={18} />
+                  <strong>Upload</strong>
+                  <span>Product image</span>
+                </label>
+                {isLoading ? <p className="ai-inline-note">Loading products...</p> : null}
+                {productImages.map((imageUrl) => (
+                  <button
+                    key={imageUrl}
+                    type="button"
+                    className={`ai-picker-tile${productImagePreview === imageUrl ? " is-selected" : ""}`}
+                    onClick={() => chooseStoreProductImage(imageUrl)}
+                    aria-label="Use store product image"
+                  >
+                    <span style={tileStyle(imageUrl)} />
+                  </button>
+                ))}
+              </div>
+
+              {canLoadMore || isSyncing || isLoadingMore ? (
+                <div className="ai-inline-actions">
+                  {canLoadMore ? (
+                    <button type="button" className="ai-outline-btn" onClick={loadMoreProducts} disabled={isLoadingMore}>
+                      {isLoadingMore ? "Loading..." : "Load more"}
+                    </button>
+                  ) : null}
+                  {isSyncing ? <span className="ai-inline-note">Syncing products...</span> : null}
+                </div>
+              ) : null}
+            </section>
+          </div>
+        ) : null}
       </section>
     </main>
   );

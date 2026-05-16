@@ -25,6 +25,13 @@ export type PhotoshootModelFaceResponse = {
   image_url: string;
 };
 
+export type GhostMannequinRefResponse = {
+  id: string;
+  clothing_type: string;
+  pose: string;
+  image_url: string;
+};
+
 export type PhotoshootJobResponse = {
   job_id: string;
   job_type: string;
@@ -491,6 +498,30 @@ export function resolveBackendUrl(pathOrUrl: string): string {
 
   const baseUrl = getApiBaseUrl();
   return `${baseUrl}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
+}
+
+export function resolvePhotoshootImageUrl(pathOrUrl: string): string {
+  if (!pathOrUrl) {
+    return "";
+  }
+
+  if (/^(?:https?:|blob:|data:)/i.test(pathOrUrl)) {
+    return pathOrUrl;
+  }
+
+  if (pathOrUrl.startsWith(`${DEFAULT_PROXY_BASE_PATH}/`)) {
+    return pathOrUrl;
+  }
+
+  if (pathOrUrl.startsWith("/api/")) {
+    return resolveBackendUrl(pathOrUrl);
+  }
+
+  if (pathOrUrl.startsWith("/")) {
+    return pathOrUrl;
+  }
+
+  return resolveBackendUrl(pathOrUrl);
 }
 
 function createUrl(path: string, query?: Record<string, string | number | null | undefined>): string {
@@ -1200,9 +1231,25 @@ export async function listModelFaces(options: {
   });
 }
 
+export async function listGhostMannequinRefs(options: {
+  storeId: string;
+  clothingType: string;
+  signal?: AbortSignal;
+}): Promise<GhostMannequinRefResponse[]> {
+  return requestJson<GhostMannequinRefResponse[]>("/api/v1/merchant/photoshoot/ghost-mannequin-refs", {
+    method: "GET",
+    storeId: options.storeId,
+    query: {
+      clothing_type: options.clothingType
+    },
+    signal: options.signal
+  });
+}
+
 export async function startGhostMannequinJob(options: {
   storeId: string;
   clothingType: string;
+  referenceId?: string | null;
   shopifyProductGid?: string | null;
   image1Url?: string | null;
   image2Url?: string | null;
@@ -1211,6 +1258,9 @@ export async function startGhostMannequinJob(options: {
 }): Promise<PhotoshootJobResponse> {
   const formData = new FormData();
   formData.append("clothing_type", options.clothingType);
+  if (options.referenceId) {
+    formData.append("reference_id", options.referenceId);
+  }
 
   const normalizedProductGid = normalizeShopifyProductGid(options.shopifyProductGid ?? "");
   if (normalizedProductGid) {

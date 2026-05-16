@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type Dispatch, type SetStateAction } from "react";
-import { Download, RefreshCw } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
+import { Download, ImagePlus, RefreshCw, Upload, X } from "lucide-react";
 import AiUploadLanding from "../_components/AiUploadLanding";
 import PortalSidebar from "../_components/PortalSidebar";
 import PortalTopbar from "../_components/PortalTopbar";
@@ -11,9 +11,12 @@ import {
   buildJobResultUrl,
   getDefaultStoreId,
   isFailureStatus,
+  listGhostMannequinRefs,
   pollPhotoshootJob,
+  resolvePhotoshootImageUrl,
   resolveBackendUrl,
-  startGhostMannequinJob
+  startGhostMannequinJob,
+  type GhostMannequinRefResponse
 } from "../../lib/photoshootApi";
 import { extractProductImageUrls, usePhotoshootProducts } from "./_components/usePhotoshootProducts";
 
@@ -26,11 +29,34 @@ type SourceSlot = {
   preview: string | null;
 };
 
+type GeneratedResult = {
+  id: string;
+  imageUrl: string;
+  jobId: string;
+  needsProductAtApprove: boolean;
+};
+
 const EMPTY_SLOT: SourceSlot = { url: null, file: null, preview: null };
 
+const ghostTemplates = [
+  { id: "fallback-front", pose: "front", label: "Front", image: "/templates/white-jacket.jpg", referenceId: null },
+  { id: "fallback-side", pose: "side", label: "Side", image: "/templates/hooded-jacket.jpg", referenceId: null },
+  { id: "fallback-back", pose: "back", label: "Back", image: "/templates/bomber.jpg", referenceId: null }
+] as const;
+
+type GhostTemplateOption = {
+  id: string;
+  pose: string;
+  label: string;
+  image: string | null;
+  referenceId: string | null;
+};
+
 function tileStyle(imageUrl: string): CSSProperties {
+  const resolvedImageUrl = resolvePhotoshootImageUrl(imageUrl);
+
   return {
-    backgroundImage: `url(${resolveBackendUrl(imageUrl)})`,
+    backgroundImage: `url(${resolvedImageUrl})`,
     backgroundSize: "cover",
     backgroundPosition: "center"
   };
@@ -67,22 +93,24 @@ export default function AiProductShootPage() {
     isSyncing,
     errorMessage: productError,
     canLoadMore,
-    loadMoreProducts,
-    syncNow
+    loadMoreProducts
   } = usePhotoshootProducts(storeId);
 
   const [started, setStarted] = useState(false);
+  const [storePickerOpen, setStorePickerOpen] = useState(false);
   const [clothingType, setClothingType] = useState("tops");
-  const [frontSlot, setFrontSlot] = useState<SourceSlot>(EMPTY_SLOT);
-  const [sideSlot, setSideSlot] = useState<SourceSlot>(EMPTY_SLOT);
+  const [originalSlot, setOriginalSlot] = useState<SourceSlot>(EMPTY_SLOT);
+  const [ghostRefs, setGhostRefs] = useState<GhostMannequinRefResponse[]>([]);
+  const [isLoadingGhostRefs, setIsLoadingGhostRefs] = useState(false);
+  const [ghostRefsError, setGhostRefsError] = useState("");
+  const [selectedTemplate, setSelectedTemplate] = useState("fallback-front");
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
+  const [approvingResultId, setApprovingResultId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
-  const [resultImageUrl, setResultImageUrl] = useState<string | null>(null);
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [jobNeedsProductAtApprove, setJobNeedsProductAtApprove] = useState(false);
+  const [generatedResults, setGeneratedResults] = useState<GeneratedResult[]>([]);
   const previewUrlsRef = useRef<string[]>([]);
 
   useEffect(() => {
@@ -93,29 +121,87 @@ export default function AiProductShootPage() {
   }, []);
 
   const productImages = useMemo(() => extractProductImageUrls(selectedProduct), [selectedProduct]);
-  const originalPreview = frontSlot.preview || sideSlot.preview || null;
+  const originalPreview = originalSlot.preview || null;
+  const ghostTemplateOptions = useMemo<GhostTemplateOption[]>(() => {
+    const poseOrder: Record<string, number> = { front: 0, side: 1, back: 2 };
+    const libraryTemplates = [...ghostRefs]
+      .sort((a, b) => (poseOrder[a.pose] ?? 99) - (poseOrder[b.pose] ?? 99))
+      .map((ref) => ({
+        id: ref.id,
+        pose: ref.pose,
+        label: ref.pose ? ref.pose.charAt(0).toUpperCase() + ref.pose.slice(1) : "Template",
+        image: ref.image_url,
+        referenceId: ref.id
+      }));
 
-  const setStoreImageToFront = (imageUrl: string) => {
-    setFrontSlot({ url: imageUrl, file: null, preview: imageUrl });
+    const visualTemplates = libraryTemplates.length > 0 ? libraryTemplates : ghostTemplates;
+    return [
+      ...visualTemplates,
+      { id: "custom", pose: "custom", label: "Custom", image: null, referenceId: null }
+    ];
+  }, [ghostRefs]);
+
+  const selectedTemplateOption = useMemo(
+    () => ghostTemplateOptions.find((template) => template.id === selectedTemplate) || ghostTemplateOptions[0],
+    [ghostTemplateOptions, selectedTemplate]
+  );
+
+  useEffect(() => {
+    if (!storeId.trim()) {
+      return;
+    }
+
+    const controller = new AbortController();
+    setIsLoadingGhostRefs(true);
+    setGhostRefsError("");
+
+    listGhostMannequinRefs({
+      storeId: storeId.trim(),
+      clothingType,
+      signal: controller.signal
+    })
+      .then((refs) => {
+        setGhostRefs(refs);
+        setSelectedTemplate((current) => {
+          if (current === "custom" || refs.some((ref) => ref.id === current)) {
+            return current;
+          }
+          return refs[0]?.id ?? "custom";
+        });
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : "Could not load ghost mannequin templates.";
+        setGhostRefs([]);
+        setGhostRefsError(message);
+        setSelectedTemplate((current) =>
+          current === "custom" || ghostTemplates.some((template) => template.id === current) ? current : "custom"
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setIsLoadingGhostRefs(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [clothingType, storeId]);
+
+  const setStoreImageToOriginal = (imageUrl: string) => {
+    setOriginalSlot({ url: imageUrl, file: null, preview: imageUrl });
+    setStarted(true);
+    setStorePickerOpen(false);
   };
 
-  const setStoreImageToSide = (imageUrl: string) => {
-    setSideSlot({ url: imageUrl, file: null, preview: imageUrl });
-  };
-
-  const setUploadedImage = (
-    file: File,
-    slotSetter: Dispatch<SetStateAction<SourceSlot>>
-  ) => {
+  const setUploadedOriginalImage = (file: File) => {
     const preview = URL.createObjectURL(file);
     previewUrlsRef.current.push(preview);
-    slotSetter({ url: null, file, preview });
+    setOriginalSlot({ url: null, file, preview });
   };
 
-  const onFileInputChange = async (
-    event: ChangeEvent<HTMLInputElement>,
-    slotSetter: Dispatch<SetStateAction<SourceSlot>>
-  ) => {
+  const onFileInputChange = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) {
       return;
@@ -127,7 +213,44 @@ export default function AiProductShootPage() {
       return;
     }
     setErrorMessage("");
-    setUploadedImage(file, slotSetter);
+    setUploadedOriginalImage(file);
+    event.currentTarget.value = "";
+  };
+
+  const onLandingUpload = (file: File) => {
+    const validationError = validateImageFile(file);
+    if (validationError) {
+      setErrorMessage(validationError);
+      return;
+    }
+
+    setErrorMessage("");
+    setUploadedOriginalImage(file);
+    setStarted(true);
+  };
+
+  const openStorePicker = () => {
+    setStorePickerOpen(true);
+    setErrorMessage("");
+  };
+
+  const onStorePickerUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    const validationError = validateImageFile(file);
+    if (validationError) {
+      setErrorMessage(validationError);
+      event.currentTarget.value = "";
+      return;
+    }
+
+    setErrorMessage("");
+    setUploadedOriginalImage(file);
+    setStarted(true);
+    setStorePickerOpen(false);
     event.currentTarget.value = "";
   };
 
@@ -136,13 +259,12 @@ export default function AiProductShootPage() {
       setErrorMessage("Open the app from Shopify Admin to connect this tool with the active store.");
       return;
     }
-    if (!frontSlot.preview || !sideSlot.preview) {
-      setErrorMessage("Set both Front image and Side image before generating.");
+    if (!originalSlot.preview) {
+      setErrorMessage("Upload an original image or select one from your store before generating.");
       return;
     }
 
     setIsGenerating(true);
-    setResultImageUrl(null);
     setStatusMessage("Starting ghost mannequin job...");
     setErrorMessage("");
 
@@ -151,15 +273,14 @@ export default function AiProductShootPage() {
       const startedJob = await startGhostMannequinJob({
         storeId: storeId.trim(),
         clothingType,
+        referenceId: selectedTemplateOption?.referenceId ?? null,
         shopifyProductGid: submittedGid,
-        image1Url: frontSlot.url,
-        image2Url: sideSlot.url,
-        image1File: frontSlot.file,
-        image2File: sideSlot.file
+        image1Url: originalSlot.url,
+        image2Url: originalSlot.url,
+        image1File: originalSlot.file,
+        image2File: originalSlot.file
       });
 
-      setJobId(startedJob.job_id);
-      setJobNeedsProductAtApprove(!submittedGid);
       setStatusMessage(`Job ${startedJob.job_id} started. Processing...`);
 
       const finishedJob = await pollPhotoshootJob(storeId.trim(), startedJob.job_id, {
@@ -176,7 +297,15 @@ export default function AiProductShootPage() {
       const imageUrl = finishedJob.result_image_url
         ? resolveBackendUrl(finishedJob.result_image_url)
         : buildJobResultUrl(startedJob.job_id);
-      setResultImageUrl(imageUrl);
+      setGeneratedResults((current) => [
+        {
+          id: `${startedJob.job_id}-${Date.now()}`,
+          imageUrl,
+          jobId: startedJob.job_id,
+          needsProductAtApprove: !submittedGid
+        },
+        ...current
+      ]);
       setStatusMessage("Generation complete.");
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Failed to generate ghost mannequin image.";
@@ -187,30 +316,34 @@ export default function AiProductShootPage() {
     }
   };
 
-  const approveToShopify = async () => {
-    if (!jobId || !storeId.trim()) {
+  const approveToShopify = async (result: GeneratedResult) => {
+    if (!result.jobId || !storeId.trim()) {
       return;
     }
-    if (jobNeedsProductAtApprove && !selectedProductGid) {
+    if (result.needsProductAtApprove && !selectedProductGid) {
       setErrorMessage("Select a store product before approving this result.");
       return;
     }
 
     setIsApproving(true);
+    setApprovingResultId(result.id);
     setErrorMessage("");
     try {
       const response = await approvePhotoshootJob({
         storeId: storeId.trim(),
-        jobId,
-        shopifyProductGid: jobNeedsProductAtApprove ? selectedProductGid : null
+        jobId: result.jobId,
+        shopifyProductGid: result.needsProductAtApprove ? selectedProductGid : null
       });
       setStatusMessage(response.message);
-      setJobNeedsProductAtApprove(false);
+      setGeneratedResults((current) =>
+        current.map((item) => (item.id === result.id ? { ...item, needsProductAtApprove: false } : item))
+      );
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Failed to approve generated image.";
       setErrorMessage(message);
     } finally {
       setIsApproving(false);
+      setApprovingResultId(null);
     }
   };
 
@@ -243,100 +376,74 @@ export default function AiProductShootPage() {
               }
               subtitle="Professional results in seconds, without studios or mannequins."
               videoSrc="/Ghost Mannequin.mp4"
-              onUpload={() => setStarted(true)}
+              onFileSelected={onLandingUpload}
+              onSelectStore={openStorePicker}
             />
           </div>
         ) : (
-          <section className="ai-stage-result">
-            <aside className="ai-generator-card">
+          <section className="ai-simple-workspace ai-ghost-workspace">
+            <aside className="ai-simple-setup-card">
               <h3>Ghost Mannequin</h3>
-              <p>Product Source</p>
+              <p className="ai-ghost-field-title">Original Image</p>
 
-              <h4>Store context</h4>
-              <p className="ai-status-note">
-                {storeId ? "Connected to the current Shopify store." : "Open the app from Shopify Admin to load store context."}
-              </p>
+              <div className="ai-ghost-original-preview">
+                {originalPreview ? <span style={tileStyle(originalPreview)} /> : <ImagePlus size={30} />}
+              </div>
 
-              <h4>Clothing Type</h4>
-              <label className="ai-select-wrap">
+              <div className="ai-simple-actions ai-ghost-image-actions">
+                <label className="ai-outline-btn">
+                  <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void onFileInputChange(event)} />
+                  Upload
+                </label>
+                <button type="button" className="ai-outline-btn" onClick={openStorePicker}>
+                  Store
+                </button>
+              </div>
+
+              <label className="ai-simple-field">
+                <span>Clothing Type</span>
                 <select
                   aria-label="Clothing Type"
                   value={clothingType}
                   onChange={(event) => setClothingType(event.target.value)}
                 >
-                  <option value="tops">Tops</option>
-                  <option value="bottoms">Bottoms</option>
-                  <option value="dresses">Dresses</option>
+                  <option value="tops">Top</option>
+                  <option value="bottoms">Bottom</option>
+                  <option value="dresses">Dress</option>
                   <option value="outerwear">Outerwear</option>
                 </select>
               </label>
 
-              <h4>Product Search</h4>
-              <label className="ai-text-field">
-                <input
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Search synced products"
-                  autoComplete="off"
-                />
-              </label>
-              {isLoading ? <p className="ai-status-note">Loading products...</p> : null}
-              {isSyncing ? <p className="ai-status-note">Syncing products from Shopify...</p> : null}
-              {productError ? <p className="ai-error-note">{productError}</p> : null}
-
-              <div className="ai-product-list">
-                {visibleProducts.map((product) => (
-                  <button
-                    key={product.product_id}
-                    type="button"
-                    className={`ai-template-item ${selectedProductId === product.product_id ? "is-selected" : ""}`}
-                    onClick={() => setSelectedProductId(product.product_id)}
-                    aria-label={product.title}
-                  >
-                    <span>{product.title}</span>
-                  </button>
-                ))}
-              </div>
-
-              <div className="ai-inline-actions">
-                <button type="button" className="ai-outline-btn" onClick={syncNow} disabled={isSyncing}>
-                  {isSyncing ? "Syncing..." : "Sync products"}
-                </button>
-                {canLoadMore ? (
-                  <button type="button" className="ai-outline-btn" onClick={loadMoreProducts} disabled={isLoadingMore}>
-                    {isLoadingMore ? "Loading..." : "Load more"}
-                  </button>
+              <section className="ai-ghost-template-section" aria-label="Style Templates">
+                <div className="ai-ghost-template-head">
+                  <h4>Style Templates</h4>
+                  {isLoadingGhostRefs ? <span>Loading</span> : null}
+                </div>
+                <div className="ai-ghost-template-grid">
+                  {ghostTemplateOptions.map((template) => (
+                    <button
+                      key={template.id}
+                      type="button"
+                      className={`ai-ghost-template-tile${selectedTemplate === template.id ? " is-selected" : ""}`}
+                      onClick={() => setSelectedTemplate(template.id)}
+                    >
+                      {template.image ? (
+                        <span style={tileStyle(template.image)} />
+                      ) : (
+                        <span className="ai-ghost-custom-template">
+                          <ImagePlus size={24} />
+                        </span>
+                      )}
+                      <strong>{template.label}</strong>
+                    </button>
+                  ))}
+                </div>
+                {ghostRefsError ? (
+                  <p className="ai-inline-note ai-ghost-template-note">
+                    Showing local template examples. Backend templates could not be loaded.
+                  </p>
                 ) : null}
-              </div>
-
-              <h4>Selected Product Images</h4>
-              <div className="ai-template-grid">
-                {productImages.map((imageUrl) => (
-                  <div key={imageUrl} className="ai-template-item is-selected">
-                    <span style={tileStyle(imageUrl)} />
-                    <button type="button" className="ai-outline-btn" onClick={() => setStoreImageToFront(imageUrl)}>
-                      Use as Front
-                    </button>
-                    <button type="button" className="ai-outline-btn" onClick={() => setStoreImageToSide(imageUrl)}>
-                      Use as Side
-                    </button>
-                  </div>
-                ))}
-              </div>
-
-              <h4>Front image</h4>
-              <label className="ai-outline-btn">
-                <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void onFileInputChange(event, setFrontSlot)} />
-                Upload Front
-              </label>
-              {frontSlot.preview ? <p className="ai-status-note">Front image ready.</p> : null}
-
-              <h4>Side image</h4>
-              <label className="ai-outline-btn">
-                <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void onFileInputChange(event, setSideSlot)} />
-                Upload Side
-              </label>
-              {sideSlot.preview ? <p className="ai-status-note">Side image ready.</p> : null}
+              </section>
 
               <button type="button" className="ai-primary-btn ai-generate-btn" onClick={generateResults} disabled={isGenerating}>
                 {isGenerating ? "Generating..." : "Generate"}
@@ -345,45 +452,128 @@ export default function AiProductShootPage() {
               {errorMessage ? <p className="ai-error-note">{errorMessage}</p> : null}
             </aside>
 
-            <div className="ai-results-grid">
-              <article className="ai-result-card">
-                <header>
-                  <p>Original</p>
-                </header>
-                <div className="ai-result-image ai-result-image-original" aria-hidden>
+            <div className="ai-ghost-results-grid" aria-label="Ghost mannequin results">
+              <article className="ai-ghost-result-card is-original">
+                <p className="ai-ghost-result-title">
+                  <strong>Original</strong>
+                  <span> - Image</span>
+                </p>
+                <div className="ai-ghost-result-frame" aria-hidden>
                   {originalPreview ? <span className="ai-result-photo" style={tileStyle(originalPreview)} /> : null}
                 </div>
               </article>
 
-              <article className="ai-result-card">
-                <header>
-                  <p>Generated</p>
-                  {resultImageUrl ? (
-                    <div className="ai-result-actions">
-                      <a href={resultImageUrl} download="ghost-mannequin-result.jpg">
-                        <Download size={11} />
-                      </a>
-                      <button type="button" onClick={generateResults} disabled={isGenerating}>
-                        <RefreshCw size={11} />
+              {generatedResults.length > 0 ? (
+                generatedResults.map((result, index) => (
+                  <article key={result.id} className="ai-ghost-result-card is-enhanced">
+                    <p className="ai-ghost-result-title">
+                      <strong>Enhanced</strong>
+                      <span>{index === 0 ? " - OptimoVTS" : ` - OptimoVTS (${index})`}</span>
+                    </p>
+                    <div className="ai-ghost-result-frame" aria-hidden>
+                      <div className="ai-result-actions">
+                        <a href={result.imageUrl} download="ghost-mannequin-result.jpg">
+                          <Download size={11} />
+                        </a>
+                        {index === 0 ? (
+                          <button type="button" onClick={generateResults} disabled={isGenerating}>
+                            <RefreshCw size={11} />
+                          </button>
+                        ) : null}
+                      </div>
+                      <span className="ai-result-photo" style={tileStyle(result.imageUrl)} />
+                      <button
+                        type="button"
+                        className="ai-ghost-store-hover-btn"
+                        onClick={() => approveToShopify(result)}
+                        disabled={isApproving || (result.needsProductAtApprove && !selectedProductGid)}
+                      >
+                        {approvingResultId === result.id ? "Uploading..." : "Upload on your store"}
                       </button>
                     </div>
-                  ) : null}
-                </header>
-                <div className="ai-result-image ai-result-image-enhanced-a" aria-hidden>
-                  {resultImageUrl ? <span className="ai-result-photo" style={tileStyle(resultImageUrl)} /> : null}
-                </div>
-                <button
-                  type="button"
-                  className="ai-primary-btn"
-                  onClick={approveToShopify}
-                  disabled={!jobId || isApproving || (jobNeedsProductAtApprove && !selectedProductGid)}
-                >
-                  {isApproving ? "Approving..." : "Approve & Push to Shopify"}
-                </button>
-              </article>
+                  </article>
+                ))
+              ) : (
+                <article className="ai-ghost-result-card is-enhanced is-empty">
+                  <p className="ai-ghost-result-title">
+                    <strong>Enhanced</strong>
+                    <span> - OptimoVTS</span>
+                  </p>
+                  <div className="ai-ghost-result-frame" aria-hidden />
+                </article>
+              )}
             </div>
           </section>
         )}
+
+        {storePickerOpen ? (
+          <div className="ai-picker-backdrop" role="presentation">
+            <section className="ai-picker-modal" role="dialog" aria-modal="true" aria-label="Select original image">
+              <header className="ai-picker-head">
+                <div>
+                  <h3>Select original image</h3>
+                  <p>From your store or upload</p>
+                </div>
+                <button type="button" onClick={() => setStorePickerOpen(false)} aria-label="Close picker">
+                  <X size={15} />
+                </button>
+              </header>
+
+              <label className="ai-picker-search">
+                <input
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search synced products"
+                  autoComplete="off"
+                />
+              </label>
+              {isLoading ? <p className="ai-inline-note">Loading products...</p> : null}
+              {isSyncing ? <p className="ai-inline-note">Syncing products...</p> : null}
+              {productError ? <p className="ai-error-note">{productError}</p> : null}
+
+              <div className="ai-picker-store-list">
+                {visibleProducts.map((product) => (
+                  <button
+                    key={product.product_id}
+                    type="button"
+                    className={selectedProductId === product.product_id ? "is-selected" : ""}
+                    onClick={() => setSelectedProductId(product.product_id)}
+                  >
+                    {product.title}
+                  </button>
+                ))}
+              </div>
+
+              <div className="ai-picker-grid ai-picker-store-grid">
+                <label className="ai-picker-upload-tile">
+                  <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void onStorePickerUpload(event)} />
+                  <Upload size={18} />
+                  <strong>Upload</strong>
+                  <span>Original image</span>
+                </label>
+                {productImages.map((imageUrl) => (
+                  <button
+                    key={imageUrl}
+                    type="button"
+                    className="ai-picker-tile"
+                    onClick={() => setStoreImageToOriginal(imageUrl)}
+                    aria-label="Use as original image"
+                  >
+                    <span style={tileStyle(imageUrl)} />
+                  </button>
+                ))}
+              </div>
+
+              {canLoadMore ? (
+                <div className="ai-inline-actions">
+                  <button type="button" className="ai-outline-btn" onClick={loadMoreProducts} disabled={isLoadingMore}>
+                    {isLoadingMore ? "Loading..." : "Load more"}
+                  </button>
+                </div>
+              ) : null}
+            </section>
+          </div>
+        ) : null}
       </section>
     </main>
   );

@@ -238,6 +238,7 @@ def _run_photoshoot_job(
     image1_bytes: bytes,
     image2_bytes: bytes,
     clothing_type: Optional[str] = None,
+    reference_pose: Optional[str] = None,
     usage_event_id: Optional[str] = None,
 ):
     """
@@ -261,7 +262,10 @@ def _run_photoshoot_job(
 
         if job_type == "ghost_mannequin":
             result_bytes = service.generate_ghost_mannequin(
-                image1_bytes, image2_bytes, clothing_type=clothing_type
+                image1_bytes,
+                image2_bytes,
+                clothing_type=clothing_type,
+                reference_pose=reference_pose,
             )
         elif job_type == "try_on_model":
             result_bytes = service.generate_try_on_model(image1_bytes, image2_bytes)
@@ -528,6 +532,7 @@ async def start_ghost_mannequin(
     background_tasks: BackgroundTasks,
     shopify_product_gid: Optional[str] = Form(None, description="Optional Shopify product GID"),
     clothing_type: str = Form(..., description="Garment type: tops | bottoms | dresses | outerwear"),
+    reference_id: Optional[str] = Form(None, description="Optional ghost mannequin template/reference ID"),
     image1_url: Optional[str] = Form(None, description="First product image URL from selected store product"),
     image2_url: Optional[str] = Form(None, description="Second product image URL from selected store product"),
     image1_file: Optional[UploadFile] = File(None, description="Optional local upload for image 1"),
@@ -538,9 +543,12 @@ async def start_ghost_mannequin(
     """
     Start a ghost mannequin generation job.
 
-    Accepts exactly two slots. Each slot can be either:
+    Accepts one required image and one optional second slot. Each slot can be either:
     - a URL from the selected store product gallery, or
     - a local uploaded image file.
+
+    If the optional second image is omitted, the first image is reused internally
+    so merchants do not have to provide a separate side image.
 
     Returns 202 immediately. Poll GET /jobs/{job_id}/status for result.
     """
@@ -555,11 +563,25 @@ async def start_ghost_mannequin(
     has_image2_url = bool((image2_url or "").strip())
     has_image1_file = bool(image1_file and image1_file.filename)
     has_image2_file = bool(image2_file and image2_file.filename)
+    normalized_reference_id = (reference_id or "").strip()
 
     if has_image1_url == has_image1_file:
         raise HTTPException(422, "Provide exactly one of image1_url or image1_file")
-    if has_image2_url == has_image2_file:
-        raise HTTPException(422, "Provide exactly one of image2_url or image2_file")
+    if has_image2_url and has_image2_file:
+        raise HTTPException(422, "Provide only one of image2_url or image2_file")
+
+    selected_reference: Optional[GhostMannequinRef] = None
+    if normalized_reference_id:
+        try:
+            reference_uuid = uuid.UUID(normalized_reference_id)
+        except ValueError:
+            raise HTTPException(422, "Invalid reference_id")
+
+        selected_reference = db.query(GhostMannequinRef).filter_by(id=reference_uuid).first()
+        if not selected_reference:
+            raise HTTPException(404, "Ghost mannequin reference not found")
+        if selected_reference.clothing_type != clothing_type:
+            raise HTTPException(422, "Selected template does not match the chosen clothing type")
 
     selected_product: Optional[Product] = None
     if has_image1_url or has_image2_url:
@@ -586,10 +608,17 @@ async def start_ghost_mannequin(
         else:
             image1_bytes = await _read_upload_image(image1_file, field_name="image1_file")
 
-        if has_image2_url:
+        if selected_reference:
+            image2_bytes = _read_library_image(
+                object_path=selected_reference.object_path,
+                image_path=selected_reference.image_path,
+            )
+        elif has_image2_url:
             image2_bytes = _download_image_from_url(image_url=(image2_url or "").strip(), field_name="image2_url")
-        else:
+        elif has_image2_file:
             image2_bytes = await _read_upload_image(image2_file, field_name="image2_file")
+        else:
+            image2_bytes = image1_bytes
 
         usage = UsageGovernanceService(db)
         reservation = await usage.reserve_generation(
@@ -647,10 +676,16 @@ async def start_ghost_mannequin(
             image1_bytes=image1_bytes,
             image2_bytes=image2_bytes,
             clothing_type=clothing_type,
+            reference_pose=selected_reference.pose if selected_reference else None,
             usage_event_id=usage_event_id,
         )
 
-        logger.info(f"Ghost mannequin job queued: {job_id} (clothing_type={clothing_type})")
+        logger.info(
+            "Ghost mannequin job queued: %s (clothing_type=%s, reference_pose=%s)",
+            job_id,
+            clothing_type,
+            selected_reference.pose if selected_reference else None,
+        )
         return _job_status_response(job)
 
     except HTTPException:
