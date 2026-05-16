@@ -42,6 +42,11 @@ export type PhotoshootJobResponse = {
   processing_time_seconds?: number | null;
   error?: string | null;
   retry_allowed?: boolean;
+  input_image_url?: string | null;
+  shopify_product_gid?: string | null;
+  approved_at?: string | null;
+  created_at?: string | null;
+  completed_at?: string | null;
 };
 
 export type PhotoshootApproveResponse = {
@@ -1241,6 +1246,25 @@ export async function listGhostMannequinRefs(options: {
     storeId: options.storeId,
     query: {
       clothing_type: options.clothingType
+    },
+    signal: options.signal
+  });
+}
+
+export async function listPhotoshootJobs(options: {
+  storeId: string;
+  jobType?: "ghost_mannequin" | "try_on_model" | "model_swap";
+  status?: string;
+  limit?: number;
+  signal?: AbortSignal;
+}): Promise<PhotoshootJobResponse[]> {
+  return requestJson<PhotoshootJobResponse[]>("/api/v1/merchant/photoshoot/jobs", {
+    method: "GET",
+    storeId: options.storeId,
+    query: {
+      job_type: options.jobType,
+      status: options.status ?? "completed",
+      limit: options.limit ?? 24
     },
     signal: options.signal
   });

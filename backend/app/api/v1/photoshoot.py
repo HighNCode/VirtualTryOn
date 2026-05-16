@@ -219,6 +219,11 @@ def _job_status_response(job: PhotoshootJob) -> PhotoshootJobResponse:
         if status == "completed"
         else None
     )
+    input_image_url = (
+        f"/api/v1/merchant/photoshoot/jobs/{job.job_id}/input/1"
+        if job.input1_object_path
+        else None
+    )
     return PhotoshootJobResponse(
         job_id=job.job_id,
         job_type=job.job_type,
@@ -229,6 +234,11 @@ def _job_status_response(job: PhotoshootJob) -> PhotoshootJobResponse:
         processing_time_seconds=job.processing_time_seconds,
         error=job.error_message if status == "failed" else None,
         retry_allowed=(status == "failed"),
+        input_image_url=input_image_url,
+        shopify_product_gid=job.shopify_product_gid,
+        approved_at=job.approved_at,
+        created_at=job.created_at,
+        completed_at=job.completed_at,
     )
 
 
@@ -1053,6 +1063,34 @@ async def start_model_swap(
 # Job Status / Result / Approve Endpoints
 # ─────────────────────────────────────────────────────────────
 
+@router.get("/jobs", response_model=list[PhotoshootJobResponse])
+async def list_photoshoot_jobs(
+    job_type: Optional[str] = Query(None, description="ghost_mannequin | try_on_model | model_swap"),
+    status: str = Query("completed", description="Filter by processing status"),
+    limit: int = Query(24, ge=1, le=100),
+    store: Store = Depends(get_current_merchant_store),
+    db: DBSession = Depends(get_db),
+):
+    """List durable photoshoot jobs for the current merchant/store."""
+    allowed_job_types = {"ghost_mannequin", "try_on_model", "model_swap"}
+    if job_type and job_type not in allowed_job_types:
+        raise HTTPException(422, f"Invalid job_type. Expected one of: {', '.join(sorted(allowed_job_types))}")
+
+    query = db.query(PhotoshootJob).filter(PhotoshootJob.store_id == store.store_id)
+    if job_type:
+        query = query.filter(PhotoshootJob.job_type == job_type)
+    if status:
+        query = query.filter(PhotoshootJob.processing_status == status)
+
+    jobs = (
+        query
+        .order_by(PhotoshootJob.completed_at.desc(), PhotoshootJob.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [_job_status_response(job) for job in jobs]
+
+
 @router.get("/jobs/{job_id}/status", response_model=PhotoshootJobResponse)
 async def get_job_status(
     job_id: str,
@@ -1098,6 +1136,33 @@ async def get_job_result(
             return RedirectResponse(url=signed_url, status_code=307)
 
     raise HTTPException(410, "Result image has expired from cache. Please regenerate.")
+
+
+@router.get("/jobs/{job_id}/input/{slot}")
+async def get_job_input_image(
+    job_id: str,
+    slot: int,
+    db: DBSession = Depends(get_db),
+):
+    """Serve an archived photoshoot input image for result history previews."""
+    if slot not in (1, 2):
+        raise HTTPException(422, "slot must be 1 or 2")
+
+    job = db.query(PhotoshootJob).filter_by(job_id=job_id).first()
+    if not job:
+        raise HTTPException(404, "Photoshoot job not found")
+
+    object_path = job.input1_object_path if slot == 1 else job.input2_object_path
+    if not object_path:
+        raise HTTPException(404, "Photoshoot input image not found")
+
+    storage = get_media_storage_service()
+    if storage.enabled:
+        signed_url = storage.generate_signed_get_url(object_path)
+        if signed_url:
+            return RedirectResponse(url=signed_url, status_code=307)
+
+    raise HTTPException(410, "Input image is unavailable from media storage.")
 
 
 @router.post("/jobs/{job_id}/approve", response_model=PhotoshootApproveResponse)

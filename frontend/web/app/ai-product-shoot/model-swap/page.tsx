@@ -18,6 +18,7 @@ import {
   buildJobResultUrl,
   getDefaultStoreId,
   isFailureStatus,
+  listPhotoshootJobs,
   listModelFaces,
   pollPhotoshootJob,
   resolvePhotoshootImageUrl,
@@ -35,6 +36,7 @@ type GeneratedResult = {
   imageUrl: string;
   jobId: string;
   needsProductAtApprove: boolean;
+  originalImageUrl?: string | null;
 };
 
 function tileStyle(imageUrl: string): CSSProperties {
@@ -150,6 +152,42 @@ export default function ModelSwapPage() {
     () => faceLibrary.find((item) => item.id === selectedFaceId) ?? null,
     [faceLibrary, selectedFaceId]
   );
+  const displayOriginalImagePreview = originalImagePreview || generatedResults[0]?.originalImageUrl || null;
+
+  useEffect(() => {
+    if (!storeId.trim()) {
+      return;
+    }
+
+    const controller = new AbortController();
+    listPhotoshootJobs({
+      storeId: storeId.trim(),
+      jobType: "model_swap",
+      limit: 24,
+      signal: controller.signal
+    })
+      .then((jobs) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        const results = jobs
+          .filter((job) => job.result_image_url)
+          .map((job) => ({
+            id: job.job_id,
+            imageUrl: resolveBackendUrl(job.result_image_url || `/api/v1/merchant/photoshoot/jobs/${job.job_id}/result`),
+            jobId: job.job_id,
+            needsProductAtApprove: !job.shopify_product_gid && !job.approved_at,
+            originalImageUrl: job.input_image_url ? resolveBackendUrl(job.input_image_url) : null
+          }));
+        setGeneratedResults(results);
+        if (results.length > 0) {
+          setStarted(true);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => controller.abort();
+  }, [storeId]);
 
   const applyOriginalUploadFile = (file: File) => {
     const validation = validateImageFile(file);
@@ -278,7 +316,8 @@ export default function ModelSwapPage() {
           id: `${startedJob.job_id}-${Date.now()}`,
           imageUrl,
           jobId: startedJob.job_id,
-          needsProductAtApprove: !submittedGid
+          needsProductAtApprove: !submittedGid,
+          originalImageUrl: originalImagePreview
         },
         ...current
       ]);
@@ -364,10 +403,14 @@ export default function ModelSwapPage() {
               <article className="ai-simple-source-card">
                 <header>
                   <strong>Original image</strong>
-                  <span>{originalImagePreview ? "Ready" : "Required"}</span>
+                  <span>{displayOriginalImagePreview ? "Ready" : "Required"}</span>
                 </header>
                 <div className="ai-simple-preview ai-simple-preview-tall">
-                  {originalImagePreview ? <span style={tileStyle(originalImagePreview)} /> : <ImagePlus size={28} />}
+                  {displayOriginalImagePreview ? (
+                    <span style={tileStyle(displayOriginalImagePreview)} />
+                  ) : (
+                    <ImagePlus size={28} />
+                  )}
                 </div>
                 <div className="ai-simple-actions">
                   <label className="ai-outline-btn">
@@ -428,7 +471,9 @@ export default function ModelSwapPage() {
                     <span> - Image</span>
                   </p>
                   <div className="ai-clean-result-frame" aria-hidden>
-                    {originalImagePreview ? <span className="ai-result-photo" style={tileStyle(originalImagePreview)} /> : null}
+                    {displayOriginalImagePreview ? (
+                      <span className="ai-result-photo" style={tileStyle(displayOriginalImagePreview)} />
+                    ) : null}
                   </div>
                 </article>
 

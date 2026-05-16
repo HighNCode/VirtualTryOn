@@ -192,13 +192,16 @@ class SeedreamProvider(ImageGenerationProvider):
         face_bytes: bytes,
     ) -> bytes:
         prompt = (
-            "The first image shows a model wearing a product. "
-            "The second image shows a face. "
-            "Replace the face of the model in the first image with the face shown in the second image. "
-            "Keep everything else in the first image completely identical: "
-            "the body, pose, clothing, background, and lighting must not change at all. "
-            "Only the face region should be replaced. "
-            "The result should look like a seamless, photorealistic professional fashion photograph."
+            "Task: perform a strict identity face swap. "
+            "Image 1 is the target fashion/product photo. Image 2 is the replacement identity reference. "
+            "Replace the visible facial identity in Image 1 with the face identity from Image 2. "
+            "The output face must match Image 2's identity: eyes, eyebrows, nose, mouth, lips, jawline, "
+            "facial proportions, expression character, and skin tone. "
+            "Do not preserve the original person's facial identity from Image 1. "
+            "Keep Image 1's body, pose, clothing, product, background, camera angle, and lighting unchanged. "
+            "Blend the replacement face naturally into the original head position and scene. "
+            "Do not change the garment or create a new outfit. "
+            "Return one seamless, photorealistic professional fashion photograph."
         )
         result, _ = self._generate_image(
             prompt=prompt,

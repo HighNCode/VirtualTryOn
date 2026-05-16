@@ -11,6 +11,7 @@ import {
   buildJobResultUrl,
   getDefaultStoreId,
   isFailureStatus,
+  listPhotoshootJobs,
   listPhotoshootModels,
   pollPhotoshootJob,
   resolvePhotoshootImageUrl,
@@ -28,6 +29,7 @@ type GeneratedResult = {
   imageUrl: string;
   jobId: string;
   needsProductAtApprove: boolean;
+  originalImageUrl?: string | null;
 };
 
 function tileStyle(imageUrl: string): CSSProperties {
@@ -151,6 +153,43 @@ export default function ModelTryOnPage() {
     () => models.find((model) => model.id === selectedModelId) ?? null,
     [models, selectedModelId]
   );
+  const selectedModelPreview = modelSource === "library" ? selectedModel?.image_url ?? null : modelImagePreview;
+  const displayProductImagePreview = productImagePreview || generatedResults[0]?.originalImageUrl || null;
+
+  useEffect(() => {
+    if (!storeId.trim()) {
+      return;
+    }
+
+    const controller = new AbortController();
+    listPhotoshootJobs({
+      storeId: storeId.trim(),
+      jobType: "try_on_model",
+      limit: 24,
+      signal: controller.signal
+    })
+      .then((jobs) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        const results = jobs
+          .filter((job) => job.result_image_url)
+          .map((job) => ({
+            id: job.job_id,
+            imageUrl: resolveBackendUrl(job.result_image_url || `/api/v1/merchant/photoshoot/jobs/${job.job_id}/result`),
+            jobId: job.job_id,
+            needsProductAtApprove: !job.shopify_product_gid && !job.approved_at,
+            originalImageUrl: job.input_image_url ? resolveBackendUrl(job.input_image_url) : null
+          }));
+        setGeneratedResults(results);
+        if (results.length > 0) {
+          setStarted(true);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => controller.abort();
+  }, [storeId]);
 
   const applyUploadedProductFile = (file: File) => {
     const validation = validateImageFile(file);
@@ -282,7 +321,8 @@ export default function ModelTryOnPage() {
           id: `${startedJob.job_id}-${Date.now()}`,
           imageUrl,
           jobId: startedJob.job_id,
-          needsProductAtApprove: !submittedGid
+          needsProductAtApprove: !submittedGid,
+          originalImageUrl: productImagePreview
         },
         ...current
       ]);
@@ -333,9 +373,6 @@ export default function ModelTryOnPage() {
     setErrorMessage("");
   };
 
-  const selectedModelPreview =
-    modelSource === "library" ? selectedModel?.image_url ?? null : modelImagePreview;
-
   return (
     <main className="portal-shell">
       <PortalSidebar activeMain="ai" activeAi="model-try-on" />
@@ -375,7 +412,7 @@ export default function ModelTryOnPage() {
 
               <p className="ai-tryon-field-label">Product Image</p>
               <div className="ai-tryon-product-preview">
-                {productImagePreview ? <span style={tileStyle(productImagePreview)} /> : null}
+                {displayProductImagePreview ? <span style={tileStyle(displayProductImagePreview)} /> : null}
               </div>
 
               <label className="ai-tryon-field">
@@ -433,7 +470,9 @@ export default function ModelTryOnPage() {
                     <span> - Image</span>
                   </p>
                   <div className="ai-clean-result-frame" aria-hidden>
-                    {productImagePreview ? <span className="ai-result-photo" style={tileStyle(productImagePreview)} /> : null}
+                    {displayProductImagePreview ? (
+                      <span className="ai-result-photo" style={tileStyle(displayProductImagePreview)} />
+                    ) : null}
                   </div>
                 </article>
 

@@ -639,6 +639,11 @@ class PhotoshootJobResponse(BaseModel):
     processing_time_seconds: Optional[float] = None
     error: Optional[str] = None
     retry_allowed: bool = False
+    input_image_url: Optional[str] = None
+    shopify_product_gid: Optional[str] = None
+    approved_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

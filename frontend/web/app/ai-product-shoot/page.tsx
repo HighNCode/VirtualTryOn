@@ -12,6 +12,7 @@ import {
   getDefaultStoreId,
   isFailureStatus,
   listGhostMannequinRefs,
+  listPhotoshootJobs,
   pollPhotoshootJob,
   resolvePhotoshootImageUrl,
   resolveBackendUrl,
@@ -34,6 +35,7 @@ type GeneratedResult = {
   imageUrl: string;
   jobId: string;
   needsProductAtApprove: boolean;
+  originalImageUrl?: string | null;
 };
 
 const EMPTY_SLOT: SourceSlot = { url: null, file: null, preview: null };
@@ -48,7 +50,7 @@ type GhostTemplateOption = {
   id: string;
   pose: string;
   label: string;
-  image: string | null;
+  image: string;
   referenceId: string | null;
 };
 
@@ -122,9 +124,12 @@ export default function AiProductShootPage() {
 
   const productImages = useMemo(() => extractProductImageUrls(selectedProduct), [selectedProduct]);
   const originalPreview = originalSlot.preview || null;
+  const displayOriginalPreview = originalPreview || generatedResults[0]?.originalImageUrl || null;
   const ghostTemplateOptions = useMemo<GhostTemplateOption[]>(() => {
     const poseOrder: Record<string, number> = { front: 0, side: 1, back: 2 };
+    const visiblePoses = new Set(["front", "side", "back"]);
     const libraryTemplates = [...ghostRefs]
+      .filter((ref) => visiblePoses.has(ref.pose))
       .sort((a, b) => (poseOrder[a.pose] ?? 99) - (poseOrder[b.pose] ?? 99))
       .map((ref) => ({
         id: ref.id,
@@ -134,11 +139,7 @@ export default function AiProductShootPage() {
         referenceId: ref.id
       }));
 
-    const visualTemplates = libraryTemplates.length > 0 ? libraryTemplates : ghostTemplates;
-    return [
-      ...visualTemplates,
-      { id: "custom", pose: "custom", label: "Custom", image: null, referenceId: null }
-    ];
+    return libraryTemplates.length > 0 ? libraryTemplates : [...ghostTemplates];
   }, [ghostRefs]);
 
   const selectedTemplateOption = useMemo(
@@ -163,10 +164,11 @@ export default function AiProductShootPage() {
       .then((refs) => {
         setGhostRefs(refs);
         setSelectedTemplate((current) => {
-          if (current === "custom" || refs.some((ref) => ref.id === current)) {
+          const visibleRefs = refs.filter((ref) => ["front", "side", "back"].includes(ref.pose));
+          if (visibleRefs.some((ref) => ref.id === current) || ghostTemplates.some((template) => template.id === current)) {
             return current;
           }
-          return refs[0]?.id ?? "custom";
+          return visibleRefs[0]?.id ?? "fallback-front";
         });
       })
       .catch((error: unknown) => {
@@ -177,7 +179,7 @@ export default function AiProductShootPage() {
         setGhostRefs([]);
         setGhostRefsError(message);
         setSelectedTemplate((current) =>
-          current === "custom" || ghostTemplates.some((template) => template.id === current) ? current : "custom"
+          ghostTemplates.some((template) => template.id === current) ? current : "fallback-front"
         );
       })
       .finally(() => {
@@ -188,6 +190,41 @@ export default function AiProductShootPage() {
 
     return () => controller.abort();
   }, [clothingType, storeId]);
+
+  useEffect(() => {
+    if (!storeId.trim()) {
+      return;
+    }
+
+    const controller = new AbortController();
+    listPhotoshootJobs({
+      storeId: storeId.trim(),
+      jobType: "ghost_mannequin",
+      limit: 24,
+      signal: controller.signal
+    })
+      .then((jobs) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        const results = jobs
+          .filter((job) => job.result_image_url)
+          .map((job) => ({
+            id: job.job_id,
+            imageUrl: resolveBackendUrl(job.result_image_url || `/api/v1/merchant/photoshoot/jobs/${job.job_id}/result`),
+            jobId: job.job_id,
+            needsProductAtApprove: !job.shopify_product_gid && !job.approved_at,
+            originalImageUrl: job.input_image_url ? resolveBackendUrl(job.input_image_url) : null
+          }));
+        setGeneratedResults(results);
+        if (results.length > 0) {
+          setStarted(true);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => controller.abort();
+  }, [storeId]);
 
   const setStoreImageToOriginal = (imageUrl: string) => {
     setOriginalSlot({ url: imageUrl, file: null, preview: imageUrl });
@@ -259,7 +296,7 @@ export default function AiProductShootPage() {
       setErrorMessage("Open the app from Shopify Admin to connect this tool with the active store.");
       return;
     }
-    if (!originalSlot.preview) {
+    if (!originalSlot.url && !originalSlot.file) {
       setErrorMessage("Upload an original image or select one from your store before generating.");
       return;
     }
@@ -276,9 +313,9 @@ export default function AiProductShootPage() {
         referenceId: selectedTemplateOption?.referenceId ?? null,
         shopifyProductGid: submittedGid,
         image1Url: originalSlot.url,
-        image2Url: originalSlot.url,
         image1File: originalSlot.file,
-        image2File: originalSlot.file
+        image2Url: null,
+        image2File: null
       });
 
       setStatusMessage(`Job ${startedJob.job_id} started. Processing...`);
@@ -302,7 +339,8 @@ export default function AiProductShootPage() {
           id: `${startedJob.job_id}-${Date.now()}`,
           imageUrl,
           jobId: startedJob.job_id,
-          needsProductAtApprove: !submittedGid
+          needsProductAtApprove: !submittedGid,
+          originalImageUrl: originalSlot.preview
         },
         ...current
       ]);
@@ -387,7 +425,7 @@ export default function AiProductShootPage() {
               <p className="ai-ghost-field-title">Original Image</p>
 
               <div className="ai-ghost-original-preview">
-                {originalPreview ? <span style={tileStyle(originalPreview)} /> : <ImagePlus size={30} />}
+                {displayOriginalPreview ? <span style={tileStyle(displayOriginalPreview)} /> : <ImagePlus size={30} />}
               </div>
 
               <div className="ai-simple-actions ai-ghost-image-actions">
@@ -427,13 +465,7 @@ export default function AiProductShootPage() {
                       className={`ai-ghost-template-tile${selectedTemplate === template.id ? " is-selected" : ""}`}
                       onClick={() => setSelectedTemplate(template.id)}
                     >
-                      {template.image ? (
-                        <span style={tileStyle(template.image)} />
-                      ) : (
-                        <span className="ai-ghost-custom-template">
-                          <ImagePlus size={24} />
-                        </span>
-                      )}
+                      <span style={tileStyle(template.image)} />
                       <strong>{template.label}</strong>
                     </button>
                   ))}
@@ -459,7 +491,7 @@ export default function AiProductShootPage() {
                   <span> - Image</span>
                 </p>
                 <div className="ai-ghost-result-frame" aria-hidden>
-                  {originalPreview ? <span className="ai-result-photo" style={tileStyle(originalPreview)} /> : null}
+                  {displayOriginalPreview ? <span className="ai-result-photo" style={tileStyle(displayOriginalPreview)} /> : null}
                 </div>
               </article>
 
