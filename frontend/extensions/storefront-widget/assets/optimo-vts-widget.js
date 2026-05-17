@@ -744,6 +744,25 @@
       } else {
         this.state.form[target.name] = target.value;
       }
+
+      this.syncSetupContinueButton();
+    }
+
+    syncSetupContinueButton() {
+      if (!this.overlay || this.state.stage !== "setup") {
+        return;
+      }
+
+      const consentInput = this.overlay.querySelector('input[name="researchConsent"]');
+      const continueButton = this.overlay.querySelector('[data-action="continue-to-front"]');
+      if (!(consentInput instanceof HTMLInputElement) || !(continueButton instanceof HTMLButtonElement)) {
+        return;
+      }
+
+      const consentChecked = Boolean(consentInput.checked);
+      this.state.form.researchConsent = consentChecked;
+      continueButton.disabled = !consentChecked;
+      continueButton.setAttribute("aria-disabled", consentChecked ? "false" : "true");
     }
 
     handleOverlayClick(event) {
@@ -954,6 +973,7 @@
     handleOverlayChange(event) {
       const target = event.target;
       if (!(target instanceof HTMLInputElement) || target.type !== "file") {
+        this.handleOverlayInput(event);
         return;
       }
 
@@ -2664,7 +2684,7 @@
         this.renderGuideRow("clothing", "Fitted Clothing", "Wear fitting clothes for the cleanest measurement read.") +
         this.renderGuideRow("light", "Good Lighting", "Stand in a well-lit area facing the light source.") +
         '</div><button type="button" class="ovts-primary" data-action="continue-to-front"' +
-        (consentChecked ? "" : " disabled") +
+        (consentChecked ? ' aria-disabled="false"' : ' disabled aria-disabled="true"') +
         ">Continue</button>" +
         '<div class="ovts-privacy-note"><strong>Your Privacy Matters</strong><span>Your photos stay available for try-on for about 1 hour. With your consent, photos and measurement outputs are retained for research for a limited period.</span></div></div>'
       );
