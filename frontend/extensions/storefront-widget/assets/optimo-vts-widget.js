@@ -5,6 +5,12 @@
   const FLOW_POINTER_PREFIX = "optimo-vts-flow-pointer";
   const ACTIVE_PROGRESS_COLOR = "linear-gradient(90deg, #7E0175 0%, #E40206 100%)";
   const IDLE_PROGRESS_COLOR = "#d7d5d8";
+  const SOCIAL_ICON_DATA = {
+    TikTok: "data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiPz48IS0tIFVwbG9hZGVkIHRvOiBTVkcgUmVwbywgd3d3LnN2Z3JlcG8uY29tLCBHZW5lcmF0b3I6IFNWRyBSZXBvIE1peGVyIFRvb2xzIC0tPgo8c3ZnIHdpZHRoPSI4MDBweCIgaGVpZ2h0PSI4MDBweCIgdmlld0JveD0iMCAwIDMyIDMyIiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPg0KPHBhdGggZD0iTTguNDUwOTUgMTkuNzkyNkM4LjYwNzIzIDE4LjQ5ODcgOS4xMzc5IDE3Ljc3NDMgMTAuMTM3OSAxNy4wMzE3QzExLjU2ODggMTYuMDI1OSAxMy4zNTYxIDE2LjU5NDggMTMuMzU2MSAxNi41OTQ4VjEzLjIxOTdDMTMuNzkwNyAxMy4yMDg1IDE0LjIyNTQgMTMuMjM0MyAxNC42NTUxIDEzLjI5NjZWMTcuNjQwMUMxNC42NTUxIDE3LjY0MDEgMTIuODY4MyAxNy4wNzEyIDExLjQzNzUgMTguMDc3NUMxMC40MzggMTguODE5NiA5LjkwNjIzIDE5LjU0NDYgOS43NTA1IDIwLjgzODVDOS43NDU2MiAyMS41NDExIDkuODc3NDcgMjIuNDU5NSAxMC40ODQ3IDIzLjI1MzZDMTAuMzM0NSAyMy4xNzY2IDEwLjE4MTUgMjMuMDg4OSAxMC4wMjU2IDIyLjk5MDVDOC42ODgwNyAyMi4wOTIzIDguNDQ0NDQgMjAuNzQ0OSA4LjQ1MDk1IDE5Ljc5MjZaTTIyLjAzNTIgNi45Nzg5OEMyMS4wNTA5IDUuOTAwMzkgMjAuNjc4NiA0LjgxMTM5IDIwLjU0NDEgNC4wNDYzOUgyMS43ODIzQzIxLjc4MjMgNC4wNDYzOSAyMS41MzU0IDYuMDUyMjQgMjMuMzM0NyA4LjAyNDgyTDIzLjM1OTcgOC4wNTEzNEMyMi44NzQ3IDcuNzQ2MyAyMi40MyA3LjM4NjI0IDIyLjAzNTIgNi45Nzg5OFpNMjggMTAuMDM2OVYxNC4yOTNDMjggMTQuMjkzIDI2LjQyIDE0LjIzMTIgMjUuMjUwNyAxMy45MzM3QzIzLjYxNzkgMTMuNTE3NiAyMi41Njg1IDEyLjg3OTUgMjIuNTY4NSAxMi44Nzk1QzIyLjU2ODUgMTIuODc5NSAyMS44NDM2IDEyLjQyNDUgMjEuNzg1IDEyLjM5MjhWMjEuMTgxN0MyMS43ODUgMjEuNjcxMSAyMS42NTEgMjIuODkzMiAyMS4yNDI0IDIzLjkxMjVDMjAuNzA5IDI1LjI0NiAxOS44ODU5IDI2LjEyMTIgMTkuNzM0NSAyNi4zMDAxQzE5LjczNDUgMjYuMzAwMSAxOC43MzM0IDI3LjQ4MzIgMTYuOTY3MiAyOC4yOEMxNS4zNzUyIDI4Ljk5ODcgMTMuOTc3NCAyOC45ODA1IDEzLjU1OTYgMjguOTk4N0MxMy41NTk2IDI4Ljk5ODcgMTEuMTQzNCAyOS4wOTQ0IDguOTY5MTUgMjcuNjgxNEM4LjQ5ODk4IDI3LjM2OTkgOC4wNjAxMSAyNy4wMTcyIDcuNjU4MiAyNi42Mjc3TDcuNjY5MDYgMjYuNjM1NUM5Ljg0MzgzIDI4LjA0ODUgMTIuMjU5NSAyNy45NTI4IDEyLjI1OTUgMjcuOTUyOEMxMi42Nzc5IDI3LjkzNDYgMTQuMDc1NiAyNy45NTI4IDE1LjY2NzEgMjcuMjM0MUMxNy40MzE3IDI2LjQzNzQgMTguNDM0NCAyNS4yNTQzIDE4LjQzNDQgMjUuMjU0M0MxOC41ODQyIDI1LjA3NTQgMTkuNDExMSAyNC4yMDAxIDE5Ljk0MjMgMjIuODY2MkMyMC4zNDk4IDIxLjg0NzQgMjAuNDg0OSAyMC42MjQ3IDIwLjQ4NDkgMjAuMTM1NFYxMS4zNDc1QzIwLjU0MzUgMTEuMzc5NyAyMS4yNjc5IDExLjgzNDcgMjEuMjY3OSAxMS44MzQ3QzIxLjI2NzkgMTEuODM0NyAyMi4zMTc5IDEyLjQ3MzQgMjMuOTUwNiAxMi44ODg5QzI1LjEyMDQgMTMuMTg2NCAyNi43IDEzLjI0ODMgMjYuNyAxMy4yNDgzVjkuOTEzMTRDMjcuMjQwNCAxMC4wMzQzIDI3LjcwMTEgMTAuMDY3MSAyOCAxMC4wMzY5WiIgZmlsbD0iI0VFMUQ1MiIvPg0KPHBhdGggZD0iTTI2LjcwMDkgOS45MTMxNFYxMy4yNDcyQzI2LjcwMDkgMTMuMjQ3MiAyNS4xMjEzIDEzLjE4NTMgMjMuOTUxNSAxMi44ODc5QzIyLjMxODggMTIuNDcxOCAyMS4yNjg4IDExLjgzMzcgMjEuMjY4OCAxMS44MzM3QzIxLjI2ODggMTEuODMzNyAyMC41NDQ0IDExLjM3ODcgMjAuNDg1OCAxMS4zNDY0VjIwLjEzNjRDMjAuNDg1OCAyMC42MjU4IDIwLjM1MTggMjEuODQ4NCAxOS45NDMyIDIyLjg2NzJDMTkuNDA5OCAyNC4yMDEyIDE4LjU4NjcgMjUuMDc2NCAxOC40MzUzIDI1LjI1NTNDMTguNDM1MyAyNS4yNTUzIDE3LjQzMzcgMjYuNDM4NCAxNS42NjggMjcuMjM1MkMxNC4wNzY1IDI3Ljk1MzkgMTIuNjc4OCAyNy45MzU3IDEyLjI2MDQgMjcuOTUzOUMxMi4yNjA0IDI3Ljk1MzkgOS44NDQ3MyAyOC4wNDk2IDcuNjY5OTUgMjYuNjM2Nkw3LjY1OTEgMjYuNjI4OEM3LjQyOTQ5IDI2LjQwNjQgNy4yMTMzNiAyNi4xNzE3IDcuMDExNzcgMjUuOTI1N0M2LjMxNzc3IDI1LjA3OTUgNS44OTIzNyAyNC4wNzg5IDUuNzg1NDcgMjMuNzkzNEM1Ljc4NTI5IDIzLjc5MjIgNS43ODUyOSAyMy43OTEgNS43ODU0NyAyMy43ODk4QzUuNjEzNDcgMjMuMjkzNyA1LjI1MjA5IDIyLjEwMjIgNS4zMDE0NyAyMC45NDgyQzUuMzg4ODMgMTguOTEyMiA2LjEwNTA3IDE3LjY2MjUgNi4yOTQ0NCAxNy4zNDk0QzYuNzk1OTcgMTYuNDk1NyA3LjQ0ODI4IDE1LjczMTggOC4yMjIzMyAxNS4wOTE5QzguOTA1MzggMTQuNTM5NiA5LjY3OTYgMTQuMTAwMiAxMC41MTMyIDEzLjc5MTdDMTEuNDE0NCAxMy40Mjk1IDEyLjM3OTQgMTMuMjM1MyAxMy4zNTY1IDEzLjIxOTdWMTYuNTk0OEMxMy4zNTY1IDE2LjU5NDggMTEuNTY5MSAxNi4wMjggMTAuMTM4OCAxNy4wMzE3QzkuMTM4NzkgMTcuNzc0MyA4LjYwODEyIDE4LjQ5ODcgOC40NTE4NSAxOS43OTI2QzguNDQ1MzQgMjAuNzQ0OSA4LjY4ODk3IDIyLjA5MjMgMTAuMDI1NCAyMi45OTFDMTAuMTgxMyAyMy4wODk4IDEwLjMzNDMgMjMuMTc3NSAxMC40ODQ1IDIzLjI1NDFDMTAuNzE3OSAyMy41NTc2IDExLjAwMjEgMjMuODIyMSAxMS4zMjU1IDI0LjAzNjhDMTIuNjMxIDI0Ljg2MzIgMTMuNzI0OSAyNC45MjA5IDE1LjEyMzggMjQuMzg0MkMxNi4wNTY1IDI0LjAyNTQgMTYuNzU4NiAyMy4yMTY3IDE3LjA4NDIgMjIuMzIwNkMxNy4yODg4IDIxLjc2MTEgMTcuMjg2MSAyMS4xOTc4IDE3LjI4NjEgMjAuNjE1NFY0LjA0NjM5SDIwLjU0MTdDMjAuNjc2MyA0LjgxMTM5IDIxLjA0ODUgNS45MDAzOSAyMi4wMzI4IDYuOTc4OThDMjIuNDI3NiA3LjM4NjI0IDIyLjg3MjQgNy43NDYzIDIzLjM1NzMgOC4wNTEzNEMyMy41MDA2IDguMTk5NTUgMjQuMjMzMSA4LjkzMjMxIDI1LjE3MzQgOS4zODIxNkMyNS42NTk2IDkuNjE0NjkgMjYuMTcyMiA5Ljc5Mjg1IDI2LjcwMDkgOS45MTMxNFoiIGZpbGw9IiMwMDAwMDAiLz4NCjxwYXRoIGQ9Ik00LjQ4OTI2IDIyLjc1NjhWMjIuNzU5NEw0LjU3MDA0IDIyLjk3ODRDNC41NjA3NiAyMi45NTI5IDQuNTMwNzQgMjIuODc1NCA0LjQ4OTI2IDIyLjc1NjhaIiBmaWxsPSIjNjlDOUQwIi8+DQo8cGF0aCBkPSJNMTAuNTEyOCAxMy43OTE2QzkuNjc5MTkgMTQuMTAwMiA4LjkwNDk4IDE0LjUzOTYgOC4yMjE5MiAxNS4wOTE4QzcuNDQ3NjMgMTUuNzMzMiA2Ljc5NTQ4IDE2LjQ5ODcgNi4yOTQ1OCAxNy4zNTRDNi4xMDUyMSAxNy42NjYxIDUuMzg4OTcgMTguOTE2OCA1LjMwMTYxIDIwLjk1MjhDNS4yNTIyMyAyMi4xMDY4IDUuNjEzNjEgMjMuMjk4MyA1Ljc4NTYxIDIzLjc5NDRDNS43ODU0MyAyMy43OTU2IDUuNzg1NDMgMjMuNzk2OCA1Ljc4NTYxIDIzLjc5OEM1Ljg5NDEzIDI0LjA4MSA2LjMxNzkxIDI1LjA4MTUgNy4wMTE5MSAyNS45MzAzQzcuMjEzNSAyNi4xNzYzIDcuNDI5NjMgMjYuNDExMSA3LjY1OTI0IDI2LjYzMzRDNi45MjM1NyAyNi4xNDU3IDYuMjY3NDYgMjUuNTU2MiA1LjcxMjM2IDI0Ljg4MzlDNS4wMjQzMyAyNC4wNDUxIDQuNjAwMDEgMjMuMDU0OSA0LjQ4OTMyIDIyLjc2MjZDNC40ODkxOSAyMi43NjA1IDQuNDg5MTkgMjIuNzU4NCA0LjQ4OTMyIDIyLjc1NjRWMjIuNzUyN0M0LjMxNjc3IDIyLjI1NzEgMy45NTQzMSAyMS4wNjUxIDQuMDA0NzcgMTkuOTA5NkM0LjA5MjEzIDE3Ljg3MzYgNC44MDgzOCAxNi42MjM5IDQuOTk3NzUgMTYuMzEwOEM1LjQ5ODUgMTUuNDU1MyA2LjE1MDY3IDE0LjY4OTggNi45MjUwOSAxNC4wNDg2QzcuNjA4IDEzLjQ5NjEgOC4zODIyNSAxMy4wNTY3IDkuMjE1OTggMTIuNzQ4NEM5LjczNjAyIDEyLjU0MTYgMTAuMjc3OCAxMi4zODkxIDEwLjgzMTkgMTIuMjkzNEMxMS42NjY5IDEyLjE1MzcgMTIuNTE5OCAxMi4xNDE1IDEzLjM1ODggMTIuMjU3NVYxMy4yMTk2QzEyLjM4MDggMTMuMjM0OSAxMS40MTQ4IDEzLjQyOTEgMTAuNTEyOCAxMy43OTE2WiIgZmlsbD0iIzY5QzlEMCIvPg0KPHBhdGggZD0iTTIwLjU0MzggNC4wNDYzNUgxNy4yODgxVjIwLjYxNTlDMTcuMjg4MSAyMS4xOTgzIDE3LjI4ODEgMjEuNzYgMTcuMDg2MyAyMi4zMjExQzE2Ljc1NzUgMjMuMjE2NyAxNi4wNTggMjQuMDI1MyAxNS4xMjU4IDI0LjM4NDJDMTMuNzI2NSAyNC45MjMgMTIuNjMyNiAyNC44NjMyIDExLjMyNzYgMjQuMDM2OEMxMS4wMDM2IDIzLjgyMyAxMC43MTg3IDIzLjU1OTQgMTAuNDg0NCAyMy4yNTY3QzExLjU5NjIgMjMuODI1MSAxMi41OTEzIDIzLjgxNTIgMTMuODI0MSAyMy4zNDFDMTQuNzU1OCAyMi45ODIxIDE1LjQ1NjMgMjIuMTczNCAxNS43ODQgMjEuMjc3NEMxNS45ODkxIDIwLjcxNzggMTUuOTg2NCAyMC4xNTQ2IDE1Ljk4NjQgMTkuNTcyNlYzSDIwLjQ4MTlDMjAuNDgxOSAzIDIwLjQzMTUgMy40MTE4OCAyMC41NDM4IDQuMDQ2MzVaTTI2LjcwMDIgOC45OTEwNFY5LjkxMzFDMjYuMTcyNSA5Ljc5MjYzIDI1LjY2MDkgOS42MTQ0NyAyNS4xNzU1IDkuMzgyMTNDMjQuMjM1MiA4LjkzMjI4IDIzLjUwMjYgOC4xOTk1MiAyMy4zNTk0IDguMDUxM0MyMy41MjU2IDguMTU1OSAyMy42OTgxIDguMjUxMDYgMjMuODc1OSA4LjMzNjI5QzI1LjAxOTIgOC44ODMzOSAyNi4xNDUxIDkuMDQ2NjkgMjYuNzAwMiA4Ljk5MTA0WiIgZmlsbD0iIzY5QzlEMCIvPg0KPC9zdmc+",
+    Snapchat: "data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiPz48IS0tIFVwbG9hZGVkIHRvOiBTVkcgUmVwbywgd3d3LnN2Z3JlcG8uY29tLCBHZW5lcmF0b3I6IFNWRyBSZXBvIE1peGVyIFRvb2xzIC0tPgo8c3ZnIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIKYXJpYS1sYWJlbD0iU25hcGNoYXQiIHJvbGU9ImltZyIKdmlld0JveD0iMCAwIDUxMiA1MTIiPjxyZWN0CndpZHRoPSI1MTIiIGhlaWdodD0iNTEyIgpyeD0iMTUlIgpmaWxsPSIjZmZmYzAwIi8+PHBhdGggZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjciIGQ9Ik0yMDMgNDE0Yy0xOC0xMy0zMi0yMC02Ni0xNC01IDEtMTQgNC0xNS01LTItNy0yLTE4LTctMTktMzEtNC00Mi0xMC00Ny0xNi0yLTItMy03IDEtOCA1My0xMCA3OC02MSA4My03MSA2LTE1LTQtMjQtMjMtMzAtOS0zLTI0LTctMjQtMTcgMC01IDUtOCAxMC0xMCA0LTEgOC0yIDEyIDAgMTIgNSAyMyA3IDI5IDIgMC0yNy03LTYxIDQtODkgMTMtMzEgNDUtNTkgOTYtNTlzODMgMjggOTYgNTljMTEgMjggNCA2MiA0IDg5IDYgNSAxNyAzIDI5LTIgNC0yIDgtMSAxMiAwIDUgMiAxMCA1IDEwIDEwIDAgMTAtMTUgMTQtMjQgMTctMTkgNi0yOSAxNS0yMyAzMCA1IDEwIDMwIDYxIDgzIDcxIDQgMSAzIDYgMSA4LTUgNi0xNiAxMi00NyAxNi01IDEtNSAxMi03IDE5LTEgOS0xMCA2LTE1IDUtMzQtNi00OCAxLTY2IDE0YTgyIDgyIDAgMCAxLTUzIDIwYy0yMSAxLTM4LTgtNTMtMjB6Ii8+PC9zdmc+",
+    Facebook: "data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiIHN0YW5kYWxvbmU9Im5vIj8+DQo8IS0tIFVwbG9hZGVkIHRvOiBTVkcgUmVwbywgd3d3LnN2Z3JlcG8uY29tLCBHZW5lcmF0b3I6IFNWRyBSZXBvIE1peGVyIFRvb2xzIC0tPg0KPHN2ZyB3aWR0aD0iODAwcHgiIGhlaWdodD0iODAwcHgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgdmVyc2lvbj0iMS4xIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIj4NCiAgICANCiAgICA8dGl0bGU+RmFjZWJvb2stY29sb3I8L3RpdGxlPg0KICAgIDxkZXNjPkNyZWF0ZWQgd2l0aCBTa2V0Y2guPC9kZXNjPg0KICAgIDxkZWZzPg0KDQo8L2RlZnM+DQogICAgPGcgaWQ9Ikljb25zIiBzdHJva2U9Im5vbmUiIHN0cm9rZS13aWR0aD0iMSIgZmlsbD0ibm9uZSIgZmlsbC1ydWxlPSJldmVub2RkIj4NCiAgICAgICAgPGcgaWQ9IkNvbG9yLSIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoLTIwMC4wMDAwMDAsIC0xNjAuMDAwMDAwKSIgZmlsbD0iIzQ0NjBBMCI+DQogICAgICAgICAgICA8cGF0aCBkPSJNMjI1LjYzODM1NSwyMDggTDIwMi42NDkyMzIsMjA4IEMyMDEuMTg1NjczLDIwOCAyMDAsMjA2LjgxMzU5MiAyMDAsMjA1LjM1MDYwMyBMMjAwLDE2Mi42NDkyMTEgQzIwMCwxNjEuMTg1ODUgMjAxLjE4NTg1OSwxNjAgMjAyLjY0OTIzMiwxNjAgTDI0NS4zNTA5NTUsMTYwIEMyNDYuODEzOTU1LDE2MCAyNDgsMTYxLjE4NTg1IDI0OCwxNjIuNjQ5MjExIEwyNDgsMjA1LjM1MDYwMyBDMjQ4LDIwNi44MTM3NzggMjQ2LjgxMzc2OSwyMDggMjQ1LjM1MDk1NSwyMDggTDIzMy4xMTkzMDUsMjA4IEwyMzMuMTE5MzA1LDE4OS40MTE3NTUgTDIzOS4zNTg1MjEsMTg5LjQxMTc1NSBMMjQwLjI5Mjc1NSwxODIuMTY3NTg2IEwyMzMuMTE5MzA1LDE4Mi4xNjc1ODYgTDIzMy4xMTkzMDUsMTc3LjU0MjY0MSBDMjMzLjExOTMwNSwxNzUuNDQ1Mjg3IDIzMy43MDE3MTIsMTc0LjAxNjAxIDIzNi43MDkyOSwxNzQuMDE2MDEgTDI0MC41NDUzMTEsMTc0LjAxNDMzMyBMMjQwLjU0NTMxMSwxNjcuNTM1MDkxIEMyMzkuODgxODg2LDE2Ny40NDY4MDggMjM3LjYwNDc4NCwxNjcuMjQ5NTcgMjM0Ljk1NTU1MiwxNjcuMjQ5NTcgQzIyOS40MjQ4MzQsMTY3LjI0OTU3IDIyNS42MzgzNTUsMTcwLjYyNTUyNiAyMjUuNjM4MzU1LDE3Ni44MjUyMDkgTDIyNS42MzgzNTUsMTgyLjE2NzU4NiBMMjE5LjM4MzEyMiwxODIuMTY3NTg2IEwyMTkuMzgzMTIyLDE4OS40MTE3NTUgTDIyNS42MzgzNTUsMTg5LjQxMTc1NSBMMjI1LjYzODM1NSwyMDggTDIyNS42MzgzNTUsMjA4IFoiIGlkPSJGYWNlYm9vayI+DQoNCjwvcGF0aD4NCiAgICAgICAgPC9nPg0KICAgIDwvZz4NCjwvc3ZnPg==",
+    Instagram: "data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiPz48IS0tIFVwbG9hZGVkIHRvOiBTVkcgUmVwbywgd3d3LnN2Z3JlcG8uY29tLCBHZW5lcmF0b3I6IFNWRyBSZXBvIE1peGVyIFRvb2xzIC0tPgo8c3ZnIHdpZHRoPSI4MDBweCIgaGVpZ2h0PSI4MDBweCIgdmlld0JveD0iMCAwIDMyIDMyIiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPg0KPHJlY3QgeD0iMiIgeT0iMiIgd2lkdGg9IjI4IiBoZWlnaHQ9IjI4IiByeD0iNiIgZmlsbD0idXJsKCNwYWludDBfcmFkaWFsXzg3XzcxNTMpIi8+DQo8cmVjdCB4PSIyIiB5PSIyIiB3aWR0aD0iMjgiIGhlaWdodD0iMjgiIHJ4PSI2IiBmaWxsPSJ1cmwoI3BhaW50MV9yYWRpYWxfODdfNzE1MykiLz4NCjxyZWN0IHg9IjIiIHk9IjIiIHdpZHRoPSIyOCIgaGVpZ2h0PSIyOCIgcng9IjYiIGZpbGw9InVybCgjcGFpbnQyX3JhZGlhbF84N183MTUzKSIvPg0KPHBhdGggZD0iTTIzIDEwLjVDMjMgMTEuMzI4NCAyMi4zMjg0IDEyIDIxLjUgMTJDMjAuNjcxNiAxMiAyMCAxMS4zMjg0IDIwIDEwLjVDMjAgOS42NzE1NyAyMC42NzE2IDkgMjEuNSA5QzIyLjMyODQgOSAyMyA5LjY3MTU3IDIzIDEwLjVaIiBmaWxsPSJ3aGl0ZSIvPg0KPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0xNiAyMUMxOC43NjE0IDIxIDIxIDE4Ljc2MTQgMjEgMTZDMjEgMTMuMjM4NiAxOC43NjE0IDExIDE2IDExQzEzLjIzODYgMTEgMTEgMTMuMjM4NiAxMSAxNkMxMSAxOC43NjE0IDEzLjIzODYgMjEgMTYgMjFaTTE2IDE5QzE3LjY1NjkgMTkgMTkgMTcuNjU2OSAxOSAxNkMxOSAxNC4zNDMxIDE3LjY1NjkgMTMgMTYgMTNDMTQuMzQzMSAxMyAxMyAxNC4zNDMxIDEzIDE2QzEzIDE3LjY1NjkgMTQuMzQzMSAxOSAxNiAxOVoiIGZpbGw9IndoaXRlIi8+DQo8cGF0aCBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGNsaXAtcnVsZT0iZXZlbm9kZCIgZD0iTTYgMTUuNkM2IDEyLjIzOTcgNiAxMC41NTk1IDYuNjUzOTYgOS4yNzYwNkM3LjIyOTIgOC4xNDcwOCA4LjE0NzA4IDcuMjI5MiA5LjI3NjA2IDYuNjUzOTZDMTAuNTU5NSA2IDEyLjIzOTcgNiAxNS42IDZIMTYuNEMxOS43NjAzIDYgMjEuNDQwNSA2IDIyLjcyMzkgNi42NTM5NkMyMy44NTI5IDcuMjI5MiAyNC43NzA4IDguMTQ3MDggMjUuMzQ2IDkuMjc2MDZDMjYgMTAuNTU5NSAyNiAxMi4yMzk3IDI2IDE1LjZWMTYuNEMyNiAxOS43NjAzIDI2IDIxLjQ0MDUgMjUuMzQ2IDIyLjcyMzlDMjQuNzcwOCAyMy44NTI5IDIzLjg1MjkgMjQuNzcwOCAyMi43MjM5IDI1LjM0NkMyMS40NDA1IDI2IDE5Ljc2MDMgMjYgMTYuNCAyNkgxNS42QzEyLjIzOTcgMjYgMTAuNTU5NSAyNiA5LjI3NjA2IDI1LjM0NkM4LjE0NzA4IDI0Ljc3MDggNy4yMjkyIDIzLjg1MjkgNi42NTM5NiAyMi43MjM5QzYgMjEuNDQwNSA2IDE5Ljc2MDMgNiAxNi40VjE1LjZaTTE1LjYgOEgxNi40QzE4LjExMzIgOCAxOS4yNzc3IDguMDAxNTYgMjAuMTc3OSA4LjA3NTFDMjEuMDU0OCA4LjE0Njc0IDIxLjUwMzIgOC4yNzY1OSAyMS44MTYgOC40MzU5N0MyMi41Njg2IDguODE5NDcgMjMuMTgwNSA5LjQzMTM5IDIzLjU2NCAxMC4xODRDMjMuNzIzNCAxMC40OTY4IDIzLjg1MzMgMTAuOTQ1MiAyMy45MjQ5IDExLjgyMjFDMjMuOTk4NCAxMi43MjIzIDI0IDEzLjg4NjggMjQgMTUuNlYxNi40QzI0IDE4LjExMzIgMjMuOTk4NCAxOS4yNzc3IDIzLjkyNDkgMjAuMTc3OUMyMy44NTMzIDIxLjA1NDggMjMuNzIzNCAyMS41MDMyIDIzLjU2NCAyMS44MTZDMjMuMTgwNSAyMi41Njg2IDIyLjU2ODYgMjMuMTgwNSAyMS44MTYgMjMuNTY0QzIxLjUwMzIgMjMuNzIzNCAyMS4wNTQ4IDIzLjg1MzMgMjAuMTc3OSAyMy45MjQ5QzE5LjI3NzcgMjMuOTk4NCAxOC4xMTMyIDI0IDE2LjQgMjRIMTUuNkMxMy44ODY4IDI0IDEyLjcyMjMgMjMuOTk4NCAxMS44MjIxIDIzLjkyNDlDMTAuOTQ1MiAyMy44NTMzIDEwLjQ5NjggMjMuNzIzNCAxMC4xODQgMjMuNTY0QzkuNDMxMzkgMjMuMTgwNSA4LjgxOTQ3IDIyLjU2ODYgOC40MzU5NyAyMS44MTZDOC4yNzY1OSAyMS41MDMyIDguMTQ2NzQgMjEuMDU0OCA4LjA3NTEgMjAuMTc3OUM4LjAwMTU2IDE5LjI3NzcgOCAxOC4xMTMyIDggMTYuNFYxNS42QzggMTMuODg2OCA4LjAwMTU2IDEyLjcyMjMgOC4wNzUxIDExLjgyMjFDOC4xNDY3NCAxMC45NDUyIDguMjc2NTkgMTAuNDk2OCA4LjQzNTk3IDEwLjE4NEM4LjgxOTQ3IDkuNDMxMzkgOS40MzEzOSA4LjgxOTQ3IDEwLjE4NCA4LjQzNTk3QzEwLjQ5NjggOC4yNzY1OSAxMC45NDUyIDguMTQ2NzQgMTEuODIyMSA4LjA3NTFDMTIuNzIyMyA4LjAwMTU2IDEzLjg4NjggOCAxNS42IDhaIiBmaWxsPSJ3aGl0ZSIvPg0KPGRlZnM+DQo8cmFkaWFsR3JhZGllbnQgaWQ9InBhaW50MF9yYWRpYWxfODdfNzE1MyIgY3g9IjAiIGN5PSIwIiByPSIxIiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSIgZ3JhZGllbnRUcmFuc2Zvcm09InRyYW5zbGF0ZSgxMiAyMykgcm90YXRlKC01NS4zNzU4KSBzY2FsZSgyNS41MTk2KSI+DQo8c3RvcCBzdG9wLWNvbG9yPSIjQjEzNTg5Ii8+DQo8c3RvcCBvZmZzZXQ9IjAuNzkzMDkiIHN0b3AtY29sb3I9IiNDNjJGOTQiLz4NCjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzhBM0FDOCIvPg0KPC9yYWRpYWxHcmFkaWVudD4NCjxyYWRpYWxHcmFkaWVudCBpZD0icGFpbnQxX3JhZGlhbF84N183MTUzIiBjeD0iMCIgY3k9IjAiIHI9IjEiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIiBncmFkaWVudFRyYW5zZm9ybT0idHJhbnNsYXRlKDExIDMxKSByb3RhdGUoLTY1LjEzNjMpIHNjYWxlKDIyLjU5NDIpIj4NCjxzdG9wIHN0b3AtY29sb3I9IiNFMEU4QjciLz4NCjxzdG9wIG9mZnNldD0iMC40NDQ2NjIiIHN0b3AtY29sb3I9IiNGQjhBMkUiLz4NCjxzdG9wIG9mZnNldD0iMC43MTQ3NCIgc3RvcC1jb2xvcj0iI0UyNDI1QyIvPg0KPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjRTI0MjVDIiBzdG9wLW9wYWNpdHk9IjAiLz4NCjwvcmFkaWFsR3JhZGllbnQ+DQo8cmFkaWFsR3JhZGllbnQgaWQ9InBhaW50Ml9yYWRpYWxfODdfNzE1MyIgY3g9IjAiIGN5PSIwIiByPSIxIiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSIgZ3JhZGllbnRUcmFuc2Zvcm09InRyYW5zbGF0ZSgwLjUwMDAwMiAzKSByb3RhdGUoLTguMTMwMSkgc2NhbGUoMzguODkwOSA4LjMxODM2KSI+DQo8c3RvcCBvZmZzZXQ9IjAuMTU2NzAxIiBzdG9wLWNvbG9yPSIjNDA2QURDIi8+DQo8c3RvcCBvZmZzZXQ9IjAuNDY3Nzk5IiBzdG9wLWNvbG9yPSIjNkE0NUJFIi8+DQo8c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiM2QTQ1QkUiIHN0b3Atb3BhY2l0eT0iMCIvPg0KPC9yYWRpYWxHcmFkaWVudD4NCjwvZGVmcz4NCjwvc3ZnPg=="
+  };
   const HEATMAP_VIEWBOX = "0 0 300 620";
   const MEASUREMENT_ROWS = [
     ["height", "Height"],
@@ -2558,7 +2564,7 @@
       const errorMarkup = this.state.error
         ? '<div class="ovts-banner is-error">' + escapeHtml(this.state.error) + "</div>"
         : "";
-      const noticeMarkup = this.state.notice
+      const noticeMarkup = this.state.notice && this.state.stage !== "results"
         ? '<div class="ovts-banner is-note">' + escapeHtml(this.state.notice) + "</div>"
         : "";
 
@@ -2851,14 +2857,14 @@
       return (
         '<div class="ovts-stage ovts-stage--results"><button type="button" class="ovts-inline-back is-top" data-action="back-to-measurements">' +
         svgIcon("back") +
-        'Back to measurements</button><div class="ovts-results-grid"><section class="ovts-hero-panel"><div class="ovts-panel-head"><div><h3>Virtual Try-On</h3><span class="ovts-powered">Powered by Optimo 4o</span></div></div><div class="ovts-tryon-preview">' +
+        'Back to measurements</button><div class="ovts-results-stack"><section class="ovts-results-section"><div class="ovts-panel-head ovts-panel-head--inline"><h3>Virtual Try-On</h3><span class="ovts-powered">Powered By Optimo 4o</span></div><div class="ovts-results-grid"><div class="ovts-tryon-preview">' +
         (mainImage
           ? '<img src="' + escapeHtml(mainImage) + '" alt="Virtual try-on result" loading="lazy" data-role="result-image">'
           : '<div class="ovts-image-placeholder">Generating your look...</div>') +
         (this.state.imageLoadError ? '<p class="ovts-image-issue">' + escapeHtml(this.state.imageLoadError) + "</p>" : "") +
-        '</div></section><section class="ovts-side-panel"><div class="ovts-studio-box"><div class="ovts-panel-head"><h4>Studio Shoots</h4></div><div class="ovts-studio-grid">' +
+        '</div><section class="ovts-side-panel"><div class="ovts-studio-box"><div class="ovts-studio-title">Studio Shoots</div><div class="ovts-studio-grid">' +
         this.renderStudioTiles() +
-        '</div><div class="ovts-studio-actions"><button type="button" class="ovts-primary ovts-primary--small" data-action="submit-studio"' +
+        '</div></div><div class="ovts-studio-actions"><button type="button" class="ovts-primary ovts-primary--small" data-action="submit-studio"' +
         (this.state.selectedStudioImageUrl ? "" : " disabled") +
         '>Submit</button><button type="button" class="ovts-secondary ovts-secondary--small" data-action="retry-studio"' +
         (this.state.currentStudioBackgroundId ? "" : " disabled") +
@@ -2869,7 +2875,7 @@
         this.renderShareIcon("Snapchat", "#FFFC00") +
         this.renderShareIcon("Facebook", "#4267B2") +
         this.renderShareIcon("Instagram", "#E4405F") +
-        "</div></div></div></section><section class=\"ovts-heatmap-panel\"><div class=\"ovts-panel-head\"><div><h3>Heat Map</h3><span class=\"ovts-powered\">Powered by Optimo 4o</span></div></div><div class=\"ovts-heatmap-visual\"><div class=\"ovts-heatmap-body\"><div class=\"ovts-heatmap-overlay\">" +
+        '</div></div></section></div></section><section class="ovts-results-section"><div class="ovts-results-grid"><section class="ovts-heatmap-panel"><div class="ovts-panel-head ovts-panel-head--inline"><h3>Heat Map</h3><span class="ovts-powered">Powered By Optimo 4o</span></div><div class="ovts-heatmap-visual"><div class="ovts-heatmap-body"><div class="ovts-heatmap-overlay">' +
         heatmapSvg +
         "</div>" +
         heatmapTooltip +
@@ -2899,21 +2905,21 @@
         escapeHtml(selectedScoreText) +
         '%</strong></div><div class="ovts-fit-bar"><span style="width:' +
         escapeHtml(selectedScore == null ? "0" : String(selectedScore)) +
-        '%"></span></div></div><div class="ovts-fit-card"><div class="ovts-fit-row"><span>Recommended Size</span><strong>' +
-        escapeHtml(this.state.recommendation.recommended_size) +
-        '</strong></div><div class="ovts-fit-row"><span>Product</span><strong>' +
+        '%"></span></div></div><div class="ovts-recommendation-card"><strong>Recommendation Size</strong><span>This size provides the best overall fit for your measurements</span></div><div class="ovts-fit-card"><div class="ovts-fit-row"><span>Product</span><strong>' +
         escapeHtml(this.config.product.title) +
         '</strong></div><div class="ovts-fit-row"><span>Selected Size</span><strong>' +
         escapeHtml(this.state.selectedSize) +
         '</strong></div><div class="ovts-fit-row"><span>Price</span><strong>$' +
         escapeHtml(price || "") +
-        '</strong></div></div><button type="button" class="ovts-primary ovts-primary--wide" data-action="add-to-cart">Add Size To Cart</button><div class="ovts-size-why"><h4>Why size ' +
+        '</strong></div></div><button type="button" class="ovts-primary ovts-primary--wide" data-action="add-to-cart">Add Size ' +
+        escapeHtml(this.state.selectedSize) +
+        ' to Cart</button><div class="ovts-size-why"><h4>Why Size ' +
         escapeHtml(this.state.selectedSize) +
         '?</h4><p>' +
         escapeHtml(this.getSizeReasoning()) +
         '</p></div>' +
         (coverageNote ? '<p class="ovts-coverage-note">' + escapeHtml(coverageNote) + "</p>" : "") +
-        "</section></div></div>"
+        "</section></div></section></div></div>"
       );
     }
 
@@ -2922,10 +2928,17 @@
         if (this.state.studioBackgroundsError) {
           return '<div class="ovts-empty-copy">Unable to load studio templates right now. Please retry in a moment.</div>';
         }
-        return '<div class="ovts-empty-copy">No studio templates configured yet for this store.</div>';
+        return (
+          '<button type="button" class="ovts-studio-tile ovts-studio-tile--placeholder" disabled></button>' +
+          '<button type="button" class="ovts-studio-tile ovts-studio-tile--placeholder" disabled></button>' +
+          '<button type="button" class="ovts-studio-tile ovts-studio-tile--placeholder" disabled></button>' +
+          '<button type="button" class="ovts-studio-tile ovts-studio-tile--placeholder" disabled></button>' +
+          '<button type="button" class="ovts-studio-tile ovts-studio-tile--placeholder" disabled></button>' +
+          '<button type="button" class="ovts-studio-tile ovts-studio-tile--custom" disabled><span class="ovts-studio-plus">+</span></button>'
+        );
       }
 
-      return this.state.studioBackgrounds
+      const tiles = this.state.studioBackgrounds
         .map((background) => {
           const image = this.state.studioResults[background.id] || background.image_url;
           const isLoading = this.state.studioLoadingId === background.id;
@@ -2944,24 +2957,33 @@
           );
         })
         .join("");
+
+      if (this.state.studioBackgrounds.length >= 6) {
+        return tiles;
+      }
+
+      return (
+        tiles +
+        '<button type="button" class="ovts-studio-tile ovts-studio-tile--custom" disabled><span class="ovts-studio-plus">+</span></button>'
+      );
     }
 
     renderShareActionButton() {
-      if (this.shouldUseNativeShare()) {
-        return '<button type="button" class="ovts-share-primary" data-action="share-look">Share</button>';
-      }
-      return '<button type="button" class="ovts-share-primary" data-action="download-look">Download Image</button>';
+      return "";
     }
 
     renderShareIcon(label, color) {
-      const shortLabel = label === "TikTok" ? "♪" : label === "Snapchat" ? "S" : label === "Facebook" ? "f" : "◎";
+      const shortLabel = label === "TikTok" ? "?" : label === "Snapchat" ? "S" : label === "Facebook" ? "f" : "?";
+      const iconSrc = SOCIAL_ICON_DATA[label] || "";
       return (
         '<span class="ovts-share-icon is-' +
         escapeHtml(label.toLowerCase()) +
         '" style="--share-color:' +
         escapeHtml(color) +
         '">' +
-        escapeHtml(shortLabel) +
+        (iconSrc
+          ? '<img src="' + escapeHtml(iconSrc) + '" alt="' + escapeHtml(label) + '" loading="lazy" draggable="false">'
+          : escapeHtml(shortLabel)) +
         "</span>"
       );
     }

@@ -19,6 +19,7 @@ import {
   startGhostMannequinJob,
   type GhostMannequinRefResponse
 } from "../../lib/photoshootApi";
+import { getPhotoshootProgressMessage, getPhotoshootStartingMessage } from "./_components/photoshootStatus";
 import { extractProductImageUrls, usePhotoshootProducts } from "./_components/usePhotoshootProducts";
 
 const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
@@ -302,7 +303,7 @@ export default function AiProductShootPage() {
     }
 
     setIsGenerating(true);
-    setStatusMessage("Starting ghost mannequin job...");
+    setStatusMessage(getPhotoshootStartingMessage());
     setErrorMessage("");
 
     try {
@@ -321,12 +322,11 @@ export default function AiProductShootPage() {
         image2File: originalSlot.file
       });
 
-      setStatusMessage(`Job ${startedJob.job_id} started. Processing...`);
+      setStatusMessage("Your image is now being generated. We’ll show the result here as soon as it’s ready.");
 
       const finishedJob = await pollPhotoshootJob(storeId.trim(), startedJob.job_id, {
         onUpdate: (job) => {
-          const progressText = typeof job.progress === "number" ? ` (${job.progress}%)` : "";
-          setStatusMessage(`${job.status}${progressText}${job.message ? ` - ${job.message}` : ""}`);
+          setStatusMessage(getPhotoshootProgressMessage(job.progress));
         }
       });
 
