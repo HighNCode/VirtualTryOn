@@ -33,6 +33,7 @@ class ImageGenerationProvider(ABC):
         image1_bytes: bytes,
         image2_bytes: bytes,
         clothing_type: Optional[str] = None,
+        reference_pose: Optional[str] = None,
     ) -> bytes:
         """Generate a ghost mannequin output from two garment images."""
         raise NotImplementedError

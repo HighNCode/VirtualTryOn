@@ -121,6 +121,7 @@ class GeminiProvider(ImageGenerationProvider):
         image1_bytes: bytes,
         image2_bytes: bytes,
         clothing_type: Optional[str] = None,
+        reference_pose: Optional[str] = None,
     ) -> bytes:
         start = time.time()
         garment_hints = {
@@ -130,23 +131,34 @@ class GeminiProvider(ImageGenerationProvider):
             "outerwear": "Show the collar, lapels, and front closure detail.",
         }
         garment_detail = garment_hints.get(clothing_type or "", "")
+        reference_instruction = (
+            f"The second image is a {reference_pose} style template/reference only. "
+            "Use it to understand the desired ghost mannequin angle and silhouette, "
+            "but do not copy its garment design, color, pattern, buttons, labels, or texture. "
+            "The final garment must come from the first uploaded product image. "
+            if reference_pose
+            else (
+                "Use both images to construct the best possible result: if one shows the front and "
+                "the other shows the back or inside, composite them to reveal interior collar lining "
+                "or label detail. "
+            )
+        )
 
         prompt = (
-            "You are given two photos of the same garment. "
+            "You are given a product garment image and an optional supporting reference image. "
             "Create a single professional ghost mannequin (invisible mannequin) product photo: "
             "the garment should appear as if worn by an invisible torso, showing the garment's "
             "full 3D shape, neckline, armholes, and bottom hem. "
             "Remove any visible model, mannequin, hanger, or background from the output. "
-            "Use both images to construct the best possible result: if one shows the front and "
-            "the other shows the back or inside, composite them to reveal interior collar lining "
-            "or label detail. "
+            f"{reference_instruction}"
             f"{garment_detail} "
             "Output a clean, professional product photo on a white or light grey background."
         )
 
         logger.info(
-            "GeminiProvider: ghost_mannequin clothing_type=%s, model=%s",
+            "GeminiProvider: ghost_mannequin clothing_type=%s, reference_pose=%s, model=%s",
             clothing_type,
+            reference_pose,
             self._model,
         )
 
@@ -202,13 +214,16 @@ class GeminiProvider(ImageGenerationProvider):
     ) -> bytes:
         start = time.time()
         prompt = (
-            "The first image shows a model wearing a product. "
-            "The second image shows a face. "
-            "Replace the face of the model in the first image with the face shown in the second image. "
-            "Keep everything else in the first image completely identical: "
-            "the body, pose, clothing, background, and lighting must not change at all. "
-            "Only the face region should be replaced. "
-            "The result should look like a seamless, photorealistic professional fashion photograph."
+            "Task: perform a strict identity face swap. "
+            "Image 1 is the target fashion/product photo. Image 2 is the replacement identity reference. "
+            "Replace the visible facial identity in Image 1 with the face identity from Image 2. "
+            "The output face must match Image 2's identity: eyes, eyebrows, nose, mouth, lips, jawline, "
+            "facial proportions, expression character, and skin tone. "
+            "Do not preserve the original person's facial identity from Image 1. "
+            "Keep Image 1's body, pose, clothing, product, background, camera angle, and lighting unchanged. "
+            "Blend the replacement face naturally into the original head position and scene. "
+            "Do not change the garment or create a new outfit. "
+            "Return one seamless, photorealistic professional fashion photograph."
         )
 
         logger.info("GeminiProvider: model_swap, model=%s", self._model)
@@ -216,10 +231,12 @@ class GeminiProvider(ImageGenerationProvider):
         response = self._client.models.generate_content(
             model=self._model,
             contents=[
+                "Image 1 - target fashion/product photo:",
                 types.Part.from_bytes(
                     data=original_wearing_bytes,
                     mime_type=self._detect_mime_type(original_wearing_bytes),
                 ),
+                "Image 2 - replacement face identity reference:",
                 types.Part.from_bytes(data=face_bytes, mime_type=self._detect_mime_type(face_bytes)),
                 prompt,
             ],

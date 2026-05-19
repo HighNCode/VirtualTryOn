@@ -17,11 +17,13 @@ class PhotoshootService:
         image1_bytes: bytes,
         image2_bytes: bytes,
         clothing_type: Optional[str] = None,
+        reference_pose: Optional[str] = None,
     ) -> bytes:
         return self._provider.generate_ghost_mannequin(
             image1_bytes=image1_bytes,
             image2_bytes=image2_bytes,
             clothing_type=clothing_type,
+            reference_pose=reference_pose,
         )
 
     def generate_try_on_model(

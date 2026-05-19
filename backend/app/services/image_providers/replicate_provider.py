@@ -40,6 +40,7 @@ class ReplicateProvider(ImageGenerationProvider):
         image1_bytes: bytes,
         image2_bytes: bytes,
         clothing_type: Optional[str] = None,
+        reference_pose: Optional[str] = None,
     ) -> bytes:
         raise NotImplementedError("Replicate provider methods are not implemented yet.")
 

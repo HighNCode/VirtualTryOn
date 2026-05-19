@@ -1629,3 +1629,504 @@
     grid-template-columns: 1fr !important;
   }
 }
+
+/* Customer widget results screen ported from UI/src/components/widget/Step7TryOn.tsx */
+.ovts-modal.is-stage-results {
+  width: min(760px, calc(100vw - 32px)) !important;
+  max-height: calc(100vh - 48px) !important;
+  border-radius: 16px !important;
+}
+
+.ovts-stage--results {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 24px !important;
+  padding: 20px !important;
+}
+
+.ovts-stage--results .ovts-inline-back.is-top {
+  align-self: flex-start !important;
+  gap: 6px !important;
+  margin: 0 !important;
+  color: #6b7280 !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  line-height: 1.2 !important;
+}
+
+.ovts-stage--results .ovts-inline-back.is-top:hover {
+  color: #1a1a1a !important;
+}
+
+.ovts-stage--results .ovts-inline-back svg {
+  width: 14px !important;
+  height: 14px !important;
+}
+
+.ovts-results-stack {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 24px !important;
+}
+
+.ovts-results-section {
+  display: block !important;
+}
+
+.ovts-stage--results .ovts-results-grid {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) !important;
+  gap: 16px !important;
+  align-items: start !important;
+}
+
+.ovts-stage--results .ovts-hero-panel,
+.ovts-stage--results .ovts-side-panel,
+.ovts-stage--results .ovts-heatmap-panel,
+.ovts-stage--results .ovts-fit-panel {
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.ovts-stage--results .ovts-side-panel,
+.ovts-stage--results .ovts-fit-panel,
+.ovts-stage--results .ovts-heatmap-panel {
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.ovts-stage--results .ovts-side-panel,
+.ovts-stage--results .ovts-fit-panel {
+  gap: 12px !important;
+}
+
+.ovts-stage--results .ovts-heatmap-panel {
+  gap: 8px !important;
+}
+
+.ovts-stage--results .ovts-panel-head {
+  margin: 0 0 12px !important;
+}
+
+.ovts-stage--results .ovts-panel-head--inline {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+.ovts-stage--results .ovts-panel-head h3,
+.ovts-stage--results .ovts-panel-head h4 {
+  margin: 0 !important;
+  color: #1a1a1a !important;
+  font-size: 16px !important;
+  font-weight: 700 !important;
+  line-height: 1.25 !important;
+}
+
+.ovts-stage--results .ovts-powered {
+  display: inline-flex !important;
+  align-items: center !important;
+  width: fit-content !important;
+  padding: 2px 10px !important;
+  border: 1px solid #e5e5e5 !important;
+  border-radius: 999px !important;
+  color: #6b7280 !important;
+  background: #ffffff !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  line-height: 1.2 !important;
+}
+
+.ovts-stage--results .ovts-tryon-preview,
+.ovts-stage--results .ovts-image-placeholder,
+.ovts-stage--results .ovts-heatmap-body {
+  width: 100% !important;
+  min-height: 0 !important;
+  height: auto !important;
+  aspect-ratio: 3 / 4 !important;
+  overflow: hidden !important;
+  border: 1px solid #e5e5e5 !important;
+  border-radius: 16px !important;
+  background: #ede8e3 !important;
+}
+
+.ovts-stage--results .ovts-heatmap-body {
+  border-radius: 14px !important;
+  background: #f0f0f0 !important;
+}
+
+.ovts-stage--results .ovts-tryon-preview img,
+.ovts-stage--results .ovts-heatmap-body img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+}
+
+.ovts-stage--results .ovts-studio-box {
+  overflow: hidden !important;
+  border: 1px solid #e5e5e5 !important;
+  border-radius: 14px !important;
+  background: #ffffff !important;
+  box-shadow: none !important;
+}
+
+.ovts-stage--results .ovts-studio-title {
+  padding: 10px 12px !important;
+  border-bottom: 1px solid #f0e8e4 !important;
+  background: #fdf6f4 !important;
+  color: #1a1a1a !important;
+  text-align: center !important;
+  font-size: 14px !important;
+  font-weight: 700 !important;
+  line-height: 1.25 !important;
+}
+
+.ovts-stage--results .ovts-studio-grid {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 8px !important;
+  padding: 10px !important;
+}
+
+.ovts-stage--results .ovts-studio-tile {
+  width: 100% !important;
+  aspect-ratio: 1 / 1 !important;
+  overflow: hidden !important;
+  border: 0 !important;
+  border-radius: 8px !important;
+  background: #e8e4e0 !important;
+  box-shadow: none !important;
+}
+
+.ovts-stage--results .ovts-studio-tile img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+}
+
+.ovts-stage--results .ovts-studio-tile.is-active {
+  outline: 2px solid #e40206 !important;
+  outline-offset: 0 !important;
+}
+
+.ovts-stage--results .ovts-studio-tile--placeholder {
+  background: #e8e4e0 !important;
+}
+
+.ovts-stage--results .ovts-studio-tile--custom {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border: 1px solid #fbd5d5 !important;
+  background: #fdf0f0 !important;
+  opacity: 1 !important;
+}
+
+.ovts-stage--results .ovts-studio-plus {
+  color: #e40206 !important;
+  font-size: 18px !important;
+  font-weight: 400 !important;
+  line-height: 1 !important;
+}
+
+.ovts-stage--results .ovts-studio-actions {
+  display: flex !important;
+  grid-template-columns: none !important;
+  gap: 8px !important;
+  margin: 0 !important;
+}
+
+.ovts-stage--results .ovts-primary--small,
+.ovts-stage--results .ovts-secondary--small {
+  flex: 1 1 0 !important;
+  min-height: 40px !important;
+  padding: 10px 12px !important;
+  border-radius: 10px !important;
+  font-size: 14px !important;
+  font-weight: 700 !important;
+  line-height: 1.2 !important;
+}
+
+.ovts-stage--results .ovts-primary--small {
+  background: linear-gradient(135deg, #7e0175, #e40206) !important;
+}
+
+.ovts-stage--results .ovts-secondary--small {
+  border: 2px solid #e5e5e5 !important;
+  background: #ffffff !important;
+  color: #1a1a1a !important;
+}
+
+.ovts-stage--results .ovts-share-box {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  gap: 10px !important;
+  margin: 0 !important;
+  padding: 12px !important;
+  border: 1px solid #e5e5e5 !important;
+  border-radius: 12px !important;
+  background: #ffffff !important;
+  box-shadow: none !important;
+}
+
+.ovts-stage--results .ovts-share-box > span {
+  margin: 0 !important;
+  color: #6b7280 !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+}
+
+.ovts-stage--results .ovts-share-icons {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 16px !important;
+  margin: 0 !important;
+}
+
+.ovts-stage--results .ovts-share-icon {
+  width: 40px !important;
+  height: 40px !important;
+  border-radius: 8px !important;
+  background: transparent !important;
+  padding: 0 !important;
+  font-size: 23px !important;
+  transition: transform 150ms ease !important;
+}
+
+.ovts-stage--results .ovts-share-icon img {
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+  user-select: none !important;
+  pointer-events: none !important;
+}
+
+.ovts-stage--results .ovts-share-icon:hover {
+  transform: scale(1.1) !important;
+}
+
+.ovts-stage--results .ovts-share-icon.is-facebook {
+  font-size: 30px !important;
+}
+
+.ovts-stage--results .ovts-heatmap-visual {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
+}
+
+.ovts-stage--results .ovts-heatmap-visual > p {
+  margin: 0 !important;
+  color: #9ca3af !important;
+  text-align: center !important;
+  font-size: 12px !important;
+}
+
+.ovts-stage--results .ovts-heatmap-legend {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 16px !important;
+  margin: 0 !important;
+  color: #6b7280 !important;
+  font-size: 12px !important;
+}
+
+.ovts-stage--results .ovts-heatmap-coverage {
+  width: 100% !important;
+  padding: 0 !important;
+  border: 0 !important;
+  color: #9ca3af !important;
+  text-align: center !important;
+  font-size: 12px !important;
+}
+
+.ovts-stage--results .ovts-fit-panel .ovts-panel-head {
+  margin-bottom: 0 !important;
+}
+
+.ovts-stage--results .ovts-size-grid {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 8px !important;
+}
+
+.ovts-stage--results .ovts-size-chip {
+  display: flex !important;
+  flex: 0 0 auto !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 48px !important;
+  height: 48px !important;
+  min-height: 48px !important;
+  padding: 0 !important;
+  border: 2px solid #e5e5e5 !important;
+  border-radius: 10px !important;
+  background: #ffffff !important;
+  color: #1a1a1a !important;
+  font-weight: 700 !important;
+  transition: all 150ms ease !important;
+}
+
+.ovts-stage--results .ovts-size-chip strong {
+  color: inherit !important;
+  font-size: 14px !important;
+  line-height: 1 !important;
+}
+
+.ovts-stage--results .ovts-size-chip span {
+  margin-top: 2px !important;
+  color: #e40206 !important;
+  font-size: 11px !important;
+  line-height: 1 !important;
+}
+
+.ovts-stage--results .ovts-size-chip.is-active {
+  border-color: transparent !important;
+  background: linear-gradient(135deg, #7e0175, #e40206) !important;
+  color: #ffffff !important;
+}
+
+.ovts-stage--results .ovts-size-chip.is-active span {
+  color: rgba(255, 255, 255, 0.85) !important;
+}
+
+.ovts-stage--results .ovts-fit-confidence {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 6px !important;
+  margin: 0 !important;
+}
+
+.ovts-stage--results .ovts-fit-confidence__head {
+  display: flex !important;
+  justify-content: space-between !important;
+  color: #1a1a1a !important;
+  font-size: 14px !important;
+}
+
+.ovts-stage--results .ovts-fit-confidence__head span {
+  font-weight: 600 !important;
+}
+
+.ovts-stage--results .ovts-fit-confidence__head strong {
+  font-size: 14px !important;
+  font-weight: 700 !important;
+}
+
+.ovts-stage--results .ovts-fit-bar {
+  width: 100% !important;
+  height: 10px !important;
+  overflow: hidden !important;
+  border-radius: 999px !important;
+  background: #f0f0f0 !important;
+}
+
+.ovts-stage--results .ovts-recommendation-card {
+  display: grid !important;
+  gap: 2px !important;
+  margin: 0 !important;
+  padding: 10px 12px !important;
+  border-radius: 12px !important;
+  background: #f5f5f5 !important;
+}
+
+.ovts-stage--results .ovts-recommendation-card strong {
+  color: #1a1a1a !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+}
+
+.ovts-stage--results .ovts-recommendation-card span {
+  color: #6b7280 !important;
+  font-size: 11px !important;
+  line-height: 1.45 !important;
+}
+
+.ovts-stage--results .ovts-fit-card {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
+  margin: 0 !important;
+  color: #1a1a1a !important;
+  font-size: 14px !important;
+}
+
+.ovts-stage--results .ovts-fit-row {
+  display: flex !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+  padding: 0 !important;
+}
+
+.ovts-stage--results .ovts-fit-row span {
+  color: #6b7280 !important;
+  font-size: 14px !important;
+}
+
+.ovts-stage--results .ovts-fit-row strong {
+  color: #1a1a1a !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  text-align: right !important;
+}
+
+.ovts-stage--results .ovts-primary--wide[data-action="add-to-cart"] {
+  min-height: 48px !important;
+  padding: 14px 16px !important;
+  border-radius: 12px !important;
+  background: linear-gradient(135deg, #7e0175 0%, #bc174a 55%, #e40206 100%) !important;
+  color: #ffffff !important;
+  font-size: 14px !important;
+  font-weight: 700 !important;
+}
+
+.ovts-stage--results .ovts-size-why {
+  display: grid !important;
+  gap: 2px !important;
+  margin: 0 !important;
+  padding: 10px 12px !important;
+  border: 1px solid #e5e5e5 !important;
+  border-radius: 12px !important;
+  background: #ffffff !important;
+  box-shadow: none !important;
+}
+
+.ovts-stage--results .ovts-size-why h4 {
+  margin: 0 !important;
+  color: #1a1a1a !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  line-height: 1.3 !important;
+}
+
+.ovts-stage--results .ovts-size-why p {
+  margin: 0 !important;
+  color: #6b7280 !important;
+  font-size: 11px !important;
+  line-height: 1.45 !important;
+}
+
+.ovts-stage--results .ovts-coverage-note {
+  margin: 0 !important;
+  color: #9ca3af !important;
+  font-size: 11px !important;
+}
+
+@media (max-width: 720px) {
+  .ovts-modal.is-stage-results {
+    width: min(100%, calc(100vw - 32px)) !important;
+  }
+}
+
+@media (max-width: 560px) {
+  .ovts-stage--results .ovts-results-grid {
+    grid-template-columns: 1fr !important;
+  }
+}

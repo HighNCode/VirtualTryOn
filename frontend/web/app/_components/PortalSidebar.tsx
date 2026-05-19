@@ -3,9 +3,16 @@
 import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
-import { BarChart3, Camera, LayoutDashboard, LogOut, Settings2, Sparkles } from "lucide-react";
+import { BarChart3, Camera, LayoutDashboard, Settings2, Sparkles } from "lucide-react";
 import { EmbeddedLink, useEmbeddedRouter } from "./EmbeddedNavigation";
-import { getDefaultStoreId, getOnboardingStatus } from "../../lib/photoshootApi";
+import {
+  getBillingStatus,
+  getBillingUsageSummary,
+  getDefaultStoreId,
+  getOnboardingStatus,
+  type BillingStatusResponse,
+  type BillingUsageSummaryResponse
+} from "../../lib/photoshootApi";
 
 type MainSection = "overview" | "analytics" | "settings" | "ai";
 type SettingsSection = "custom" | "privacy" | "billing" | "support";
@@ -24,11 +31,35 @@ const navItems = [
   { section: "ai" as MainSection, href: "/ai-product-shoot", label: "AI Product Shoot", icon: Camera },
 ];
 
+function formatPlanName(planName?: string | null): string {
+  if (!planName) {
+    return "Current Plan";
+  }
+
+  return (
+    planName
+      .split(/[_\s-]+/)
+      .filter(Boolean)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(" ") + " Plan"
+  );
+}
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, value));
+}
+
 export default function PortalSidebar({ activeMain }: PortalSidebarProps) {
   const router = useEmbeddedRouter();
   const pathname = usePathname();
   const storeId = useMemo(() => getDefaultStoreId(), []);
   const [showLogoFallback, setShowLogoFallback] = useState(false);
+  const [billingStatus, setBillingStatus] = useState<BillingStatusResponse | null>(null);
+  const [usageSummary, setUsageSummary] = useState<BillingUsageSummaryResponse | null>(null);
+  const [billingError, setBillingError] = useState(false);
 
   useEffect(() => {
     if (!storeId) return;
@@ -45,6 +76,43 @@ export default function PortalSidebar({ activeMain }: PortalSidebarProps) {
 
     return () => controller.abort();
   }, [pathname, router, storeId]);
+
+  useEffect(() => {
+    if (!storeId) {
+      return;
+    }
+
+    const controller = new AbortController();
+    setBillingError(false);
+
+    Promise.all([
+      getBillingStatus({ storeId, signal: controller.signal }),
+      getBillingUsageSummary({ storeId, signal: controller.signal })
+    ])
+      .then(([status, usage]) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setBillingStatus(status);
+        setUsageSummary(usage);
+      })
+      .catch(() => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setBillingError(true);
+        setBillingStatus(null);
+        setUsageSummary(null);
+      });
+
+    return () => controller.abort();
+  }, [storeId]);
+
+  const includedUsed = usageSummary?.consumed_credits ?? 0;
+  const includedLimit = usageSummary?.included_credits ?? 0;
+  const remainingCredits = usageSummary?.remaining_included_credits ?? null;
+  const usagePercent = usageSummary ? clampPercent((includedUsed / Math.max(includedLimit, 1)) * 100) : 0;
+  const planLabel = formatPlanName(billingStatus?.plan_name);
 
   return (
     <aside
@@ -125,7 +193,7 @@ export default function PortalSidebar({ activeMain }: PortalSidebarProps) {
         })}
       </nav>
 
-      {/* Plan card + footer action */}
+      {/* Plan usage */}
       <div style={{ padding: "0 12px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
         <div
           style={{
@@ -135,31 +203,29 @@ export default function PortalSidebar({ activeMain }: PortalSidebarProps) {
           }}
         >
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: "#7E0175" }}>Pro Plan</span>
-            <span style={{ fontSize: 10, color: "#6b7280" }}>340/500</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#7E0175" }}>
+              {billingError ? "Plan unavailable" : planLabel}
+            </span>
+            <span style={{ fontSize: 10, color: "#6b7280" }}>
+              {usageSummary ? `${includedUsed}/${includedLimit}` : "—"}
+            </span>
           </div>
           <div style={{ width: "100%", borderRadius: 999, overflow: "hidden", height: 5, background: "#f3f4f6" }}>
             <motion.div
               style={{ height: "100%", borderRadius: 999, background: "linear-gradient(90deg, #7E0175, #E40206)" }}
               initial={{ width: 0 }}
-              animate={{ width: "68%" }}
+              animate={{ width: `${usagePercent}%` }}
               transition={{ duration: 0.8, ease: "easeOut" }}
             />
           </div>
           <div style={{ marginTop: 8, fontSize: 10, color: "#6b7280" }}>
-            160 try-ons remaining
+            {billingError
+              ? "Unable to load usage"
+              : remainingCredits === null
+                ? "Loading usage..."
+                : `${remainingCredits} try-ons remaining`}
           </div>
         </div>
-
-        <button
-          type="button"
-          style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "8px 12px", borderRadius: 10, fontSize: 13, fontWeight: 500, width: "100%", color: "#dc2626", background: "#fff1f1", border: "none", cursor: "pointer" }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = "#ffe4e4")}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "#fff1f1")}
-        >
-          <LogOut size={15} />
-          Sign Out
-        </button>
       </div>
     </aside>
   );
