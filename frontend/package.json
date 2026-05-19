@@ -13,7 +13,13 @@
     "lint:web": "npm run lint --workspace web",
     "info": "shopify app info",
     "generate": "shopify app generate",
-    "deploy": "shopify app deploy"
+    "deploy": "shopify app deploy",
+    "widget:version:sync": "node scripts/widget-version-sync.mjs",
+    "widget:version:bump": "node scripts/widget-version-bump.mjs",
+    "widget:deploy": "shopify app deploy",
+    "widget:verify": "node scripts/widget-verify-live.mjs",
+    "widget:guard": "node scripts/widget-version-guard.mjs",
+    "widget:release": "npm run widget:version:bump && npm run widget:deploy && node scripts/widget-release-instructions.mjs"
   },
   "dependencies": {},
   "trustedDependencies": [

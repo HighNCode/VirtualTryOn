@@ -1,0 +1,39 @@
+name: Widget Version Guard
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Resolve base ref
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "BASE_SHA=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_ENV"
+          elif [[ -n "${{ github.event.before }}" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+            echo "BASE_SHA=${{ github.event.before }}" >> "$GITHUB_ENV"
+          else
+            echo "BASE_SHA=HEAD~1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run widget version guard
+        shell: bash
+        run: |
+          CHANGED_FILES="$(git diff --name-only "$BASE_SHA...HEAD" | tr '\n' ';')"
+          node frontend/scripts/widget-version-guard.mjs --base "$BASE_SHA" --changed-files "$CHANGED_FILES"

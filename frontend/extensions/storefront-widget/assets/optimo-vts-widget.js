@@ -1,4 +1,7 @@
 (function () {
+  const OVTS_WIDGET_BUILD = "1.0.0";
+  window.__OVTS_WIDGET_BUILD__ = OVTS_WIDGET_BUILD;
+
   const STORAGE_KEY = "optimo-vts-user-id";
   const FLOW_SNAPSHOT_TTL_MS = 60 * 60 * 1000;
   const FLOW_SNAPSHOT_PREFIX = "optimo-vts-flow";

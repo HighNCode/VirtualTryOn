@@ -50,6 +50,15 @@ Billing plan selection and billing-status reads use Shopify Direct API access fr
 - `SHOPIFY_WEBHOOK_FORWARD_URL` is required in production; verified webhook payloads are forwarded to that backend endpoint.
 - Deploy `shopify.app.toml` with `shopify app deploy` after changing webhook or Direct API settings.
 
+## Storefront Widget Ownership
+
+- Production storefront widget code is owned by `extensions/storefront-widget`.
+- The customer widget is **not** deployed from `web`/Vercel.
+- Deployment split:
+  - Merchant UI (`web`) -> Vercel deploy.
+  - Storefront widget (`extensions/storefront-widget`) -> `shopify app deploy`.
+- Use `npm run widget:release` from `frontend` for widget-only releases.
+
 ## Shopify CLI
 
 This workspace is registered as the app's web process in `web/shopify.web.toml`.
