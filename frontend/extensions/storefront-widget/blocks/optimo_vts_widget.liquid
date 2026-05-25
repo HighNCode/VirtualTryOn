@@ -1,7 +1,7 @@
 {% liquid
   assign proxy_base = routes.root_url | append: 'apps/optimo-vts'
   assign selected_variant = product.selected_or_first_available_variant
-  assign widget_version = '1.0.0'
+  assign widget_version = '1.0.1'
 %}
 
 {{ 'optimo-vts-widget.css' | asset_url | append: '?v=' | append: widget_version | stylesheet_tag }}
