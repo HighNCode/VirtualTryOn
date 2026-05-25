@@ -42,6 +42,33 @@ ERROR_CODE_TRYON_PRODUCT_IMAGE_INVALID = "TRYON_PRODUCT_IMAGE_INVALID"
 ERROR_CODE_TRYON_GENERATION_FAILED = "TRYON_GENERATION_FAILED"
 
 
+def _cache_version_token() -> str:
+    value = (settings.TRYON_CACHE_VERSION or "v1").strip()
+    return value or "v1"
+
+
+def _cache_version_marker() -> str:
+    return f"cv={_cache_version_token()}"
+
+
+def _annotate_result_cache_key(cache_key: Optional[str]) -> Optional[str]:
+    if not cache_key:
+        return cache_key
+    marker = _cache_version_marker()
+    if marker in cache_key:
+        return cache_key
+    return f"{cache_key}|{marker}"
+
+
+def _is_cache_version_compatible(record: Optional[TryOn]) -> bool:
+    if not record:
+        return False
+    result_cache_key = (record.result_cache_key or "").strip()
+    if not result_cache_key:
+        return False
+    return _cache_version_marker() in result_cache_key
+
+
 def _error_code_from_message(message: Optional[str]) -> Optional[str]:
     raw = (message or "").strip()
     if raw.startswith("[") and "]" in raw:
@@ -136,7 +163,10 @@ def _read_library_image_bytes(*, object_path: Optional[str], image_path: Optiona
 
 def _build_tryon_reuse_key(store_id: str, user_identifier: str, product_id: str, measurement_id: Optional[str]) -> str:
     measurement_part = measurement_id or "none"
-    return f"user:{store_id}:{user_identifier}:product:{product_id}:measurement:{measurement_part}:latest_tryon"
+    return (
+        f"user:{store_id}:{user_identifier}:product:{product_id}:measurement:{measurement_part}:"
+        f"latest_tryon:{_cache_version_token()}"
+    )
 
 
 async def get_session_from_header(
@@ -245,7 +275,7 @@ def _run_tryon_generation(
 
         # Update DB record
         record.processing_status = "completed"
-        record.result_cache_key = cache_key
+        record.result_cache_key = _annotate_result_cache_key(cache_key)
         record.result_object_path = archived_object_path
         record.processing_time_seconds = round(elapsed, 2)
         record.completed_at = datetime.utcnow()
@@ -376,7 +406,7 @@ def _run_studio_generation(
                 )
 
         record.processing_status = "completed"
-        record.result_cache_key = cache_key
+        record.result_cache_key = _annotate_result_cache_key(cache_key)
         record.result_object_path = archived_object_path
         record.processing_time_seconds = round(elapsed, 2)
         record.completed_at = datetime.utcnow()
@@ -539,7 +569,7 @@ async def generate_studio_tryon(
                 processing_status="completed",
             ).order_by(TryOn.created_at.desc()).first()
 
-            if existing:
+            if existing and _is_cache_version_compatible(existing):
                 logger.info(
                     "studio_cache_hit event=studio_cache_hit parent=%s bg=%s try_on_id=%s",
                     request.try_on_id,
@@ -560,7 +590,7 @@ async def generate_studio_tryon(
             studio_background_id=str(request.studio_background_id),
             processing_status="completed",
         ).order_by(TryOn.created_at.desc()).first()
-        if existing:
+        if existing and _is_cache_version_compatible(existing):
             cached_existing = await cache.get_tryon_result(str(existing.try_on_id))
             if cached_existing:
                 logger.info(
@@ -747,6 +777,7 @@ async def generate_tryon(
                 existing = db.query(TryOn).filter_by(try_on_id=existing_tryon_id).first()
                 if (
                     existing
+                    and _is_cache_version_compatible(existing)
                     and existing.processing_status == "completed"
                     and str(existing.product_id) == str(product.product_id)
                     and str(existing.measurement_id) == str(session.measurement_id)
@@ -775,6 +806,9 @@ async def generate_tryon(
                 .order_by(TryOn.created_at.desc())
                 .first()
             )
+            if existing and existing.created_at and existing.created_at >= reuse_cutoff:
+                if not _is_cache_version_compatible(existing):
+                    existing = None
             if existing and existing.created_at and existing.created_at >= reuse_cutoff:
                 cached_payload = await cache.get_tryon_result(str(existing.try_on_id))
                 if cached_payload:

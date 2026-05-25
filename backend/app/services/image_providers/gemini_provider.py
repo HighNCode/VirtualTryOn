@@ -18,6 +18,7 @@ from app.config import Settings
 from app.services.image_providers.base import ImageGenerationProvider
 from app.services.image_providers.hardening import (
     ImageEchoError,
+    build_studio_prompt,
     build_tryon_prompt,
     compute_reference_hashes,
     download_and_validate_product_image,
@@ -93,12 +94,7 @@ class GeminiProvider(ImageGenerationProvider):
         studio_image: bytes,
     ) -> bytes:
         start = time.time()
-        prompt = (
-            "Place the person from the first image into the environment/background "
-            "shown in the second image. Keep the person's appearance and clothing exactly the same from the first image. "
-            "Change the background, lighting, objects and pose of the person to match "
-            "the environment in the second image. The result should look like a natural professional photograph."
-        )
+        prompt = build_studio_prompt(strict=False)
 
         logger.info("Calling Vertex AI for studio look, model=%s", self._model)
 

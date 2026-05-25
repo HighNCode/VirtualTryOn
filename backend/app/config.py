@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     # Generated try-on and studio results in Redis
     TRYON_RESULT_TTL_SECONDS: int = 3600  # 1 hour
     STUDIO_CACHE_TTL: int = 3600  # 1 hour for studio look results
+    TRYON_CACHE_VERSION: str = "v2"
+    RESULT_IMAGE_CACHE_MAX_BYTES: int = 3670016  # 3.5MB
+    RESULT_IMAGE_FALLBACK_MAX_SIDE: int = 1536
+    RESULT_IMAGE_FALLBACK_JPEG_QUALITY: int = 92
     SESSION_TTL: int = 86400  # 24 hours
 
     # Shopify

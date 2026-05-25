@@ -389,7 +389,7 @@ export default function ModelSwapPage() {
                 </>
               }
               subtitle="Seamless, diverse, and customized visuals, perfect for any market."
-              videoSrc="/Model Swap.mp4"
+              videoSrc="/model-swap.mp4"
               onFileSelected={applyOriginalUploadFile}
               onSelectStore={() => setStorePickerOpen(true)}
             />

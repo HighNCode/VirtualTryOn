@@ -21,6 +21,23 @@ class ShopifyManagedPricingError(Exception):
     """Raised when Shopify rejects Billing API charge creation for managed-pricing apps."""
 
 
+class ShopifyBillingUserErrors(Exception):
+    """Raised when Shopify Billing API returns userErrors for subscription creation."""
+
+    def __init__(self, *, billing_interval: str, errors: List[Dict[str, Any]]):
+        self.billing_interval = billing_interval
+        self.errors = errors or []
+
+        messages: List[str] = []
+        for entry in self.errors:
+            message = str((entry or {}).get("message", "")).strip()
+            if message:
+                messages.append(message)
+
+        self.message = "; ".join(messages) if messages else "Shopify rejected the billing payload."
+        super().__init__(self.message)
+
+
 class ShopifyService:
     """Service for interacting with Shopify API"""
 
@@ -646,8 +663,60 @@ class ShopifyService:
             Exception: If Shopify returns userErrors
         """
         shopify_interval = "ANNUAL" if billing_interval == "annual" else "EVERY_30_DAYS"
+        variables = self._build_subscription_create_variables(
+            plan_name=plan_name,
+            price_usd=price_usd,
+            return_url=return_url,
+            shopify_interval=shopify_interval,
+            trial_days=trial_days,
+            test=test,
+            is_upgrade=is_upgrade,
+            usage_cap_usd=usage_cap_usd,
+            overage_terms=overage_terms,
+        )
 
-        mutation = """
+        return await self._execute_subscription_create_mutation(
+            variables=variables,
+            billing_interval=billing_interval,
+            structured_errors=False,
+        )
+
+    async def billing_create_subscription_annual(
+        self,
+        *,
+        plan_name: str,
+        price_usd: float,
+        return_url: str,
+        trial_days: int = 0,
+        test: bool = False,
+        is_upgrade: bool = False,
+        usage_cap_usd: float = 500.0,
+        overage_terms: str = "Usage-based overage charges apply",
+    ) -> dict:
+        """
+        Create an ANNUAL recurring subscription (with usage billing line item).
+        """
+        variables = self._build_subscription_create_variables(
+            plan_name=plan_name,
+            price_usd=price_usd,
+            return_url=return_url,
+            shopify_interval="ANNUAL",
+            trial_days=trial_days,
+            test=test,
+            is_upgrade=is_upgrade,
+            usage_cap_usd=usage_cap_usd,
+            overage_terms=overage_terms,
+        )
+        self._validate_annual_subscription_variables(variables)
+
+        return await self._execute_subscription_create_mutation(
+            variables=variables,
+            billing_interval="annual",
+            structured_errors=True,
+        )
+
+    def _build_subscription_create_mutation(self) -> str:
+        return """
         mutation appSubscriptionCreate(
           $name: String!
           $lineItems: [AppSubscriptionLineItemInput!]!
@@ -681,7 +750,20 @@ class ShopifyService:
           }
         }"""
 
-        variables = {
+    def _build_subscription_create_variables(
+        self,
+        *,
+        plan_name: str,
+        price_usd: float,
+        return_url: str,
+        shopify_interval: str,
+        trial_days: int,
+        test: bool,
+        is_upgrade: bool,
+        usage_cap_usd: float,
+        overage_terms: str,
+    ) -> Dict[str, Any]:
+        variables: Dict[str, Any] = {
             "name": plan_name,
             "returnUrl": return_url,
             "test": test,
@@ -713,23 +795,126 @@ class ShopifyService:
         }
         if is_upgrade:
             variables["replacementBehavior"] = "APPLY_IMMEDIATELY"
+        return variables
 
+    def _validate_annual_subscription_variables(self, variables: Dict[str, Any]) -> None:
+        errors: List[Dict[str, Any]] = []
+
+        trial_days = variables.get("trialDays")
+        if trial_days is not None and (not isinstance(trial_days, int) or trial_days < 0):
+            errors.append(
+                {
+                    "field": ["trialDays"],
+                    "message": "Annual billing payload has invalid trialDays; expected a non-negative integer.",
+                }
+            )
+
+        replacement_behavior = variables.get("replacementBehavior")
+        if replacement_behavior is not None and replacement_behavior not in {
+            "APPLY_IMMEDIATELY",
+            "APPLY_ON_NEXT_BILLING_CYCLE",
+        }:
+            errors.append(
+                {
+                    "field": ["replacementBehavior"],
+                    "message": "Annual billing payload has unsupported replacementBehavior.",
+                }
+            )
+
+        line_items = variables.get("lineItems")
+        if not isinstance(line_items, list) or len(line_items) < 2:
+            errors.append(
+                {
+                    "field": ["lineItems"],
+                    "message": "Annual billing payload must include recurring and usage billing line items.",
+                }
+            )
+        else:
+            recurring_details = next(
+                (
+                    details
+                    for item in line_items
+                    if isinstance(item, dict)
+                    for details in [((item.get("plan", {}) or {}).get("appRecurringPricingDetails"))]
+                    if details
+                ),
+                None,
+            )
+            usage_details = next(
+                (
+                    details
+                    for item in line_items
+                    if isinstance(item, dict)
+                    for details in [((item.get("plan", {}) or {}).get("appUsagePricingDetails"))]
+                    if details
+                ),
+                None,
+            )
+
+            if not recurring_details:
+                errors.append(
+                    {
+                        "field": ["lineItems", "appRecurringPricingDetails"],
+                        "message": "Annual billing payload is missing recurring pricing details.",
+                    }
+                )
+            elif recurring_details.get("interval") != "ANNUAL":
+                errors.append(
+                    {
+                        "field": ["lineItems", "appRecurringPricingDetails", "interval"],
+                        "message": "Annual billing payload must use ANNUAL recurring interval.",
+                    }
+                )
+
+            if not usage_details:
+                errors.append(
+                    {
+                        "field": ["lineItems", "appUsagePricingDetails"],
+                        "message": "Annual billing payload is missing usage pricing details.",
+                    }
+                )
+
+        if errors:
+            raise ShopifyBillingUserErrors(billing_interval="annual", errors=errors)
+
+    def _raise_billing_user_errors(
+        self,
+        errors: List[Dict[str, Any]],
+        *,
+        billing_interval: str,
+        structured_errors: bool,
+    ) -> None:
+        managed_pricing_error = next(
+            (
+                (entry or {}).get("message", "")
+                for entry in errors
+                if "managed pricing apps cannot use the billing api" in str((entry or {}).get("message", "")).lower()
+            ),
+            None,
+        )
+        if managed_pricing_error:
+            raise ShopifyManagedPricingError(managed_pricing_error)
+        if not structured_errors:
+            raise Exception(f"Shopify billing error: {errors}")
+        raise ShopifyBillingUserErrors(billing_interval=billing_interval, errors=errors)
+
+    async def _execute_subscription_create_mutation(
+        self,
+        *,
+        variables: Dict[str, Any],
+        billing_interval: str,
+        structured_errors: bool,
+    ) -> Dict[str, Any]:
+        mutation = self._build_subscription_create_mutation()
         result = await self._graphql_request(mutation, variables)
         payload = result["data"]["appSubscriptionCreate"]
 
         if payload.get("userErrors"):
-            errors = payload["userErrors"]
-            managed_pricing_error = next(
-                (
-                    (entry or {}).get("message", "")
-                    for entry in errors
-                    if "managed pricing apps cannot use the billing api" in str((entry or {}).get("message", "")).lower()
-                ),
-                None,
+            self._raise_billing_user_errors(
+                payload["userErrors"],
+                billing_interval=billing_interval,
+                structured_errors=structured_errors,
             )
-            if managed_pricing_error:
-                raise ShopifyManagedPricingError(managed_pricing_error)
-            raise Exception(f"Shopify billing error: {errors}")
 
         usage_line_item_id = None
         for line_item in payload.get("appSubscription", {}).get("lineItems", []):

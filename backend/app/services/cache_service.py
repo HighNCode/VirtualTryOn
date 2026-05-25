@@ -24,6 +24,10 @@ class CacheService:
         self.photo_ttl = settings.PHOTO_CACHE_TTL_SECONDS
         self.measurement_ttl = settings.MEASUREMENT_CACHE_TTL_SECONDS
         self.tryon_result_ttl = settings.TRYON_RESULT_TTL_SECONDS
+        self.tryon_cache_version = (settings.TRYON_CACHE_VERSION or "v1").strip() or "v1"
+        self.result_cache_max_bytes = settings.RESULT_IMAGE_CACHE_MAX_BYTES
+        self.result_fallback_max_side = settings.RESULT_IMAGE_FALLBACK_MAX_SIDE
+        self.result_fallback_jpeg_quality = settings.RESULT_IMAGE_FALLBACK_JPEG_QUALITY
 
     async def store_image(
         self,
@@ -135,9 +139,9 @@ class CacheService:
         Returns:
             Cache key
         """
-        cache_key = f"studio:{parent_try_on_id}:{studio_background_id}"
+        cache_key = self._studio_cache_key(parent_try_on_id, studio_background_id)
 
-        compressed = self._compress_image(result_image)
+        compressed = self._prepare_result_image_for_cache(result_image)
         studio_ttl = settings.TRYON_RESULT_TTL_SECONDS or settings.STUDIO_CACHE_TTL
         success = self.redis.set(cache_key, compressed, studio_ttl)
 
@@ -153,7 +157,7 @@ class CacheService:
         studio_background_id: str,
     ) -> Optional[bytes]:
         """Retrieve cached studio result for a parent+background combo."""
-        cache_key = f"studio:{parent_try_on_id}:{studio_background_id}"
+        cache_key = self._studio_cache_key(parent_try_on_id, studio_background_id)
         compressed = self.redis.get(cache_key)
 
         if not compressed:
@@ -178,7 +182,7 @@ class CacheService:
         """
         cache_key = f"tryon:{try_on_id}"
 
-        compressed = self._compress_image(result_image)
+        compressed = self._prepare_result_image_for_cache(result_image)
         success = self.redis.set(cache_key, compressed, self.tryon_result_ttl)
 
         if not success:
@@ -213,7 +217,7 @@ class CacheService:
             Cache key
         """
         cache_key = f"photoshoot:{job_id}"
-        compressed = self._compress_image(result_image)
+        compressed = self._prepare_result_image_for_cache(result_image)
         success = self.redis.set(cache_key, compressed, self.tryon_result_ttl)
         if success:
             logger.info(f"Photoshoot result stored: {cache_key}")
@@ -264,12 +268,36 @@ class CacheService:
 
         return None
 
-    def _compress_image(self, image_data: bytes) -> bytes:
+    def _prepare_result_image_for_cache(self, image_data: bytes) -> bytes:
+        """
+        Keep generated result quality by default, only compressing when payload is too large.
+        """
+        if not image_data:
+            return image_data
+
+        if len(image_data) <= self.result_cache_max_bytes:
+            return image_data
+
+        logger.info(
+            "Result image exceeds cache byte threshold, applying fallback compression: bytes=%s threshold=%s",
+            len(image_data),
+            self.result_cache_max_bytes,
+        )
+        return self._compress_image(
+            image_data,
+            max_size=self.result_fallback_max_side,
+            quality=self.result_fallback_jpeg_quality,
+        )
+
+    def _studio_cache_key(self, parent_try_on_id: str, studio_background_id: str) -> str:
+        return f"studio:{self.tryon_cache_version}:{parent_try_on_id}:{studio_background_id}"
+
+    def _compress_image(self, image_data: bytes, *, max_size: int = 1024, quality: int = 85) -> bytes:
         """
         Compress image to reduce Redis memory usage
 
-        - Resize to max 1024px on longest side
-        - Convert to JPEG with quality 85
+        - Resize to max_size on longest side
+        - Convert to JPEG with configured quality
         - Optimize for storage
 
         Args:
@@ -281,8 +309,7 @@ class CacheService:
         try:
             img = Image.open(BytesIO(image_data))
 
-            # Resize if too large (max 1024px on longest side)
-            max_size = 1024
+            # Resize if too large (max_size on longest side)
             if max(img.size) > max_size:
                 ratio = max_size / max(img.size)
                 new_size = tuple(int(dim * ratio) for dim in img.size)
@@ -294,7 +321,7 @@ class CacheService:
 
             # Save as JPEG with compression
             output = BytesIO()
-            img.save(output, format='JPEG', quality=85, optimize=True)
+            img.save(output, format='JPEG', quality=quality, optimize=True)
 
             compressed_data = output.getvalue()
 

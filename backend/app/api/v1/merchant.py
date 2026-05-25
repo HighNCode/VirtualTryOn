@@ -66,7 +66,11 @@ from app.models.schemas import (
     WidgetSessionCreateRequest,
 )
 from app.api.v1.sessions import create_or_resume_session_for_product
-from app.services.shopify_service import ShopifyService, ShopifyManagedPricingError
+from app.services.shopify_service import (
+    ShopifyBillingUserErrors,
+    ShopifyManagedPricingError,
+    ShopifyService,
+)
 from app.services.customer_login_policy import (
     customer_login_required_message,
     is_customer_logged_in,
@@ -915,20 +919,26 @@ async def create_subscription(
             action_label="billing management",
         )
         svc = ShopifyService(store.shopify_domain, access_token)
-        result = await svc.billing_create_subscription(
-            plan_name=plan.display_name,
-            price_usd=price,
-            return_url=body.return_url,
-            billing_interval=body.billing_interval,
-            trial_days=trial_days,
-            test=is_test,
-            is_upgrade=is_upgrade,
-            usage_cap_usd=float(settings.OVERAGE_USAGE_CAP_USD),
-            overage_terms=(
+        billing_kwargs = {
+            "plan_name": plan.display_name,
+            "price_usd": price,
+            "return_url": body.return_url,
+            "trial_days": trial_days,
+            "test": is_test,
+            "is_upgrade": is_upgrade,
+            "usage_cap_usd": float(settings.OVERAGE_USAGE_CAP_USD),
+            "overage_terms": (
                 f"${float(plan.overage_usd_per_tryon):.3f} per AI generation "
                 f"({settings.CREDITS_PER_GENERATION} credits per generation)."
             ),
-        )
+        }
+        if body.billing_interval == "annual":
+            result = await svc.billing_create_subscription_annual(**billing_kwargs)
+        else:
+            result = await svc.billing_create_subscription(
+                billing_interval=body.billing_interval,
+                **billing_kwargs,
+            )
     except ShopifyManagedPricingError as exc:
         logger.error("Managed pricing blocked Billing API for store %s: %s", store.store_id, exc)
         raise HTTPException(
@@ -937,6 +947,22 @@ async def create_subscription(
                 "Shopify rejected Billing API charge creation because this app is currently on Managed Pricing. "
                 "Switch the app to Manual billing with API in Shopify Partner Dashboard, then retry."
             ),
+        )
+    except ShopifyBillingUserErrors as exc:
+        logger.error(
+            "Shopify billing payload rejected for store %s interval=%s: %s",
+            store.store_id,
+            body.billing_interval,
+            exc.errors,
+        )
+        raise HTTPException(
+            422,
+            detail={
+                "code": "SHOPIFY_BILLING_USER_ERROR",
+                "interval": body.billing_interval,
+                "message": exc.message,
+                "errors": exc.errors,
+            },
         )
     except Exception as exc:
         logger.error(f"Shopify subscription create failed for store {store.store_id}: {exc}")

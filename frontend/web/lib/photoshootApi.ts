@@ -562,6 +562,52 @@ function getErrorDetail(payload: unknown): string | null {
   if (typeof detail === "string" && detail.trim().length > 0) {
     return detail;
   }
+  if (detail && typeof detail === "object") {
+    const nested = detail as {
+      message?: unknown;
+      error?: unknown;
+      detail?: unknown;
+      errors?: unknown;
+    };
+
+    if (typeof nested.message === "string" && nested.message.trim().length > 0) {
+      return nested.message;
+    }
+    if (typeof nested.error === "string" && nested.error.trim().length > 0) {
+      return nested.error;
+    }
+    if (typeof nested.detail === "string" && nested.detail.trim().length > 0) {
+      return nested.detail;
+    }
+    if (Array.isArray(nested.errors) && nested.errors.length > 0) {
+      const firstError = nested.errors[0];
+      if (typeof firstError === "string" && firstError.trim().length > 0) {
+        return firstError;
+      }
+      if (firstError && typeof firstError === "object") {
+        const firstMessage = (firstError as { message?: unknown }).message;
+        if (typeof firstMessage === "string" && firstMessage.trim().length > 0) {
+          return firstMessage;
+        }
+      }
+    }
+  }
+  if (Array.isArray(detail) && detail.length > 0) {
+    const first = detail[0];
+    if (typeof first === "string" && first.trim().length > 0) {
+      return first;
+    }
+    if (first && typeof first === "object") {
+      const validationMsg = (first as { msg?: unknown; message?: unknown }).msg;
+      if (typeof validationMsg === "string" && validationMsg.trim().length > 0) {
+        return validationMsg;
+      }
+      const altMessage = (first as { message?: unknown }).message;
+      if (typeof altMessage === "string" && altMessage.trim().length > 0) {
+        return altMessage;
+      }
+    }
+  }
 
   const error = candidate.error;
   if (typeof error === "string" && error.trim().length > 0) {
@@ -582,57 +628,45 @@ function isStoreNotFoundPayload(payload: unknown): boolean {
 }
 
 function readErrorMessage(status: number, payload: unknown): string {
+  const detail = getErrorDetail(payload);
+  if (detail) {
+    if (/missing session token/i.test(detail)) {
+      return "Missing Shopify session token. Open the app from the Shopify Admin preview link so App Bridge can authenticate requests.";
+    }
+
+    if (/signature verification failed/i.test(detail)) {
+      return "Shopify session token was generated, but the upstream backend rejected its signature. Verify that the backend is configured for the same Shopify app as this frontend.";
+    }
+
+    if (/store not found/i.test(detail)) {
+      return "Backend could not resolve the active Shopify store. Open the app from Shopify Admin so the store context can be provisioned, then retry.";
+    }
+
+    if (/no session token was provided/i.test(detail)) {
+      return "Open the app from Shopify Admin (embedded) so App Bridge can provide a session token, then retry.";
+    }
+
+    if (/session token exchange failed/i.test(detail)) {
+      return "Shopify install/auth is still incomplete for this shop. Complete the backend Shopify auth flow, then retry.";
+    }
+
+    if (/denied access to products/i.test(detail) || /access denied for products field/i.test(detail)) {
+      return "Shopify denied product access. Reinstall or reauthorize the app so read_products scope is approved, then retry sync.";
+    }
+
+    if (/store installation is incomplete/i.test(detail)) {
+      return "The backend store record exists, but Shopify install/auth has not finished yet. Complete the backend Shopify auth flow for this shop before using this action.";
+    }
+
+    return detail;
+  }
+
   if (status === 503) {
     return "Backend service is temporarily unavailable. Keep the local Shopify dev server running and verify the configured API_BASE_URL backend is healthy.";
   }
 
   if (status === 502) {
     return "Frontend proxy could not reach the backend API. Verify API_BASE_URL and your network connection.";
-  }
-
-  if (payload && typeof payload === "object") {
-    const detail = getErrorDetail(payload);
-    if (detail) {
-      if (/missing session token/i.test(detail)) {
-        return "Missing Shopify session token. Open the app from the Shopify Admin preview link so App Bridge can authenticate requests.";
-      }
-
-      if (/signature verification failed/i.test(detail)) {
-        return "Shopify session token was generated, but the upstream backend rejected its signature. Verify that the backend is configured for the same Shopify app as this frontend.";
-      }
-
-      if (/store not found/i.test(detail)) {
-        return "Backend could not resolve the active Shopify store. Open the app from Shopify Admin so the store context can be provisioned, then retry.";
-      }
-
-      if (/no session token was provided/i.test(detail)) {
-        return "Open the app from Shopify Admin (embedded) so App Bridge can provide a session token, then retry.";
-      }
-
-      if (/session token exchange failed/i.test(detail)) {
-        return "Shopify install/auth is still incomplete for this shop. Complete the backend Shopify auth flow, then retry.";
-      }
-
-      if (/denied access to products/i.test(detail) || /access denied for products field/i.test(detail)) {
-        return "Shopify denied product access. Reinstall or reauthorize the app so read_products scope is approved, then retry sync.";
-      }
-
-      if (/store installation is incomplete/i.test(detail)) {
-        return "The backend store record exists, but Shopify install/auth has not finished yet. Complete the backend Shopify auth flow for this shop before using this action.";
-      }
-
-      return detail;
-    }
-
-    if (Array.isArray(detail)) {
-      const first = detail[0];
-      if (first && typeof first === "object" && "msg" in first) {
-        const message = (first as { msg?: unknown }).msg;
-        if (typeof message === "string" && message.trim().length > 0) {
-          return message;
-        }
-      }
-    }
   }
 
   return `API request failed with status ${status}.`;

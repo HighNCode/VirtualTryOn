@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 480" role="img" aria-labelledby="title desc">
+  <title id="title">Front good pose example</title>
+  <desc id="desc">A centered upright person with even shoulders and a green check mark.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f3f9f4"/>
+      <stop offset="100%" stop-color="#e4f6ea"/>
+    </linearGradient>
+  </defs>
+  <rect width="360" height="480" fill="url(#bg)"/>
+  <rect x="28" y="28" width="304" height="424" rx="20" fill="#ffffff" stroke="#d1e7d6"/>
+  <circle cx="180" cy="122" r="30" fill="#d9dee8"/>
+  <rect x="145" y="160" width="70" height="140" rx="30" fill="#d9dee8"/>
+  <rect x="124" y="180" width="16" height="115" rx="8" fill="#d9dee8"/>
+  <rect x="220" y="180" width="16" height="115" rx="8" fill="#d9dee8"/>
+  <rect x="150" y="302" width="22" height="100" rx="11" fill="#d9dee8"/>
+  <rect x="188" y="302" width="22" height="100" rx="11" fill="#d9dee8"/>
+  <path d="M72 382l23 23 44-44" fill="none" stroke="#1f9d49" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="180" y="428" text-anchor="middle" font-family="Arial, sans-serif" font-size="22" fill="#1f9d49">Good Front Pose</text>
+</svg>
