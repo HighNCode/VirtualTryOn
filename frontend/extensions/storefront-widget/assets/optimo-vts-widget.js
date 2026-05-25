@@ -1,5 +1,5 @@
 ﻿(function () {
-  const OVTS_WIDGET_BUILD = "1.0.0";
+  const OVTS_WIDGET_BUILD = "1.0.1";
   window.__OVTS_WIDGET_BUILD__ = OVTS_WIDGET_BUILD;
 
   const STORAGE_KEY = "optimo-vts-user-id";
