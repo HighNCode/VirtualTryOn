@@ -400,7 +400,7 @@ export default function ModelTryOnPage() {
                 </>
               }
               subtitle="AI On-Model Photos Generator, accurate, realistic, and built to convert."
-              videoSrc="/Try-on.mp4"
+              videoSrc="/model-try-on.mp4"
               onFileSelected={applyUploadedProductFile}
               onSelectStore={() => setStorePickerOpen(true)}
             />

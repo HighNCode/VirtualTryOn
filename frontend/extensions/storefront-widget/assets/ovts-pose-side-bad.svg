@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 480" role="img" aria-labelledby="title desc">
+  <title id="title">Side bad pose example</title>
+  <desc id="desc">A bent side profile indicating poor posture with a red cross mark.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fff6f4"/>
+      <stop offset="100%" stop-color="#ffe9e3"/>
+    </linearGradient>
+  </defs>
+  <rect width="360" height="480" fill="url(#bg)"/>
+  <rect x="28" y="28" width="304" height="424" rx="20" fill="#ffffff" stroke="#efd7d0"/>
+  <g transform="translate(198 250) rotate(10)">
+    <ellipse cx="-8" cy="-124" rx="26" ry="30" fill="#e4d4d4"/>
+    <path d="M-24-90c30 6 48 24 44 50v98c-4 30-24 56-52 62h-12v-188h20z" fill="#e4d4d4"/>
+    <rect x="-18" y="-8" width="16" height="122" rx="8" fill="#e4d4d4"/>
+    <rect x="-2" y="112" width="20" height="96" rx="10" fill="#e4d4d4"/>
+  </g>
+  <path d="M72 372l58 58M130 372l-58 58" fill="none" stroke="#d33939" stroke-width="12" stroke-linecap="round"/>
+  <text x="180" y="428" text-anchor="middle" font-family="Arial, sans-serif" font-size="22" fill="#d33939">Bad Side Pose</text>
+</svg>

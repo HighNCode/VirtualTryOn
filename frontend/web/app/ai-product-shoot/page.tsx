@@ -416,7 +416,7 @@ export default function AiProductShootPage() {
                 </>
               }
               subtitle="Professional results in seconds, without studios or mannequins."
-              videoSrc="/Ghost Mannequin.mp4"
+              videoSrc="/ghost-mannequin.mp4"
               onFileSelected={onLandingUpload}
               onSelectStore={openStorePicker}
             />

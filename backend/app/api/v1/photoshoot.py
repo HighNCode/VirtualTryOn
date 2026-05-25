@@ -193,7 +193,7 @@ def _download_image_from_url(*, image_url: str, field_name: str) -> bytes:
 def _require_storage_enabled() -> None:
     storage = get_media_storage_service()
     if not storage.enabled:
-        reason = storage.disabled_reason or "unknown configuration error"
+        reason = getattr(storage, "disabled_reason", None) or "unknown configuration error"
         raise HTTPException(
             500,
             f"Media storage is not configured. Ensure GCS bucket access is available. Reason: {reason}",
@@ -573,7 +573,7 @@ async def start_ghost_mannequin(
     has_image2_url = bool((image2_url or "").strip())
     has_image1_file = bool(image1_file and image1_file.filename)
     has_image2_file = bool(image2_file and image2_file.filename)
-    normalized_reference_id = (reference_id or "").strip()
+    normalized_reference_id = reference_id.strip() if isinstance(reference_id, str) else ""
 
     if has_image1_url == has_image1_file:
         raise HTTPException(422, "Provide exactly one of image1_url or image1_file")
