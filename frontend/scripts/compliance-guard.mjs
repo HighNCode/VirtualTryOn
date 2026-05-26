@@ -33,7 +33,13 @@ if (!/billing_status/.test(appCode)) {
 
 const backendAuth = read("../backend/app/api/v1/auth.py");
 const backendWebhooks = read("../backend/app/api/v1/webhooks.py");
-if (/install_script_tag\(/.test(backendAuth) || /delete_script_tag\(/.test(backendWebhooks)) {
+const backendShopifyService = read("../backend/app/services/shopify_service.py");
+if (
+  /install_script_tag\(/.test(backendAuth) ||
+  /delete_script_tag\(/.test(backendWebhooks) ||
+  /def\s+install_script_tag\(/.test(backendShopifyService) ||
+  /def\s+delete_script_tag\(/.test(backendShopifyService)
+) {
   fail("Legacy script-tag runtime calls detected in backend auth/webhook flows.");
 }
 

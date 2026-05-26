@@ -54,6 +54,7 @@ Use template: `docs/widget-release-checklist-template.md`.
 ## Shopify Submission Artifacts
 
 - `docs/shopify-app-store-submission-checklist.md`
+- `docs/shopify-review-packet.md`
 - `docs/script-tag-deprecation-migration.md`
 - `docs/max-modal-compliance-note.md`
 - `docs/tls-verification-checklist.md`
