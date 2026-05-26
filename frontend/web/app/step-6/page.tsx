@@ -59,6 +59,13 @@ export default function StepSixPage() {
     const planName = params.get("plan");
     const interval = params.get("interval") as BillingCycle | null;
     const chargeId = params.get("charge_id");
+    const billingStatus = (params.get("billing_status") || "").trim().toLowerCase();
+
+    if (billingStatus === "declined" || billingStatus === "cancelled") {
+      setErrorMessage("Shopify billing approval was not completed. Please select a plan and approve the charge to continue.");
+      setIsLoading(false);
+      return;
+    }
 
     if (!planName || !interval || !storeId) { router.push("/dashboard"); return; }
 
@@ -66,7 +73,11 @@ export default function StepSixPage() {
       ? `gid://shopify/AppSubscription/${chargeId}`
       : (window.localStorage.getItem("pending_subscription_id") ?? "");
 
-    if (!shopifySubscriptionId) { router.push("/dashboard"); return; }
+    if (!shopifySubscriptionId) {
+      setErrorMessage("Shopify billing approval was not completed. Please select a plan and approve the charge to continue.");
+      setIsLoading(false);
+      return;
+    }
 
     window.localStorage.removeItem("pending_subscription_id");
     setIsLoading(true);

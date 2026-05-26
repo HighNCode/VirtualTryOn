@@ -120,7 +120,7 @@ export default function DashboardThemeSetupPage() {
                 Try-on Button <span className="step5-title-error">not detected</span> in theme
               </h1>
               <p className="step5-subtitle">
-                Add the app block in the Shopify theme editor.
+                Theme app extension is required. Add the app block in the Shopify theme editor.
                 <br />
                 Then save and return here to verify detection.
               </p>
@@ -150,6 +150,7 @@ export default function DashboardThemeSetupPage() {
           ) : (
             <p className="step5-note">
               Click Add to Theme, add the Optimo VTS Widget app block to your product template, then save and return.
+              Script tags are deprecated and are no longer used.
             </p>
           )}
 
@@ -165,7 +166,7 @@ export default function DashboardThemeSetupPage() {
             ) : (
               <ol className="step5-list">
                 <li>Click Add to Theme above</li>
-                <li>Add the Optimo VTS Widget app block to the product template</li>
+                <li>Add the Optimo VTS Widget app block (theme app extension) to the product template</li>
                 <li>Save changes in Shopify theme editor</li>
                 <li>Return here and click Check again</li>
               </ol>
