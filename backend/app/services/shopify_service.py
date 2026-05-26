@@ -7,7 +7,7 @@ import httpx
 import logging
 import base64
 from typing import Dict, List, Optional, Any
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from app.config import get_settings
 from app.models.database import Store, Product, SizeChart
@@ -40,6 +40,7 @@ class ShopifyBillingUserErrors(Exception):
 
 class ShopifyService:
     """Service for interacting with Shopify API"""
+    ORDERS_LOOKBACK_LIMIT_DAYS = 60
 
     def __init__(self, shop_domain: str, access_token: str):
         self.shop_domain = shop_domain
@@ -586,49 +587,6 @@ class ShopifyService:
 
         return collection_ids
 
-    async def install_script_tag(self, widget_url: str) -> Optional[str]:
-        """
-        Install script tag for widget on Shopify store
-
-        Args:
-            widget_url: URL of the widget JavaScript file
-
-        Returns:
-            Script tag ID
-        """
-        url = f"{self.rest_url}/script_tags.json"
-
-        headers = {
-            "X-Shopify-Access-Token": self.access_token,
-            "Content-Type": "application/json"
-        }
-
-        data = {
-            "script_tag": {
-                "event": "onload",
-                "src": widget_url,
-                "display_scope": "all"
-            }
-        }
-
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=data, headers=headers)
-            response.raise_for_status()
-            result = response.json()
-            return str(result['script_tag']['id'])
-
-    async def delete_script_tag(self, script_tag_id: str):
-        """Delete script tag from Shopify store"""
-        url = f"{self.rest_url}/script_tags/{script_tag_id}.json"
-
-        headers = {
-            "X-Shopify-Access-Token": self.access_token
-        }
-
-        async with httpx.AsyncClient() as client:
-            await client.delete(url, headers=headers)
-
-    # ──────────────────────────────────────────────────────────
     # Billing API
     # ──────────────────────────────────────────────────────────
 
@@ -1030,6 +988,49 @@ class ShopifyService:
             "shop_timezone": result.get("data", {}).get("shop", {}).get("ianaTimezone"),
         }
 
+    async def billing_get_subscription(self, subscription_gid: str) -> dict | None:
+        """
+        Fetch a specific app subscription by ID from currentAppInstallation.
+        Returns None when not found.
+        """
+        query = """
+        query SubscriptionById($id: ID!) {
+          currentAppInstallation {
+            appSubscription(id: $id) {
+              id
+              name
+              status
+              currentPeriodEnd
+              test
+              trialDays
+              createdAt
+              lineItems {
+                id
+                plan {
+                  pricingDetails {
+                    __typename
+                    ... on AppRecurringPricing {
+                      interval
+                      price { amount currencyCode }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
+        result = await self._graphql_request(query, {"id": subscription_gid})
+        payload = (
+            (result or {})
+            .get("data", {})
+            .get("currentAppInstallation", {})
+            .get("appSubscription")
+        )
+        if not payload:
+            return None
+        return payload
+
     async def billing_create_usage_charge(
         self,
         *,
@@ -1093,7 +1094,7 @@ class ShopifyService:
         customer_ids: Optional[List[str]] = None,
     ) -> dict:
         """
-        Fetch orders via Shopify REST Admin API created since `since`.
+        Fetch orders via Shopify GraphQL Admin API created since `since`.
 
         Args:
             since: Fetch orders created at or after this datetime (UTC)
@@ -1107,74 +1108,157 @@ class ShopifyService:
                 "return_count": int   # orders that have at least one refund
             }
         """
-        headers = {
-            "X-Shopify-Access-Token": self.access_token,
-            "Content-Type": "application/json",
+        now_utc = datetime.utcnow()
+        min_allowed = now_utc - timedelta(days=self.ORDERS_LOOKBACK_LIMIT_DAYS)
+        effective_since = since
+        if effective_since.tzinfo is not None:
+            effective_since = effective_since.astimezone(timezone.utc).replace(tzinfo=None)
+        if effective_since < min_allowed:
+            logger.info(
+                "Shopify orders lookback clipped to %s days for shop=%s requested_since=%s clipped_since=%s",
+                self.ORDERS_LOOKBACK_LIMIT_DAYS,
+                self.shop_domain,
+                since.isoformat(),
+                min_allowed.isoformat(),
+            )
+            effective_since = min_allowed
+
+        query = """
+        query OrdersWithRefunds($first: Int!, $after: String, $query: String!) {
+          orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            edges {
+              node {
+                id
+                createdAt
+                currentTotalPriceSet {
+                  shopMoney {
+                    amount
+                  }
+                }
+                customer {
+                  id
+                }
+                lineItems(first: 250) {
+                  edges {
+                    node {
+                      id
+                      quantity
+                      currentQuantity
+                      title
+                      discountedTotalSet {
+                        shopMoney { amount }
+                      }
+                      originalUnitPriceSet {
+                        shopMoney { amount }
+                      }
+                      product { id }
+                      variant { id }
+                    }
+                  }
+                }
+                refunds {
+                  id
+                  refundLineItems(first: 250) {
+                    edges {
+                      node {
+                        quantity
+                        lineItem {
+                          id
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
+        """
 
-        url = (
-            f"{self.rest_url}/orders.json"
-            f"?status=any"
-            f"&created_at_min={since.isoformat()}Z"
-            f"&limit=250"
-            f"&fields=id,customer,total_price,refunds,created_at,line_items"
-        )
-
+        created_at_iso = effective_since.replace(microsecond=0).isoformat() + "Z"
+        search_query = f"created_at:>={created_at_iso} status:any"
         all_orders: List[dict] = []
+        cursor: Optional[str] = None
+        while True:
+            variables = {"first": 100, "after": cursor, "query": search_query}
+            result = await self._graphql_request(query, variables)
+            orders_payload = (result.get("data", {}) or {}).get("orders", {}) or {}
+            edges = orders_payload.get("edges", []) or []
+            for edge in edges:
+                node = (edge or {}).get("node", {}) or {}
+                customer = node.get("customer") or {}
+                normalized_line_items: List[dict] = []
+                line_edges = ((node.get("lineItems") or {}).get("edges") or [])
+                for line_edge in line_edges:
+                    line_item = (line_edge or {}).get("node", {}) or {}
+                    total_price = (
+                        ((line_item.get("discountedTotalSet") or {}).get("shopMoney") or {}).get("amount")
+                        or "0.00"
+                    )
+                    unit_price = (
+                        ((line_item.get("originalUnitPriceSet") or {}).get("shopMoney") or {}).get("amount")
+                        or "0.00"
+                    )
+                    quantity = int(line_item.get("quantity") or 0)
+                    try:
+                        total_discount = max((float(unit_price) * quantity) - float(total_price), 0.0)
+                    except Exception:
+                        total_discount = 0.0
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            while url:
-                response = await client.get(url, headers=headers)
-                response.raise_for_status()
-                data = response.json()
-                page_orders = data.get("orders", [])
+                    product_gid = ((line_item.get("product") or {}).get("id") or "")
+                    variant_gid = ((line_item.get("variant") or {}).get("id") or "")
+                    normalized_line_items.append(
+                        {
+                            "id": str(line_item.get("id", "")),
+                            "product_id": str(product_gid.rsplit("/", 1)[-1]) if product_gid else None,
+                            "variant_id": str(variant_gid.rsplit("/", 1)[-1]) if variant_gid else None,
+                            "title": line_item.get("title"),
+                            "price": str(unit_price),
+                            "quantity": quantity,
+                            "total_discount": f"{total_discount:.2f}",
+                        }
+                    )
 
-                for order in page_orders:
-                    customer = order.get("customer") or {}
-                    normalized_line_items: List[dict] = []
-                    for line_item in order.get("line_items") or []:
-                        normalized_line_items.append(
-                            {
-                                "id": str(line_item.get("id", "")),
-                                "product_id": str(line_item.get("product_id", "")) if line_item.get("product_id") else None,
-                                "variant_id": str(line_item.get("variant_id", "")) if line_item.get("variant_id") else None,
-                                "title": line_item.get("title"),
-                                "price": line_item.get("price", "0.00"),
-                                "quantity": line_item.get("quantity", 0),
-                                "total_discount": line_item.get("total_discount", "0.00"),
-                            }
-                        )
+                normalized_refunds: List[dict] = []
+                for refund in node.get("refunds") or []:
+                    refund_edges = ((refund or {}).get("refundLineItems") or {}).get("edges") or []
+                    normalized_refunds.append(
+                        {
+                            "id": str((refund or {}).get("id", "")),
+                            "refund_line_items": [
+                                {
+                                    "line_item_id": str((((refund_line_edge or {}).get("node") or {}).get("lineItem") or {}).get("id", "")) or None,
+                                    "quantity": int((((refund_line_edge or {}).get("node") or {}).get("quantity") or 0)),
+                                    "line_item": {
+                                        "id": str((((refund_line_edge or {}).get("node") or {}).get("lineItem") or {}).get("id", "") or ""),
+                                    },
+                                }
+                                for refund_line_edge in refund_edges
+                            ],
+                        }
+                    )
 
-                    normalized_refunds: List[dict] = []
-                    for refund in order.get("refunds") or []:
-                        normalized_refunds.append(
-                            {
-                                "id": str(refund.get("id", "")),
-                                "refund_line_items": [
-                                    {
-                                        "line_item_id": str((refund_line_item or {}).get("line_item_id", "")) or None,
-                                        "quantity": int((refund_line_item or {}).get("quantity") or 0),
-                                        "line_item": {
-                                            "id": str((((refund_line_item or {}).get("line_item") or {}).get("id", "")) or ""),
-                                        },
-                                    }
-                                    for refund_line_item in (refund or {}).get("refund_line_items") or []
-                                ],
-                            }
-                        )
-
-                    all_orders.append({
-                        "id": str(order.get("id", "")),
-                        "customer_id": str(customer.get("id", "")) if customer.get("id") else None,
-                        "total_price": order.get("total_price", "0.00"),
+                order_total = (((node.get("currentTotalPriceSet") or {}).get("shopMoney") or {}).get("amount") or "0.00")
+                customer_gid = customer.get("id")
+                all_orders.append(
+                    {
+                        "id": str(node.get("id", "")),
+                        "customer_id": str(customer_gid.rsplit("/", 1)[-1]) if customer_gid else None,
+                        "total_price": str(order_total),
                         "refunds": normalized_refunds,
-                        "created_at": order.get("created_at"),
+                        "created_at": node.get("createdAt"),
                         "line_items": normalized_line_items,
-                    })
+                    }
+                )
 
-                # Paginate via Link header
-                link_header = response.headers.get("Link", "")
-                url = self._parse_next_link(link_header)
+            page_info = orders_payload.get("pageInfo", {}) or {}
+            if not page_info.get("hasNextPage"):
+                break
+            cursor = page_info.get("endCursor")
 
         # Filter by customer_ids if provided
         customer_id_set = set(customer_ids) if customer_ids else None
@@ -1183,19 +1267,6 @@ class ShopifyService:
 
         return_count = sum(1 for o in all_orders if o["refunds"])
         return {"orders": all_orders, "return_count": return_count}
-
-    @staticmethod
-    def _parse_next_link(link_header: str) -> Optional[str]:
-        """Parse the 'next' URL from a Shopify Link header."""
-        if not link_header:
-            return None
-        for part in link_header.split(","):
-            part = part.strip()
-            if 'rel="next"' in part:
-                # Format: <https://...>; rel="next"
-                url_part = part.split(";")[0].strip()
-                return url_part.strip("<>")
-        return None
 
     async def add_product_image(
         self,

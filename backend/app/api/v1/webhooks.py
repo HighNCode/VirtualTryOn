@@ -324,9 +324,8 @@ async def handle_app_uninstall(
 
     Steps:
     1. Mark store as uninstalled
-    2. Delete script tag from Shopify
-    3. Schedule data deletion (30-day grace period for GDPR)
-    4. Send notification
+    2. Schedule data deletion (30-day grace period for GDPR)
+    3. Send notification
 
     Returns:
         Success response
@@ -351,17 +350,7 @@ async def handle_app_uninstall(
         now_utc = datetime.utcnow()
         store.uninstalled_at = now_utc
 
-        # Delete script tag from Shopify (if still exists)
-        if store.script_tag_id:
-            try:
-                access_token = decrypt_token(store.shopify_access_token)
-                shopify_service = ShopifyService(shop_domain, access_token)
-                await shopify_service.delete_script_tag(store.script_tag_id)
-                logger.info(f"Script tag deleted: {store.script_tag_id}")
-                store.script_tag_id = None
-            except Exception as e:
-                logger.warning(f"Script tag deletion failed: {e}")
-                # Continue anyway - script tag might already be deleted
+        # Legacy script tag path deprecated: theme app extension is now the only storefront path.
 
         # Schedule fallback deletion.
         deletion_date = now_utc + timedelta(days=max(1, int(settings.UNINSTALL_FALLBACK_DELETE_DAYS or 30)))
