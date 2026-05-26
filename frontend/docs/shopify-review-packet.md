@@ -15,6 +15,7 @@ Supporting docs:
 - [ScriptTag deprecation note](./script-tag-deprecation-migration.md)
 - [Max modal compliance note](./max-modal-compliance-note.md)
 - [TLS verification checklist](./tls-verification-checklist.md)
+- [GDPR data classification note](./gdpr-data-classification-note.md)
 
 ## 2) Architecture Snippet (Reviewer-Facing)
 
@@ -62,6 +63,27 @@ Clarification:
   - Screenshot path:
   - Notes:
 
+### Checkout-Only Assurance
+
+- [ ] Redirect audit confirms no offsite payment/checkout URL construction in storefront/customer flows.
+  - Search command output path:
+  - Notes:
+- [ ] All buyer checkout progression remains within Shopify cart/checkout.
+  - Screenshot path:
+  - Notes:
+
+Command used:
+
+```bash
+rg -n "https?://.*(checkout|payment|pay)" frontend/web frontend/extensions/storefront-widget/assets/optimo-vts-widget.js -S
+```
+
+Captured output:
+
+```text
+[no matches]
+```
+
 ## 4) TLS / SSL Runtime Evidence (Production)
 
 Execution date (UTC): `2026-05-26`
@@ -73,12 +95,19 @@ Command used:
 openssl s_client -connect <backend-domain>:443 -servername <backend-domain> -showcerts
 ```
 
+PowerShell/Python fallback command used in this environment:
+
+```bash
+python -c "import ssl,socket;h='optimo-virtual-try-on-rose.vercel.app';ctx=ssl.create_default_context();s=ctx.wrap_socket(socket.socket(),server_hostname=h);s.connect((h,443));print(s.getpeercert());s.close()"
+```
+
 Capture fields:
 - Certificate SAN/hostname match: `PASS | FAIL`
 - Not Before: `__________________`
 - Not After: `__________________`
 - Chain validation result: `PASS | FAIL`
 - TLS handshake warnings: `NONE | DETAILS`
+- HTTP -> HTTPS redirect on app endpoint: `PASS | FAIL`
 
 Captured output snippet:
 
@@ -87,6 +116,13 @@ subject=((('commonName', '*.vercel.app'),),)
 issuer=((('countryName', 'US'),), (('organizationName', 'Google Trust Services'),), (('commonName', 'WR1'),))
 not_before=Apr 28 02:04:43 2026 GMT
 not_after=Jul 27 02:04:42 2026 GMT
+```
+
+HTTP redirect verification snippet:
+
+```text
+http://optimo-virtual-try-on-rose.vercel.app  ->  connection refused (port 80 closed)
+tls_connect=ok on 443
 ```
 
 ## 5) Automated Guardrails

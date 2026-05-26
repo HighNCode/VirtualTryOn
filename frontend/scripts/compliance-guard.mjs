@@ -43,4 +43,12 @@ if (
   fail("Legacy script-tag runtime calls detected in backend auth/webhook flows.");
 }
 
+const storefrontWidget = read("extensions/storefront-widget/assets/optimo-vts-widget.js");
+const billingPage = read("web/app/settings/billing/page.tsx");
+const onboardingBillingPage = read("web/app/step-6/page.tsx");
+const checkoutSurface = `${storefrontWidget}\n${billingPage}\n${onboardingBillingPage}`;
+if (/https?:\/\/[^"'\s]+\/(?:checkout|payments?)/i.test(checkoutSurface)) {
+  fail("Potential offsite checkout/payment URL pattern detected in storefront/billing surfaces.");
+}
+
 console.log("Compliance guard passed.");
