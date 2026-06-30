@@ -667,7 +667,7 @@ def _validate_manual_billing_mode() -> None:
 
 
 @merchant_router.post("/billing/activate", response_model=PlanResponse)
-def activate_billing(
+async def activate_billing(
     body: BillingActivateRequest,
     store: Store = Depends(get_current_merchant_store),
     db: DBSession = Depends(get_db),
@@ -678,6 +678,16 @@ def activate_billing(
     """
     if body.billing_interval not in {"monthly", "annual"}:
         raise HTTPException(422, "billing_interval must be 'monthly' or 'annual'")
+    callback_status = str(body.status or "").strip().lower()
+    if callback_status and callback_status not in {"active", "approved"}:
+        raise HTTPException(
+            409,
+            detail={
+                "code": "BILLING_CALLBACK_NOT_APPROVED",
+                "message": "Shopify billing approval was not completed. Plan activation was not applied.",
+                "status": callback_status,
+            },
+        )
 
     plan = _get_plan_or_404(body.plan_name, db)
 
@@ -686,11 +696,42 @@ def activate_billing(
     full_credits = plan.credits_monthly if body.billing_interval == "monthly" else plan.credits_annual
     applied_trial_days = 0 if store.has_used_intro_trial else int(plan.trial_days or 0)
 
+    # Verify Shopify subscription state before mutating local billing records.
+    try:
+        svc = ShopifyService(store.shopify_domain, require_shopify_access_token(store))
+        subscription = await svc.billing_get_subscription(body.shopify_subscription_id)
+    except Exception as exc:
+        logger.error("Billing activate validation failed for store %s: %s", store.store_id, exc)
+        raise HTTPException(502, "Failed to verify Shopify subscription before activation.")
+
+    if subscription is None:
+        raise HTTPException(
+            409,
+            detail={
+                "code": "BILLING_SUBSCRIPTION_NOT_FOUND",
+                "message": "Subscription was not approved or is unavailable in Shopify. Select a plan and approve billing to continue.",
+            },
+        )
+
+    subscription_status = str(subscription.get("status") or "").upper()
+    if subscription_status not in {"ACTIVE", "PENDING"}:
+        raise HTTPException(
+            409,
+            detail={
+                "code": "BILLING_SUBSCRIPTION_NOT_ACTIVE",
+                "message": (
+                    f"Shopify returned subscription status '{subscription_status or 'UNKNOWN'}'. "
+                    "Plan activation was not applied."
+                ),
+                "status": subscription_status or "UNKNOWN",
+            },
+        )
+
     store.plan_name = body.plan_name
     store.plan_shopify_subscription_id = body.shopify_subscription_id
     store.plan_activated_at = datetime.utcnow()
     store.billing_interval = body.billing_interval
-    store.subscription_status = "ACTIVE"
+    store.subscription_status = subscription_status
     store.billing_status_synced_at = None
     store.has_usage_billing = False
     store.usage_line_item_id = None

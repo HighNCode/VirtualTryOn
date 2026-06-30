@@ -23,15 +23,15 @@ pip install -r requirements.txt
 
 ### 2. Setup Database & Redis
 
-**Option A: Railway.app (Recommended - No Docker needed)**
+**Option A: Supabase Postgres + Upstash Redis (No Docker needed)**
 
-See [SETUP_RAILWAY.md](SETUP_RAILWAY.md) for detailed instructions.
+See [SUPABASE_MIGRATION.md](SUPABASE_MIGRATION.md) for migration and setup instructions.
 
 Quick steps:
-1. Sign up at https://railway.app/ (free, no credit card)
-2. Create PostgreSQL database → Copy connection URL
-3. Create Redis database → Copy connection URL
-4. Add URLs to your `.env` file
+1. Create a Supabase project
+2. Create an Upstash Redis database
+3. Set `DATABASE_URL` and `REDIS_URL` in your `.env` file
+4. Run `python migrate.py upgrade`
 
 **Option B: Docker (If you have Docker Desktop)**
 

@@ -19,7 +19,8 @@
     "widget:deploy": "shopify app deploy",
     "widget:verify": "node scripts/widget-verify-live.mjs",
     "widget:guard": "node scripts/widget-version-guard.mjs",
-    "widget:release": "npm run widget:version:bump && npm run widget:deploy && node scripts/widget-release-instructions.mjs"
+    "widget:release": "npm run widget:version:bump && npm run widget:deploy && node scripts/widget-release-instructions.mjs",
+    "compliance:guard": "node scripts/compliance-guard.mjs"
   },
   "dependencies": {},
   "trustedDependencies": [

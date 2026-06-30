@@ -64,8 +64,8 @@ async def shopify_oauth_callback(
     Steps:
     1. Verify HMAC + exchange code for token (via shopify.Session)
     2. Save store to database
-    3. Install script tag
-    4. Sync products
+    3. Sync products
+    4. Sync billing status
     5. Redirect to embedded app
 
     Args:
@@ -128,22 +128,26 @@ async def shopify_oauth_callback(
 
         shopify_service = ShopifyService(shop, access_token)
 
-        # Install script tag (widget)
-        # TODO: Update with actual widget URL
-        widget_url = f"https://cdn.yourdomain.com/widget.js?store={store.store_id}"
-        try:
-            script_tag_id = await shopify_service.install_script_tag(widget_url)
-            store.script_tag_id = script_tag_id
-            db.commit()
-            logger.info(f"Script tag installed: {script_tag_id}")
-        except Exception as e:
-            logger.error(f"Script tag installation failed: {e}")
-
         try:
             sync_result = await shopify_service.sync_all_products(db, str(store.store_id))
             logger.info(f"Product sync completed: {sync_result}")
         except Exception as e:
             logger.error(f"Product sync failed: {e}")
+
+        try:
+            billing_status = await shopify_service.billing_get_status()
+            if billing_status:
+                store.subscription_status = billing_status.get("status") or store.subscription_status
+                store.has_usage_billing = bool(billing_status.get("has_usage_billing"))
+                store.usage_line_item_id = billing_status.get("usage_line_item_id")
+            else:
+                store.subscription_status = "CANCELLED"
+                store.has_usage_billing = False
+                store.usage_line_item_id = None
+            store.billing_status_synced_at = datetime.utcnow()
+            db.commit()
+        except Exception as e:
+            logger.warning(f"Billing status sync after install failed: {e}")
 
         # Redirect to embedded app entry point
         return RedirectResponse(url=f"/?shop={shop}&host={host}")

@@ -28,7 +28,9 @@ This runbook is for customer storefront widget releases only.
 
 1. Verify live storefront marker + asset cache token + runtime build marker:
    - `npm run widget:verify -- --url "https://<shop-domain>/products/<handle>"`
-2. Confirm full customer flow:
+2. Run compliance guardrails:
+   - `npm run compliance:guard`
+3. Confirm full customer flow:
    - session starts
    - Step 1 consent gate works
    - measurement extract works
@@ -48,3 +50,11 @@ The guard enforces:
 ## Release Notes
 
 Use template: `docs/widget-release-checklist-template.md`.
+
+## Shopify Submission Artifacts
+
+- `docs/shopify-app-store-submission-checklist.md`
+- `docs/shopify-review-packet.md`
+- `docs/script-tag-deprecation-migration.md`
+- `docs/max-modal-compliance-note.md`
+- `docs/tls-verification-checklist.md`

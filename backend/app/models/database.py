@@ -32,6 +32,7 @@ class Store(Base, TimestampMixin):
     shopify_access_token = Column(Text, nullable=False)
     store_name = Column(String(255))
     email = Column(String(255))
+    # Deprecated legacy field kept for backward DB compatibility only.
     script_tag_id = Column(String(50))
     installation_status = Column(String(20), default='active', nullable=False)
     uninstalled_at = Column(DateTime, nullable=True)

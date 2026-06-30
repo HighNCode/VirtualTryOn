@@ -87,7 +87,10 @@ export default function SettingsBillingPage() {
 
   useEffect(() => {
     setHasBillingReturn(
-      typeof window !== "undefined" && new URLSearchParams(window.location.search).has("charge_id")
+      typeof window !== "undefined" && (
+        new URLSearchParams(window.location.search).has("charge_id") ||
+        new URLSearchParams(window.location.search).has("billing_return")
+      )
     );
   }, []);
 
@@ -97,12 +100,20 @@ export default function SettingsBillingPage() {
     const planName = params.get("plan");
     const interval = params.get("interval") as BillingCycle | null;
     const chargeId = params.get("charge_id");
+    const billingStatus = (params.get("billing_status") || "").trim().toLowerCase();
+    if (billingStatus === "declined" || billingStatus === "cancelled") {
+      setErrorMessage("Shopify billing approval was not completed. Please select a plan and approve the charge.");
+      return;
+    }
     if (!planName || !interval) return;
 
     const shopifySubscriptionId = chargeId
       ? `gid://shopify/AppSubscription/${chargeId}`
       : (window.localStorage.getItem("pending_subscription_id") ?? "");
-    if (!shopifySubscriptionId) return;
+    if (!shopifySubscriptionId) {
+      setErrorMessage("Shopify billing approval was not completed. Please select a plan and approve the charge.");
+      return;
+    }
 
     window.localStorage.removeItem("pending_subscription_id");
     activateBillingPlan({ storeId, planName, billingInterval: interval, shopifySubscriptionId })
@@ -174,6 +185,7 @@ export default function SettingsBillingPage() {
 
     try {
       const returnUrl = new URL("/settings/billing", window.location.origin);
+      returnUrl.searchParams.set("billing_return", "1");
       returnUrl.searchParams.set("plan", plan.name);
       returnUrl.searchParams.set("interval", billingCycle);
       returnUrl.searchParams.set("shop", storeId);

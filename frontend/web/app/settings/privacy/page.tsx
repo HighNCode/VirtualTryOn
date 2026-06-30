@@ -32,6 +32,11 @@ const privacyRows = [
     text: "Built-in customer consent flows ensure shoppers agree to try-on terms before uploading.",
     icon: UserCheck,
   },
+  {
+    title: "Merchant Visibility",
+    text: "Merchant dashboards expose aggregate analytics only and do not provide per-customer measurement drill-down.",
+    icon: Database,
+  },
 ];
 
 const settingsTabs = [

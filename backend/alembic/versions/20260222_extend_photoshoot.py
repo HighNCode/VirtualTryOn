@@ -24,6 +24,22 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _drop_studio_background_fk() -> None:
+    bind = op.get_bind()
+    constraint_name = bind.execute(sa.text("""
+        SELECT c.conname
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+        WHERE t.relname = 'try_ons'
+          AND c.contype = 'f'
+          AND a.attname = 'studio_background_id'
+        LIMIT 1
+    """)).scalar()
+    if constraint_name:
+        op.drop_constraint(constraint_name, 'try_ons', type_='foreignkey')
+
+
 def upgrade() -> None:
     # ── 1. Add age + body_type to photoshoot_models ──────────────────────────
     op.add_column('photoshoot_models', sa.Column('age', sa.String(10), nullable=True))
@@ -47,7 +63,7 @@ def upgrade() -> None:
     """)
 
     # ── 3. Re-point try_ons.studio_background_id FK ──────────────────────────
-    op.drop_constraint('try_ons_studio_background_id_fkey', 'try_ons', type_='foreignkey')
+    _drop_studio_background_fk()
     op.create_foreign_key(
         'try_ons_studio_background_id_fkey',
         'try_ons', 'photoshoot_models',
@@ -121,7 +137,7 @@ def downgrade() -> None:
     op.execute("DELETE FROM photoshoot_models WHERE image_path LIKE 'studio/%'")
 
     # Restore FK
-    op.drop_constraint('try_ons_studio_background_id_fkey', 'try_ons', type_='foreignkey')
+    _drop_studio_background_fk()
     op.create_foreign_key(
         'try_ons_studio_background_id_fkey',
         'try_ons', 'studio_backgrounds',

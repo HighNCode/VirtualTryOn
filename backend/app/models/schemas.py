@@ -44,7 +44,6 @@ class StoreResponse(BaseModel):
     store_name: Optional[str]
     email: Optional[str]
     installation_status: str
-    script_tag_installed: bool = False
     created_at: datetime
 
     class Config:
