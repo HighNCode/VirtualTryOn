@@ -23,12 +23,15 @@ class Settings(BaseSettings):
 
     # Database
     DATABASE_URL: str = "postgresql://dev:dev123@localhost:5432/virtual_tryon_dev"
-    DATABASE_POOL_SIZE: int = 20
-    DATABASE_MAX_OVERFLOW: int = 10
+    # DATABASE_POOL_SIZE: int = 20
+    # DATABASE_MAX_OVERFLOW: int = 10
+    DATABASE_POOL_SIZE: int = 5
+    DATABASE_MAX_OVERFLOW: int = 5
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
-    REDIS_MAX_CONNECTIONS: int = 50
+    # REDIS_MAX_CONNECTIONS: int = 50
+    REDIS_MAX_CONNECTIONS: int = 10
     # Deprecated compatibility key (kept to avoid env breakage in older setups)
     IMAGE_CACHE_TTL: int = 86400
     # Photos/front-side images in Redis

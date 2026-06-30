@@ -48,6 +48,9 @@ backend/static/tryon_results/
 test_*.py
 !backend/tests/test_*.py
 *.tmp
+*.dump
+*.backup
+*.sql
 
 # Claude Code — local machine overrides (not shared)
 .claude/settings.local.json

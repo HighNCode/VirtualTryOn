@@ -45,6 +45,9 @@ logs/
 # Database
 *.db
 *.sqlite3
+*.dump
+*.backup
+*.sql
 
 # Testing
 .pytest_cache/
